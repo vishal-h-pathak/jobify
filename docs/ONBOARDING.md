@@ -42,8 +42,9 @@ The skill walks you through seven stages:
    never fabricates numbers).
 6. **Archetypes** — it derives 1–N framing "lanes" from your tiers that the
    tailor picks between per job.
-7. **Resume template pick** — you choose a template from the gallery in
-   `jobify/tailor/templates/`.
+7. **Resume template pick** — you choose a template from the ATS-safe gallery in
+   `jobify/resume_templates/` (`classic`, `modern`, `compact`, `accent`,
+   `executive`).
 
 It then **writes all eight files** (default `./profile/`), seeds a starter
 `portals.yml` from your targets, and **validates** the result.

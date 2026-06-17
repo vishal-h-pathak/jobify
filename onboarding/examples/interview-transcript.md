@@ -105,13 +105,13 @@ Both tie to real proof points. Want a third for the Tier-3 generalist case?
 
 ## Stage 7 — Resume template pick
 
-**A:** Gallery options: `Comp_Neuroscience_Resume` (dense, research-leaning) and
-`Research_ML_Resume` (clean, projects-forward). For a design-systems IC with
-strong projects, I'd suggest `Research_ML_Resume`.
+**A:** Gallery options include `compact` (dense, research-leaning) and `modern`
+(clean, projects-forward). For a design-systems IC with strong projects, I'd
+suggest `modern`.
 
-**U:** Go with `Research_ML_Resume`.
+**U:** Go with `modern`.
 
-→ `resume_template: Research_ML_Resume` in `profile.yml`.
+→ `resume_template: modern` in `profile.yml`.
 
 ## Generate → validate
 

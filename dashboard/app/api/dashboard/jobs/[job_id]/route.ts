@@ -7,7 +7,7 @@ import { createAdminClient, MISCONFIGURED_MSG } from "@/app/lib/supabase-admin";
  *        and/or application_notes.
  *
  * Part of the RLS lockdown: the dashboard's direct anon-key writes
- * (status changes from the list/swipe views, MatchAgent chat
+ * (status changes from the list/swipe views, and match_chat
  * persistence) moved here. Only the fields the UI actually writes
  * are accepted — anything else in the body is a 400, so a compromised
  * dashboard session can't rewrite arbitrary columns.
@@ -17,7 +17,7 @@ import { createAdminClient, MISCONFIGURED_MSG } from "@/app/lib/supabase-admin";
  * analyzer (J-6) reads — same field the /skip route writes. Purely
  * additive; status-machine semantics unchanged.
  *
- * Auth: protected by middleware.ts (dashboard_auth cookie).
+ * Auth: protected by proxy.ts (dashboard_auth cookie).
  */
 
 // M-2 canonical lifecycle. Migration 007's CHECK constraint is the

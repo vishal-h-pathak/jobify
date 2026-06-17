@@ -7,7 +7,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
  * client — the browser never talks to Supabase directly. RLS is
  * enabled with no anon policies on public.jobs / application_attempts /
  * star_stories / pattern_analyses, so the service role (which bypasses
- * RLS) is the only way in, and middleware.ts gates these routes behind
+ * RLS) is the only way in, and proxy.ts gates these routes behind
  * the dashboard_auth cookie.
  *
  * Do not import from client components.

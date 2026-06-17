@@ -169,11 +169,10 @@ See `profile.example/profile.yml` for three worked archetypes.
 
 **Goal:** record the user's template choice in `profile.yml`.
 
-1. List the gallery in `jobify/tailor/templates/` (today:
-   `Comp_Neuroscience_Resume.pdf`, `Research_ML_Resume.pdf` — WS-F expands it).
-   Briefly describe each (layout, density, who it suits). Offer to open the PDFs.
+1. List the ATS-safe gallery in `jobify/resume_templates/` (`classic`, `modern`,
+   `compact`, `accent`, `executive` — see that package's `README.md`).
+   Briefly describe each (layout, density, who it suits).
 2. Let the user pick one. Record it as a top-level `resume_template:` in
-   `profile.yml`, value = the filename stem (e.g. `Comp_Neuroscience_Resume`).
-3. If the tailor's template wiring (WS-F) isn't merged yet, record the pick
-   anyway — it's forward-compatible and harmless (`profile.yml` allows extra
-   keys). Note to the user which template will be used once wiring lands.
+   `profile.yml`, value = the template id (e.g. `modern`).
+3. If omitted, the tailor falls back to the per-archetype default, then
+   `classic`.

@@ -25,7 +25,7 @@ import { dispatchWorkflow } from "@/app/lib/github-dispatch";
  *     prefix shape jobpipe.shared.jobid.make_job_id produces) AND the
  *     row must exist with status='approved'. 400 otherwise.
  *
- * Auth: protected by middleware.ts (dashboard_auth cookie).
+ * Auth: protected by proxy.ts (dashboard_auth cookie).
  */
 
 // Match the `sha1(...)[:16]` shape jobpipe.shared.jobid.make_job_id

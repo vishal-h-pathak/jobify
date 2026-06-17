@@ -15,7 +15,7 @@ import { dispatchWorkflow } from "@/app/lib/github-dispatch";
  *   Default: 'local_remote'. Stored in runs.args so the panel can
  *   show what was requested.
  *
- * Auth: protected by middleware.ts (dashboard_auth cookie).
+ * Auth: protected by proxy.ts (dashboard_auth cookie).
  */
 export async function POST(req: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;

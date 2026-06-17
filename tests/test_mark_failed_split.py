@@ -156,10 +156,11 @@ def tailor_db(monkeypatch):
 
     PR-9 removed the per-subtree db.py shims, so we test the canonical
     ``jobify.db`` directly. ``mark_tailor_failed(clear_materials=True)``
-    still does ``from storage import delete_all_for_job`` lazily (a bare
-    import that resolves via the tailor sys.path bootstrap at runtime);
-    we install a synthetic ``storage`` module so the test can observe
-    those calls without requiring tailor/storage.py's Supabase init.
+    does ``from jobify.tailor.storage import delete_all_for_job`` lazily
+    (package-qualified so it resolves with or without the tailor sys.path
+    bootstrap); we install a synthetic ``jobify.tailor.storage`` module so
+    the test can observe those calls without requiring storage.py's
+    Supabase init.
     """
     fake = _FakeClient()
     import supabase  # type: ignore[import-not-found]
@@ -175,11 +176,12 @@ def tailor_db(monkeypatch):
     monkeypatch.setattr(db, "SUPABASE_SERVICE_ROLE_KEY", "service-test")
 
     # ``mark_tailor_failed(clear_materials=True)`` does
-    # ``from storage import delete_all_for_job`` lazily — provide a stub.
-    storage_stub = type(sys)("storage")
+    # ``from jobify.tailor.storage import delete_all_for_job`` lazily —
+    # provide a stub at that package path so we don't need storage's init.
+    storage_stub = type(sys)("jobify.tailor.storage")
     delete_calls: list[str] = []
     storage_stub.delete_all_for_job = lambda jid: delete_calls.append(jid)
-    monkeypatch.setitem(sys.modules, "storage", storage_stub)
+    monkeypatch.setitem(sys.modules, "jobify.tailor.storage", storage_stub)
 
     db.client = fake  # belt-and-suspenders if cache was populated earlier
     yield db, fake, delete_calls

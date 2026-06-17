@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
-export function middleware(req: NextRequest) {
+// Next 16 renamed the request-interceptor file convention from
+// `middleware.ts` to `proxy.ts` (same runtime, same matcher config). The
+// password gate below is the contract — behavior is unchanged from the old
+// middleware: every matched route requires the dashboard_auth cookie unless
+// DASHBOARD_PASSWORD is unset (open mode) or the path is the login page.
+export function proxy(req: NextRequest) {
   if (req.nextUrl.pathname.startsWith("/dashboard/login")) {
     return NextResponse.next();
   }

@@ -148,7 +148,9 @@ jobify-hunt --once
 This discovers and scores roles against your profile and upserts them
 into Supabase. Add `--mode us_wide` to widen beyond Atlanta + remote.
 Re-score existing rows against an updated profile with
-`jobify-hunt --rescore --commit`.
+`jobify-hunt --rescore` (a dry run that prints an eligible-row count and an
+LLM cost estimate); add `--execute` to actually spend the tokens and write
+results.
 
 Then tailor an approved row and pre-fill its application:
 
@@ -172,8 +174,10 @@ npm run dev
 ```
 
 Open http://localhost:3000, log in with `DASHBOARD_PASSWORD`, and drive
-the pipeline from there. (Dashboard setup details live in the
-`dashboard/` README, produced by WS-B.)
+the pipeline from there. The env vars the dashboard needs are documented
+inline in [`dashboard/.env.local.example`](../dashboard/.env.local.example).
+For a production-style run use `npm run build && npm start` instead of
+`npm run dev`.
 
 ---
 

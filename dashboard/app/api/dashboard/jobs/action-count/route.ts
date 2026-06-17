@@ -11,7 +11,7 @@ import { createAdminClient, MISCONFIGURED_MSG } from "@/app/lib/supabase-admin";
  * separately). Polled by DashboardNav for the badge. Part of the RLS
  * lockdown — was a direct anon-key count query.
  *
- * Auth: protected by middleware.ts (dashboard_auth cookie).
+ * Auth: protected by proxy.ts (dashboard_auth cookie).
  */
 export async function GET() {
   const admin = createAdminClient();

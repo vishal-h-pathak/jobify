@@ -169,8 +169,8 @@ export type Job = {
   legitimacy: "high_confidence" | "proceed_with_caution" | "suspicious" | null;
   legitimacy_reasoning: string | null;
   // Archetype routing (J-4). Tailor classifies each JD into one of the
-  // archetypes defined in profile.yml; persisted here for analytics
-  // (/dashboard/insights) and to show the reviewer which lane was used.
+  // archetypes defined in profile.yml; persisted here to show the
+  // reviewer which lane was used.
   archetype: string | null;
   archetype_confidence: number | null;
   // M-1: form-answer drafts (career-ops Block H). Authoritative source

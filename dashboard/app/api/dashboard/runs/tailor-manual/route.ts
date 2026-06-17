@@ -33,13 +33,13 @@ import { dispatchWorkflow } from "@/app/lib/github-dispatch";
  * Body: { url: string }
  *   url must parse as a URL with http/https scheme. 400 otherwise.
  *
- * Schema notes (verified against project sbmsxerwgylpfkkkjtku on
+ * Schema notes (verified against the configured Supabase project on
  * 2026-06-06):
  *   - runs.kind CHECK admits 'tailor_manual' as of migration 009
  *     (jobpipe/tailor/scripts/009_runs_tailor_manual.sql).
  *   - runs.result jsonb is the polling target for the form.
  *
- * Auth: protected by middleware.ts (dashboard_auth cookie).
+ * Auth: protected by proxy.ts (dashboard_auth cookie).
  */
 
 const MAX_URL_LENGTH = 2048;

@@ -431,7 +431,7 @@ def mark_applied(job_id: str, application_notes: str = None,
         # Deferred import so this module stays importable when storage
         # can't initialize (e.g. missing service role key during tests).
         try:
-            from storage import delete_all_for_job
+            from jobify.tailor.storage import delete_all_for_job
             delete_all_for_job(job_id)
         except Exception as e:
             logger.warning(f"Could not clear materials for job {job_id}: {e}")
@@ -443,7 +443,7 @@ def mark_applied(job_id: str, application_notes: str = None,
 def delete_job_materials(job_id: str) -> None:
     """Delete generated PDFs from Storage and null the path columns on the row."""
     try:
-        from storage import delete_all_for_job
+        from jobify.tailor.storage import delete_all_for_job
         delete_all_for_job(job_id)
     except Exception as e:
         logger.warning(f"Storage delete failed for job {job_id}: {e}")
@@ -483,7 +483,7 @@ def mark_tailor_failed(job_id: str, reason: str, *,
         extras["uncertain_fields"] = uncertain_fields
     if clear_materials:
         try:
-            from storage import delete_all_for_job
+            from jobify.tailor.storage import delete_all_for_job
             delete_all_for_job(job_id)
         except Exception as e:
             logger.warning(f"Could not clear materials for job {job_id}: {e}")

@@ -10,15 +10,19 @@
 
 PYTHON ?= python
 
-.PHONY: test legacy-smoke help
+.PHONY: test scrub legacy-smoke help
 
 help:
 	@echo "Targets:"
 	@echo "  test          Run the pytest suite (default-suite; legacy excluded)"
+	@echo "  scrub         Run the identity / infra scrub gate (same as CI)"
 	@echo "  legacy-smoke  Run scripts/smoke_legacy.py — Path B forensics only"
 
 test:
 	@$(PYTHON) -m pytest -v
+
+scrub:
+	@bash scripts/scrub_gate.sh
 
 legacy-smoke:
 	@$(PYTHON) scripts/smoke_legacy.py

@@ -11,7 +11,7 @@ import { createClient } from "@supabase/supabase-js";
  *
  * Body: `{ reason?: string }`
  *
- * Auth: protected by middleware.ts (dashboard_auth cookie).
+ * Auth: protected by proxy.ts (dashboard_auth cookie).
  */
 export async function POST(
   req: NextRequest,

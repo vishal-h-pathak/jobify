@@ -22,24 +22,15 @@ jobs:
       - name: Run tests
         run: pytest -v
 
-  # ── Identity / infra scrub gate (STUB) ──────────────────────────────────
-  # Placeholder for the full gate that Phase F defines in
-  # planning/session-prompts/08_phaseF_verify.md: fail the build if any
-  # personal or infra identifier reappears anywhere outside the golden test
-  # persona (onboarding/examples/, landed by WS-E).
-  #
-  # It is intentionally a no-op until two upstream workstreams land:
-  #   • WS-A scrubs the persona layer out of jobify/ and profile/
-  #   • WS-E adds onboarding/examples/ (the allowed home for the fixture)
-  # Wiring a real grep here now would fail CI on persona data WS-A still
-  # owns. Phase F supplies the identifier list (kept out of this file so the
-  # gate doesn't flag itself) and flips this step to a hard failure.
+  # ── Identity / infra scrub gate (Phase F) ───────────────────────────────
+  # Fails the build if any personal or infra identifier from the original
+  # single-user persona reappears outside its allowed home, or if a stray
+  # résumé binary lands in the tree. The full logic (token list, allowed
+  # homes, binary-document check) lives in scripts/scrub_gate.sh so it can be
+  # run locally with `make scrub`.
   scrub-gate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Scrub gate (stub — Phase F defines the pattern)
-        run: |
-          echo "scrub gate stub: no identifier pattern wired yet."
-          echo "Phase F (planning/.../08_phaseF_verify.md) replaces this with"
-          echo "the real grep gate once WS-A + WS-E have landed."
+      - name: Identity / infra scrub gate
+        run: bash scripts/scrub_gate.sh

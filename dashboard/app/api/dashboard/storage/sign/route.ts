@@ -10,7 +10,7 @@ import { createAdminClient, MISCONFIGURED_MSG } from "@/app/lib/supabase-admin";
  * key. Bucket is fixed server-side; only the object path is caller-
  * controlled, and it's gated by the dashboard_auth middleware.
  *
- * Auth: protected by middleware.ts (dashboard_auth cookie).
+ * Auth: protected by proxy.ts (dashboard_auth cookie).
  */
 
 const BUCKET = "job-materials";

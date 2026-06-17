@@ -13,7 +13,7 @@ import { createClient } from "@supabase/supabase-js";
  * service-role read here is fine because the route is gated by the
  * dashboard_auth middleware.
  *
- * Auth: protected by middleware.ts (dashboard_auth cookie).
+ * Auth: protected by proxy.ts (dashboard_auth cookie).
  */
 export async function GET(req: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;

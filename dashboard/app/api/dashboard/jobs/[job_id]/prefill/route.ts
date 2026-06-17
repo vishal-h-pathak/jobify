@@ -12,7 +12,7 @@ import { createClient } from "@supabase/supabase-js";
  * Guards on status='ready_for_review' so an accidental click on a row
  * the orchestrator is already processing doesn't double-dispatch.
  *
- * Auth: protected by middleware.ts (dashboard_auth cookie).
+ * Auth: protected by proxy.ts (dashboard_auth cookie).
  */
 export async function POST(
   _req: NextRequest,

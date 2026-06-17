@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient, MISCONFIGURED_MSG } from "@/app/lib/supabase-admin";
 
 /**
- * GET /api/dashboard/jobs?view=list|insights|review-queue&q=search
+ * GET /api/dashboard/jobs?view=list|review-queue&q=search
  *
  * Server-side jobs reads for the dashboard (RLS lockdown). The browser
  * used to query Supabase directly with the anon key; jobs now has RLS
@@ -14,9 +14,8 @@ import { createAdminClient, MISCONFIGURED_MSG } from "@/app/lib/supabase-admin";
  *     set — jobs rows carry large jsonb (form_answers, submission_log,
  *     match_chat) and a full description that the list never renders,
  *     so they are deliberately excluded from the payload. Includes the
- *     scalar fields ReviewPanel needs since it's opened from list rows.
- *   - insights: /dashboard/insights analytics. Only the handful of
- *     scalar columns the charts aggregate over.
+ *     scalar fields the review surface needs since it's opened from
+ *     list rows.
  *   - review-queue: /dashboard/review. Full rows — the queue renders
  *     submission_log packet details, and this surface is the documented
  *     "keep the full fetch" exception.
@@ -30,12 +29,12 @@ import { createAdminClient, MISCONFIGURED_MSG } from "@/app/lib/supabase-admin";
  * it. The response carries `degree_gated_supported` so the client knows
  * whether to render the gate pill + filter. Absent column == not gated.
  *
- * Auth: protected by middleware.ts (dashboard_auth cookie).
+ * Auth: protected by proxy.ts (dashboard_auth cookie).
  */
 
-// Columns the /dashboard list view (and the panels it opens —
-// MatchAgent, ReviewPanel) actually reads. If you render a new job
-// field on the list, add it here.
+// Columns the /dashboard list view (and the review surface it opens
+// from list rows) actually reads. If you render a new job field on the
+// list, add it here.
 const LIST_COLUMNS = [
   "id",
   "title",
@@ -64,16 +63,6 @@ const LIST_COLUMNS = [
   "cover_letter_path",
   "resume_pdf_path",
   "cover_letter_pdf_path",
-].join(", ");
-
-const INSIGHTS_COLUMNS = [
-  "id",
-  "created_at",
-  "notified",
-  "score",
-  "source",
-  "status",
-  "tier",
 ].join(", ");
 
 // PostgREST surfaces missing columns as Postgres 42703.
@@ -128,12 +117,6 @@ export async function GET(req: NextRequest) {
 
   let query;
   switch (view) {
-    case "insights":
-      query = admin
-        .from("jobs")
-        .select(INSIGHTS_COLUMNS)
-        .order("created_at", { ascending: false });
-      break;
     case "review-queue":
       // Submit lane: rows the human still owns — tailored-and-waiting
       // (ready_for_review) plus staged-locally-and-waiting-to-submit

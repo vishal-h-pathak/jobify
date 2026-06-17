@@ -20,7 +20,7 @@ import { createClient } from "@supabase/supabase-js";
  *   submission_notes    = body.submission_notes
  *   status_updated_at   = now()
  *
- * Auth: protected by middleware.ts (dashboard_auth cookie).
+ * Auth: protected by proxy.ts (dashboard_auth cookie).
  */
 export async function POST(
   req: NextRequest,

@@ -120,12 +120,12 @@ validate and patch. Full scripts are in `references/stages.md`.
    real strengths and distinct enough that the classifier can tell them apart.
    → `archetypes` in `profile.yml`.
 
-7. **Resume template pick.** Present the gallery in `jobify/tailor/templates/`
-   (currently `Comp_Neuroscience_Resume.pdf`, `Research_ML_Resume.pdf`; WS-F
-   expands it). Describe each and let the user pick. Record the choice as
-   `resume_template:` (the template filename stem) at the top level of
-   `profile.yml` so the tailor can honor it. If the gallery isn't wired yet,
-   record the pick anyway — it's forward-compatible.
+7. **Resume template pick.** Present the ATS-safe gallery in
+   `jobify/resume_templates/` (`classic`, `modern`, `compact`, `accent`,
+   `executive` — see that package's `README.md` for layout/density notes).
+   Describe each and let the user pick. Record the choice as `resume_template:`
+   (the template id) at the top level of `profile.yml` so the tailor can honor
+   it. Defaults to `classic` if omitted.
 
 ## Generate, validate, patch
 
