@@ -73,9 +73,9 @@ def build_profile_prompt_string() -> str:
         parts.append(
             "========== thesis.md (CANONICAL — read first) ==========\n"
             "The hunting thesis below is the most recent, authoritative "
-            "statement of what Vishal is looking for. Where it conflicts "
-            "with any other profile document in this prompt, thesis.md "
-            "wins.\n\n"
+            "statement of what the candidate is looking for. Where it "
+            "conflicts with any other profile document in this prompt, "
+            "thesis.md wins.\n\n"
             f"{thesis.strip()}"
         )
     parts += [

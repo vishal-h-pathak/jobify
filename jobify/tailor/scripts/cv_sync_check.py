@@ -1,18 +1,16 @@
-"""scripts/cv_sync_check.py — CV / article-digest / BASE_RESUME drift detector (J-9).
+"""scripts/cv_sync_check.py — CV / article-digest drift detector (J-9).
 
-Compares quantitative claims across the four sources of truth in the
-unified `job-pipeline` repo:
+Compares quantitative claims across the two narrative sources of truth in
+the user-layer profile:
 
-  - `profile/cv.md`                            — master CV (markdown), via
-                                                 `jobify.profile_loader.load_cv`
-  - `profile/article-digest.md`                — proof-point digest, via
-                                                 `profile_loader.load_article_digest`
-  - `tailor/latex_resume.py::BASE_RESUME`      — structured LaTeX data
-  - `CLAUDE.md`                                — repo-root narrative aggregator
+  - `cv.md`            — master CV (markdown), via
+                         `jobify.profile_loader.load_cv`
+  - `article-digest.md`— proof-point digest, via
+                         `profile_loader.load_article_digest`
 
 Reports:
-  - Anchored claims (employee number, neuron count, years-of-experience,
-    project periods) where the number differs between sources.
+  - Anchored claims (years of experience, and any persona-specific anchors
+    the user adds to ``ANCHORS``) where the number differs between sources.
   - Anchors that appear in some sources but not others.
 
 Designed to be:
@@ -21,16 +19,16 @@ Designed to be:
     session (cached) so a warning shows up before any LLM call goes
     out — never blocks tailoring.
 
-The detector is anchor-based on purpose. Free-form regex over four
-files explodes in noise; the high-value comparisons are a small fixed
-set of facts that recurr in all sources (employee #5, 40 LIF neurons,
-period at GTRI, period at Rain, etc.).
+The detector is anchor-based on purpose. Free-form regex over the files
+explodes in noise; the high-value comparisons are a small set of facts
+that recur across sources. The shipped anchor set is persona-agnostic
+(``years_of_experience``); a user can extend ``ANCHORS`` with the facts
+that recur in *their* CV + digest (team sizes, named counts, etc.).
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import re
 import sys
@@ -39,15 +37,10 @@ from pathlib import Path
 from typing import Optional
 
 # `_PKG_ROOT` is the tailor package root (`jobify/tailor/`); kept on
-# sys.path so `from tailor.latex_resume import BASE_RESUME` resolves
-# when this script is run standalone.
+# sys.path so the script's `tailor.*` imports resolve when run standalone.
 _PKG_ROOT = Path(__file__).resolve().parent.parent
 if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
-
-# `_REPO_ROOT` is the unified `job-pipeline/` checkout root, where the
-# top-level `profile/` user layer and `jobify/` package live.
-_REPO_ROOT = _PKG_ROOT.parent.parent
 
 logger = logging.getLogger("cv_sync_check")
 
@@ -55,46 +48,19 @@ logger = logging.getLogger("cv_sync_check")
 # ── Anchored claims ──────────────────────────────────────────────────────
 #
 # Each anchor pulls a NUMBER preceded or followed by a tiny vocabulary
-# of clue words. Multiple regexes per anchor — sources spell things
-# differently (employee #5 vs employee 5 vs "fifth employee"). The
-# detector reports the number string, not the regex; cross-source
-# disagreement is what we flag.
+# of clue words. Multiple regexes per anchor — sources spell a fact
+# differently. The detector reports the number string, not the regex;
+# cross-source disagreement is what we flag. The defaults are
+# persona-agnostic; extend this map with the recurring numeric facts in
+# your own CV + digest.
 
 ANCHORS: dict[str, list[re.Pattern]] = {
-    "rain_employee_number": [
-        re.compile(r"employee\s*#?\s*(\d+)", re.IGNORECASE),
-        re.compile(r"(\d+)(?:st|nd|rd|th)\s+employee", re.IGNORECASE),
-    ],
-    "rain_lif_neuron_count": [
-        re.compile(r"(\d+)\s+(?:leaky integrate[- ]and[- ]fire|LIF)\s+neuron", re.IGNORECASE),
-        re.compile(r"PCB[^.]*?(\d+)\s+(?:LIF|leaky)", re.IGNORECASE),
-    ],
-    "age_at_rain": [
-        # Require "Rain" within ~30 chars so we don't catch "at 94% mAP"
-        # or "at 19 employees" out of unrelated context.
-        re.compile(
-            r"(?:Rain[\w ]{0,30}?\bat\s+(\d{1,2})|\bat\s+(\d{1,2})\b[\w ]{0,30}?Rain)",
-            re.IGNORECASE,
-        ),
-    ],
-    "years_at_gtri": [
-        re.compile(r"(\d+)(?:\s*\+)?\s*years?\s+at\s+GTRI", re.IGNORECASE),
-        re.compile(r"(\d+)(?:\s*\+)?\s*years?\s+working\s+at\s+GTRI", re.IGNORECASE),
-        re.compile(r"~?(\d+)(?:\s*\+)?\s*years?\s+at\s+GTRI", re.IGNORECASE),
-    ],
-    "weather_stations_count": [
-        re.compile(r"(\d+)\s+weather\s+stations?", re.IGNORECASE),
-    ],
-    "anemometers_count": [
-        re.compile(r"(\d+)\s+anemometers?", re.IGNORECASE),
+    "years_of_experience": [
+        re.compile(r"~?(\d+)(?:\s*\+)?\s*years?\s+of\s+experience", re.IGNORECASE),
+        re.compile(r"~\s*(\d+)\s*years?\b", re.IGNORECASE),
+        re.compile(r"(\d+)(?:\s*\+)?\s*years?\s+building", re.IGNORECASE),
     ],
 }
-
-
-def _read(path: Path) -> str:
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8")
 
 
 def _claims_for(text: str) -> dict[str, set[str]]:
@@ -120,32 +86,19 @@ def _claims_for(text: str) -> dict[str, set[str]]:
 
 
 def _gather_sources() -> dict[str, str]:
-    """Read all four sources into a {name: text} dict.
+    """Read the profile's narrative sources into a {name: text} dict.
 
-    WS-A1: ``cv.md`` and ``article-digest.md`` resolve through
-    ``jobify.profile_loader`` from the consolidated profile directory rather
-    than hard-coded paths; the narrative aggregator is the repo-root
-    ``CLAUDE.md`` (PR-9 consolidated the per-subpackage files into it).
+    ``cv.md`` and ``article-digest.md`` resolve through
+    ``jobify.profile_loader`` from the consolidated profile directory
+    (``JOBIFY_PROFILE_DIR`` → active ``profile/`` → ``profile.example/``)
+    rather than hard-coded paths.
     """
     from jobify import profile_loader  # noqa: WPS433 — local to keep script standalone
 
-    sources: dict[str, str] = {}
-    sources["profile/cv.md"] = profile_loader.load_cv()
-    sources["profile/article-digest.md"] = profile_loader.load_article_digest()
-    sources["CLAUDE.md"] = _read(_REPO_ROOT / "CLAUDE.md")
-
-    # BASE_RESUME — import the dict + serialize so the regex can match.
-    try:
-        from tailor.latex_resume import BASE_RESUME  # noqa: WPS433
-
-        sources["tailor/latex_resume.py::BASE_RESUME"] = json.dumps(
-            BASE_RESUME, indent=2
-        )
-    except Exception as exc:  # pragma: no cover — defensive
-        logger.warning("could not import BASE_RESUME: %s", exc)
-        sources["tailor/latex_resume.py::BASE_RESUME"] = ""
-
-    return sources
+    return {
+        "cv.md": profile_loader.load_cv(),
+        "article-digest.md": profile_loader.load_article_digest(),
+    }
 
 
 def detect_drift() -> dict:
@@ -206,10 +159,10 @@ def render_markdown(report: dict) -> str:
     lines = [
         f"# CV-Sync Drift Report — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
         "",
-        "Anchor-based comparison across `cv.md`, `article-digest.md`,",
-        "`BASE_RESUME`, and `CLAUDE.md`. A drift entry means two sources",
-        "assert different numbers for the same fact. A missing entry means",
-        "a fact appears in some sources but not others.",
+        "Anchor-based comparison across `cv.md` and `article-digest.md`.",
+        "A drift entry means the two sources assert different numbers for",
+        "the same fact. A missing entry means a fact appears in one source",
+        "but not the other.",
         "",
     ]
     if report["drift"]:

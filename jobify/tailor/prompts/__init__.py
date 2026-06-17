@@ -31,9 +31,9 @@ _PROFILE_CACHE: Optional[str] = None
 _THESIS_BANNER = (
     "========== thesis.md (CANONICAL — read first) ==========\n"
     "The hunting thesis below is the most recent, authoritative "
-    "statement of what Vishal is looking for. Where it conflicts "
-    "with any other profile document in this prompt, thesis.md "
-    "wins.\n\n"
+    "statement of what the candidate is looking for. Where it "
+    "conflicts with any other profile document in this prompt, "
+    "thesis.md wins.\n\n"
 )
 
 
@@ -51,23 +51,22 @@ def thesis_section() -> str:
 # into the cover-letter and form-answers prompts ONLY when the scorer
 # flagged jobs.degree_gated — a JD that hard-requires an MS/PhD with no
 # equivalent-experience escape hatch. The move is preemption, not
-# evasion: lead with the equivalence case, never imply a degree he lacks.
+# evasion: lead with the equivalence case, never imply a degree they lack.
 _DEGREE_GATE_BLOCK = """\
 DEGREE GATE — this JD hard-requires an advanced degree (MS/PhD) with no
 "or equivalent experience" escape hatch. Binding rules for this output:
 
-- LEAD with the equivalence case: Vishal has a BS in Electrical
-  Engineering plus nine years of hands-on neuromorphic/embedded work —
-  Rain Neuromorphics employee #5 at 19 building memristive neuron PCBs,
-  four years deploying SNNs on Intel Loihi-class hardware and writing
-  VHDL neuron models at GTRI. Present that record explicitly as the
+- LEAD with the equivalence case: draw on the candidate's actual degree
+  and hands-on track record (from the CANDIDATE PROFILE in the system
+  prompt — the highest degree they hold plus the most relevant years of
+  applied work). Present that record explicitly as the
   equivalent of the listed degree requirement, in the opening (cover
-  letter first paragraph / why_this_role first sentences) — preempt the
-  gate before the reader applies it, don't bury the case at the end.
-- HONESTY UNCHANGED: never claim or imply a degree he doesn't have. No
-  "MS-level", no vague "graduate work", no degree-adjacent hedging. The
-  move is preemption, not evasion: name the BS, then make the case that
-  the work itself is the qualification."""
+  letter first paragraph / why_this_role first sentences). Preempt the
+  gate before the reader applies it — don't bury the case at the end.
+- HONESTY UNCHANGED: never claim or imply a degree the candidate doesn't
+  have. No "MS-level", no vague "graduate work", no degree-adjacent
+  hedging. The move is preemption, not evasion: name the real degree, then
+  make the case that the work itself is the qualification."""
 
 
 def degree_gate_block(job: dict) -> str:

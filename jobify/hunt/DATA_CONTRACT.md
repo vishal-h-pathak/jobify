@@ -5,7 +5,7 @@ that have different ownership and replacement semantics.
 
 ## User Layer (never replaced by code updates)
 
-Hand-edited by Vishal. Future code refactors must not overwrite, rename,
+Hand-edited by the user. Future code refactors must not overwrite, rename,
 or repurpose these files without explicit consent. They are the single
 source of truth for "who the candidate is" — every prompt and form-fill
 inherits from them.

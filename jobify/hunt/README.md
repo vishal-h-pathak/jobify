@@ -1,8 +1,8 @@
 # job-hunter
 
-Autonomous job search agent for Vishal Pathak. Runs daily, searches multiple
+Autonomous job search agent for the candidate. Runs daily, searches multiple
 job boards, scores listings against a profile using Claude, and writes results
-to Supabase where they appear in the dashboard at vishal.pa.thak.io/dashboard.
+to Supabase where they appear in your dashboard.
 
 ---
 
@@ -30,7 +30,7 @@ DATA_CONTRACT.md      # User-layer / system-layer file boundary (J-10)
 profile/              # USER LAYER — hand-edited, never overwritten by code
   profile.yml         # Identity, comp, tiers, archetypes, form defaults
   disqualifiers.yml   # Hard disqualifiers + soft concerns
-  cv.md               # Master CV (mirrors latex_resume.py BASE_RESUME)
+  cv.md               # Master CV (the resume content source)
   article-digest.md   # Curated proof points + metrics
   portals.yml         # ATS company → slug map + title pre-filter (J-1)
   learned-insights.md # Generalizable preferences captured by Match Agent (J-11)
@@ -81,9 +81,10 @@ agent.log             # Run logs with timestamps
 
 ## The profile (CLAUDE.md)
 
-`CLAUDE.md` is the single most important file in this repo. It contains Vishal's
-background, job search priorities, disqualifiers, compensation expectations, and
-portfolio goals. Every scoring decision is made against this document.
+`CLAUDE.md` is the single most important file in this repo. It contains the
+candidate's profile — background, job search priorities, disqualifiers,
+compensation expectations, and portfolio goals. Every scoring decision is made
+against this document.
 
 Update it as priorities change. The scorer reads it fresh on every run.
 
@@ -215,6 +216,6 @@ overwritten — it reflects when the job was first discovered.
 
 ## Companion repo
 
-**portfolio** — the Next.js dashboard at vishal.pa.thak.io that reads from the
+**portfolio** — the Next.js dashboard that reads from the
 same Supabase instance and presents jobs in swipe/browse modes with a
 Claude-powered Match Agent for application tailoring.

@@ -1,6 +1,6 @@
 # jobify.tailor
 
-Application-prep + DOM-based form-fill pipeline for Vishal Pathak.
+Application-prep + DOM-based form-fill pipeline for the configured candidate.
 Reads approved jobs from Supabase (written by the `jobify.hunt`
 subpackage — PR-9 unified what was previously a sibling `job-hunter`
 repo into this monorepo), tailors a resume + cover letter + form-answer
@@ -298,5 +298,5 @@ system never clicks Submit anymore.
 - `jobify.hunt` — discovery + scoring (writes status=new rows). PR-9
   unified what was previously the sibling `job-hunter` repo into this
   subpackage; the original repo can be archived after PR-9 merges.
-- `../portfolio` — Next.js dashboard at vishal.pa.thak.io/dashboard.
+- `../portfolio` — Next.js dashboard (your dashboard).
   Stays as a separate repo (frontend, deployed on Vercel).

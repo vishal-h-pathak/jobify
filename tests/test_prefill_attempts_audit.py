@@ -284,7 +284,7 @@ def _make_job(job_id: str = "test-job-audit") -> dict:
         "application_url": "https://boards.greenhouse.io/testco/jobs/1",
         "resume_pdf_path": f"{job_id}/resume.pdf",
         "cover_letter_path": "Dear Team,\n\nI am writing about your role.",
-        "form_answers": {"first_name": "Vishal"},
+        "form_answers": {"first_name": "Alex"},
     }
 
 

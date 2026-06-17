@@ -27,7 +27,7 @@ export function ReasonPick({
   onPick,
   onCancel,
 }: {
-  /** e.g. "Skip — Neuromorphic Engineer @ eon.systems" */
+  /** e.g. "Skip — Senior Backend Engineer @ Acme" */
   title: string;
   /** Confirm button label, e.g. "Skip" / "Ignore". */
   verb: string;

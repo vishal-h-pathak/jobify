@@ -15,9 +15,9 @@ from jobify.tailor.paths import CANDIDATE_PROFILE_PATH
 from prompts import cached_system_blocks, load_task_prompt
 from tailor.archetype import classify_archetype, render_archetype_block
 
-# J-9: emit a one-time warning to the log if cv.md / article-digest.md /
-# BASE_RESUME / CLAUDE.md disagree on any anchored numeric claim. Never
-# blocks tailoring — just surfaces drift before any LLM call goes out.
+# J-9: emit a one-time warning to the log if cv.md / article-digest.md
+# disagree on any anchored numeric claim. Never blocks tailoring — just
+# surfaces drift before any LLM call goes out.
 try:
     from scripts.cv_sync_check import warn_if_drift as _cv_warn_if_drift
     _cv_warn_if_drift()
@@ -48,12 +48,12 @@ def tailor_resume(job: dict) -> dict:
     company = job.get("company", "Unknown")
 
     # Optional Match Agent transcript — captured from the dashboard chat. When
-    # present, it carries Vishal's own framing of why the role matters and
-    # which experiences to lean into. Treat it as authoritative for this
-    # specific application; CLAUDE.md remains the ground truth for facts.
+    # present, it carries the candidate's own framing of why the role matters
+    # and which experiences to lean into. Treat it as authoritative for this
+    # specific application; the loaded profile remains the ground truth for facts.
     match_chat = (job.get("match_chat_transcript") or "").strip()
     match_chat_block = (
-        f"\n\nMATCH AGENT INTERVIEW (Vishal's own framing for THIS specific role — "
+        f"\n\nMATCH AGENT INTERVIEW (the candidate's own framing for THIS specific role — "
         f"prioritize this over generic cover-letter logic when shaping emphasis areas, "
         f"keywords, and experience order):\n{match_chat}\n"
         if match_chat else ""

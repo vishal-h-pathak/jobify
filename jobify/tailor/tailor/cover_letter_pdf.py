@@ -1,9 +1,10 @@
 """
 tailor/cover_letter_pdf.py — Render cover letter text to PDF bytes.
 
-Uses reportlab to produce a clean letter-format PDF matching Vishal's style:
-letterhead with name + contact row, date, then body paragraphs. No fabricated
-content — it just wraps plain text in letter formatting.
+Uses reportlab to produce a clean letter-format PDF: a letterhead with name
++ contact row, date, then body paragraphs. The candidate's identity comes
+from ``jobify.profile_loader`` (profile.yml::identity) — never hard-coded.
+No fabricated content — it just wraps plain text in letter formatting.
 """
 
 from __future__ import annotations
@@ -13,16 +14,30 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from jobify import profile_loader
 from tailor.normalize import normalize_for_ats
 
 logger = logging.getLogger("tailor.cover_letter_pdf")
 
-# ── Letterhead fields (match BASE_RESUME in latex_resume.py) ────────────────
-NAME = "Vishal Pathak"
-EMAIL = "vishalp@thak.io"
-LOCATION = "Atlanta, GA"
-LINKEDIN = "linkedin.com/in/vishalhpathak"
-WEBSITE = "vishal.pa.thak.io"
+
+# ── Letterhead fields (sourced from profile.yml::identity via the loader) ──
+
+def _letterhead() -> dict[str, str]:
+    """Return the candidate's letterhead identity from the loaded profile.
+
+    Reads ``profile.yml::identity`` (the same single source the LaTeX resume
+    header and form-answers identity block use). Missing fields degrade to
+    empty strings so the contact row simply omits them.
+    """
+    identity = profile_loader.load_profile().get("identity") or {}
+    loc_comp = profile_loader.load_profile().get("location_and_compensation") or {}
+    return {
+        "name": identity.get("name") or "",
+        "email": identity.get("email") or "",
+        "location": identity.get("location_base") or loc_comp.get("base") or "",
+        "linkedin": identity.get("linkedin") or "",
+        "website": identity.get("website") or "",
+    }
 
 
 def _styles():
@@ -130,6 +145,8 @@ def render_cover_letter_pdf(
     if not text:
         raise ValueError("Empty cover letter text — nothing to render.")
 
+    head = _letterhead()
+    name = head["name"]
     styles = _styles()
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -139,15 +156,16 @@ def render_cover_letter_pdf(
         rightMargin=0.9 * inch,
         topMargin=0.75 * inch,
         bottomMargin=0.75 * inch,
-        title=f"Cover Letter — {NAME}",
-        author=NAME,
+        title=f"Cover Letter — {name}",
+        author=name,
     )
 
     story = []
 
     # ── Header: name + contact row ──────────────────────────────────────
-    story.append(Paragraph(NAME, styles["header_name"]))
-    contact_bits = [EMAIL, LOCATION, LINKEDIN, WEBSITE]
+    if name:
+        story.append(Paragraph(name, styles["header_name"]))
+    contact_bits = [b for b in (head["email"], head["location"], head["linkedin"], head["website"]) if b]
     story.append(
         Paragraph(
             " &middot; ".join(_escape_html(b) for b in contact_bits),
@@ -187,15 +205,22 @@ def render_cover_letter_pdf(
         story.append(Paragraph(_escape_html(para), styles["body"]))
 
     # ── Sign-off ────────────────────────────────────────────────────────
-    # Detect an existing sign-off in the body (e.g. "— Vishal" already there).
+    # Detect an existing sign-off in the body (e.g. "— <First>" already there)
+    # so we don't double up. Build the name markers from the candidate's own
+    # name rather than a hard-coded identity.
     body_lower = text.lower()
+    first_name = (name.split()[0] if name else "").lower()
+    name_markers = []
+    if first_name:
+        name_markers = [f"— {first_name}", f"-- {first_name}"]
     has_sign_off = any(
         marker in body_lower
-        for marker in ("— vishal", "-- vishal", "best,", "thanks,", "cheers,", "— v\n", "-v\n")
+        for marker in (*name_markers, "best,", "thanks,", "cheers,")
     )
     if not has_sign_off:
         story.append(Paragraph("Best,", styles["sign_off"]))
-        story.append(Paragraph(NAME, styles["body"]))
+        if name:
+            story.append(Paragraph(name, styles["body"]))
 
     doc.build(story)
     return buf.getvalue()

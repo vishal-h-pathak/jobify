@@ -4,8 +4,8 @@
 ``profile/profile.yml`` is the user-layer ground truth; the repo-root
 ``CLAUDE.md`` carries a hand-mirrored prose form of the same facts for
 LLM prompt context. The mirror is maintained by hand, so facts drift
-(Session C's motivating example: the book-club URL read ``papercuts.org``
-in the narrative long after the real site moved to ``papercuts.cc``).
+(motivating example: a personal-site URL read ``example.org`` in the
+narrative long after the real site moved to ``example.dev``).
 
 This script diffs the small set of facts most likely to drift — URLs,
 the comp band, and the base location — and exits non-zero when the
@@ -18,9 +18,9 @@ Checks:
      (current + target endpoints) must appear in CLAUDE.md in its
      thousands form (e.g. 110000 → "110k", allowing "$110k"/"~$110k").
   3. URLs — for every domain written in profile.yml, if CLAUDE.md
-     mentions the same site (same first label, e.g. "papercuts"), the
+     mentions the same site (same first label, e.g. "example"), the
      full domain must match exactly. This catches TLD drift
-     (papercuts.org vs papercuts.cc) without requiring every YAML URL
+     (example.org vs example.dev) without requiring every YAML URL
      to appear in the narrative.
 
 Usage:

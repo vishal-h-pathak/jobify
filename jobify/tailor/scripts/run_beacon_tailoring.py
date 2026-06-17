@@ -70,7 +70,7 @@ What you will bring:
 Salary range: $135,000 – $155,000.""",
     "score": 8,
     "tier": 1,
-    "reasoning": "Neuroscience + EEG + data science role. Vishal has strong computational neuroscience and neural simulation background, though his EEG experience is neuromorphic/simulation-adjacent, not clinical trial EEG. The customer-facing scientific partner angle is a stretch — he has sales engineering inclination but no direct pharma client work. Match strengths: neuroscience depth, statistical/ML coding, Python, scientific writing, communication. Match gaps: clinical trial / pharma experience, Julia, GraphQL, direct patient-data analysis.",
+    "reasoning": "Example demo reasoning for a beacon test job. The candidate's data-analysis and scientific-coding background lines up well with the core responsibilities, and the strong written/verbal communication requirement is a clear match. Some listed tools and the customer-facing domain specifics would be a stretch and are noted as gaps.",
 }
 
 

@@ -7,7 +7,7 @@ name = "jobify"
 version = "0.0.0"
 description = "Unified job hunt -> tailor -> submit pipeline (consolidates job-hunter, job-applicant, job-submitter)."
 requires-python = ">=3.9"
-authors = [{ name = "Vishal Pathak" }]
+authors = [{ name = "jobify" }]
 readme = "README.md"
 
 dependencies = [

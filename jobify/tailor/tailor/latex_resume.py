@@ -1,8 +1,17 @@
 """
 tailor/latex_resume.py — Generate tailored LaTeX resumes compiled to PDF.
 
-Takes the output of tailor_resume() and produces a LaTeX document matching
-Vishal's existing resume style (Comp Neuroscience variant), then compiles to PDF.
+Takes the output of tailor_resume() and produces a one-page, ATS-safe LaTeX
+document, then compiles to PDF. The candidate's identity (header) and resume
+CONTENT both come from the user-layer profile via ``jobify.profile_loader``:
+
+  - header (name / email / location / links) → ``profile.yml::identity``
+  - the master resume content (skills, experience, education) → ``cv.md``,
+    handed to the LLM as the source it SELECTS and REORDERS from per job.
+
+Nothing here is hard-coded to a specific person — point ``JOBIFY_PROFILE_DIR``
+at any profile (the shipped ``profile.example/`` by default) and the resume
+renders for that persona.
 """
 
 from __future__ import annotations
@@ -17,6 +26,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from jobify import profile_loader
 from jobify.config import TAILOR_CLAUDE_MODEL as CLAUDE_MODEL
 from jobify.shared import llm
 from jobify.tailor.paths import CANDIDATE_PROFILE_PATH
@@ -26,125 +36,32 @@ from tailor.normalize import normalize_for_ats
 
 logger = logging.getLogger("tailor.latex_resume")
 
-# ── Base resume data (source of truth — never fabricate beyond this) ──────
+# ── Resume source data (from the loaded profile — never a literal persona) ──
 
-BASE_RESUME = {
-    "name": "Vishal Pathak",
-    "email": "vishalp@thak.io",
-    "location": "Atlanta, GA",
-    "linkedin": "linkedin.com/in/vishalhpathak",
-    "website": "vishal.pa.thak.io",
-    "education": {
-        "school": "Florida Institute of Technology",
-        "degree": "B.S. Electrical Engineering, cum laude",
-        "period": "2019--2021",
-    },
-    "skills": {
-        "Neuromorphic & Simulation": "Intel LavaSDK, NxSDK, Brian2, MuJoCo, Gymnasium API, FlyGym, VHDL, RTL design, AFSIM surrogate modeling",
-        "Programming & ML": "Python, C/C++, PyTorch, TensorFlow, NumPy, Matplotlib, scikit-learn, PyQt6",
-        "Systems & Hardware": "FPGA development, embedded systems (STM32), PCB design (EAGLE/Altium), serial protocols (RS-232/RS-485), ruggedized sensor deployment, HPC clusters",
-        "Tools & Platforms": "Git, CI/CD (Jacamar-CI), pytest, Docker, Linux, MATLAB, LabVIEW",
-    },
-    "experience": [
-        {
-            "org": "Georgia Tech Research Institute",
-            "title": "Algorithms \\& Analysis Engineer",
-            "location": "Atlanta, GA",
-            "period": "August 2021 -- Present",
-            "projects": [
-                {
-                    "name": "SPARSE: Spiking Processing for Autonomous RF \\& Sensor Engineering",
-                    "period": "Aug 2021 -- Jul 2024",
-                    "bullets": [
-                        "Developed VHDL models of CUBA and LIF neurons matching Intel's LavaSDK behavior, enabling seamless deployment of spiking neural networks from simulation to FPGA hardware",
-                        "Deployed and benchmarked custom spiking networks on Intel's Kapoho Bay neuromorphic platform, evaluating power consumption and inference performance for edge applications",
-                        "Contributed to DNN$\\to$SNN conversion pipeline using backpropagation in the spiking regime for overhead imagery and radar signal processing applications",
-                        "Trained deep learning models on GTRI's ICEHAMMER HPC cluster using PyTorch and TensorFlow frameworks",
-                    ],
-                },
-                {
-                    # NOTE: Spynel band below is assumed MWIR based on HGH's Spynel-S/X
-                    # line (the flagship MWIR panoramic thermal cameras); Vishal recalls
-                    # the unit as "Spynel M" but wasn't sure of the band. Confirm and
-                    # flip to LWIR if it was actually built around the Spynel-U.
-                    "name": "360-SA: 360° Situational Awareness",
-                    "period": "2023 -- Present",
-                    "bullets": [
-                        "Established comprehensive pytest-based unit test suite on HPC cluster, covering KITTI data ingestion, object detection, and tracking pipeline validation",
-                        "Designed and deployed Jacamar-CI pipeline to automate build, test, and deployment workflows for vehicle-mounted 360° camera systems",
-                        "Engineered hardware solution using TI's SD384EVK board to resolve impedance mismatch between cameras and Wolf Orin computing platform",
-                        "Built a custom frame grabber for HGH's Spynel MWIR panoramic thermal camera, bridging its native output into the 360-SA vision pipeline so detection and tracking modules could consume the feed alongside the existing visible-band cameras",
-                        "Modernized the 360-SA operator GUI by migrating the legacy tkinter application to PyQt6, adding collapsible and movable sub-windows, individually selectable UI elements, and a layout that matched the requested operator workflow",
-                    ],
-                },
-                {
-                    "name": "HACS: Hardware \\& Control System",
-                    "period": "2024",
-                    "bullets": [
-                        "Managed complete lifecycle of custom thermal control PCB: hand-populated 0402 components on milled EagleCAD boards and delivered integrated system for vehicle demo",
-                        "Developed C++ firmware for STM32 microcontroller to control thermal switches and stream status data over raw UDP/TCP protocols",
-                    ],
-                },
-                {
-                    "name": "GREMLIN: MWIR Video Processing",
-                    "period": "2023",
-                    "bullets": [
-                        "Performed literature review to select optimal model architectures for post-processing of MWIR video datasets",
-                        "Designed annotation-repair algorithm that re-labels mis-detections by running data through trained models, extracting metadata, and performing similarity comparison between detections",
-                    ],
-                },
-                {
-                    "name": "ENFIRE: Environmental Imaging",
-                    "period": "2024 -- Present",
-                    "bullets": [
-                        "Assembled rugged, portable sensor enclosure housing Jetson Orin, Ouster LiDAR, DAGR receiver, power pack, and network switch/router",
-                        "Conducted campus-scale SLAM and point-cloud mapping tests to validate environmental-imaging performance with and without enclosure",
-                    ],
-                },
-                {
-                    "name": "DRAGON: Drone Swarm Synchronization",
-                    "period": "2024",
-                    "bullets": [
-                        "Implemented Chrony time synchronization across multi-drone swarm and profiled system resilience under simulated network disruptions",
-                    ],
-                },
-                {
-                    "name": "PAAM: AFSIM Simulation Surrogate Modeling",
-                    "period": "2024",
-                    "bullets": [
-                        "Built visualizations and surrogate models for high-dimensional AFSIM simulation data, enabling exploratory analysis of sim outputs and faster iteration than re-running the full simulation for each parameter sweep",
-                    ],
-                },
-                {
-                    "name": "SHELAC: Rooftop Meteorological Sensor Deployment",
-                    "period": "Nov 2025 -- Present",
-                    "bullets": [
-                        "Deployed two weather stations and three anemometers along the northern edge of the building roof, running communication cabling from the rooftop through an access hatch into the LIDAR lab machine downstairs",
-                        "Sourced all cable stock, connectors, and converters for the install; fabricated and bench-tested the ruggedized Ethernet runs for the weather stations and the serial runs for the anemometers alongside a coworker before on-roof install",
-                        "Converted the Young sonic anemometer from RS-232 to RS-485 with an in-line converter to preserve signal integrity over the long cable run, which would otherwise have degraded the serial signal past a usable threshold",
-                    ],
-                },
-            ],
-        },
-        {
-            "org": "Rain Neuromorphics",
-            "title": "Electrical Engineering Intern",
-            "location": "Gainesville, FL",
-            "period": "May 2017 -- May 2018",
-            "projects": [
-                {
-                    "name": None,
-                    "period": None,
-                    "bullets": [
-                        "Designed and tested FPGA-based measurement system with Altera FPGA communicating with Arduino interface for characterizing in-house memristive devices",
-                        "Developed and manufactured PCB in EAGLE to house 40 leaky integrate-and-fire neurons, integrating measurement system circuitry",
-                        "Analyzed spiking behavior data output from measurement system to benchmark MNIST dataset performance on neuromorphic hardware",
-                    ],
-                },
-            ],
-        },
-    ],
-}
+
+def base_identity() -> dict[str, str]:
+    """Return the resume header identity from ``profile.yml::identity``.
+
+    This is the only structured persona data the renderer needs directly;
+    the resume *content* (skills / experience / education) is sourced from
+    ``cv.md`` and produced by the LLM (see :func:`cv_source`). Missing
+    fields degrade to empty strings so the header simply omits them.
+    """
+    profile = profile_loader.load_profile()
+    identity = profile.get("identity") or {}
+    loc_comp = profile.get("location_and_compensation") or {}
+    return {
+        "name": identity.get("name") or "",
+        "email": identity.get("email") or "",
+        "location": identity.get("location_base") or loc_comp.get("base") or "",
+        "linkedin": identity.get("linkedin") or "",
+        "website": identity.get("website") or "",
+    }
+
+
+def cv_source() -> str:
+    """Return the master CV markdown (``cv.md``) the LLM selects content from."""
+    return profile_loader.load_cv()
 
 
 # ── Resume styles (PR: one-page guarantee + a few ATS-safe styles) ─────────
@@ -170,7 +87,7 @@ _BASE_TEMPLATE = r"""
 \usepackage{textcomp}
 %%FONT%%
 % Defensive macros for special-character commands the LLM occasionally
-% emits instead of the unicode literals it sees in BASE_RESUME (e.g.
+% emits instead of the unicode literals it sees in the source CV (e.g.
 % rewriting "360°" as "360\degree"). _escape_latex_safe deliberately
 % lets backslash sequences pass through (since the template uses many
 % legitimately), so an undefined macro would otherwise crash compile.
@@ -278,22 +195,38 @@ STYLES: dict[str, str] = {
 LATEX_TEMPLATE = STYLES["classic"]
 
 
-# Deterministic archetype → style map. A role always gets a fitting style.
+# Deterministic archetype → style map. Keyed on the profile's archetype
+# keys; any archetype not listed (or an empty key) falls back to "classic",
+# so this is an optional per-profile refinement, not a hard requirement.
+# Override via ``JOBIFY_ARCHETYPE_STYLES`` ("key=style,key=style") to pin
+# styles for a custom profile's lanes. The default map covers the shipped
+# example persona's archetypes.
 # (For per-run variety instead, round-robin on a hash of the job id is a
 # one-line swap — e.g. ``list(STYLES)[hash(job_id) % len(STYLES)]``.)
-_STYLE_BY_ARCHETYPE: dict[str, str] = {
-    "tier_1a_compneuro": "classic",
-    "tier_1b_neuromorphic": "classic",
-    "tier_1c_bci": "classic",
-    "tier_3_mission_ml": "classic",
-    "tier_1_5_agentic_builder": "modern",
-    "tier_2_ai_se": "modern",
+_DEFAULT_STYLE_BY_ARCHETYPE: dict[str, str] = {
+    "backend_platform": "classic",
+    "ml_platform": "classic",
+    "developer_facing": "modern",
 }
+
+
+def _style_by_archetype() -> dict[str, str]:
+    """Resolve the archetype→style map, honoring ``JOBIFY_ARCHETYPE_STYLES``."""
+    raw = os.environ.get("JOBIFY_ARCHETYPE_STYLES", "").strip()
+    if not raw:
+        return _DEFAULT_STYLE_BY_ARCHETYPE
+    overrides: dict[str, str] = {}
+    for pair in raw.split(","):
+        key, _, style = pair.partition("=")
+        key, style = key.strip(), style.strip()
+        if key and style in STYLES:
+            overrides[key] = style
+    return overrides or _DEFAULT_STYLE_BY_ARCHETYPE
 
 
 def _select_style(archetype_key: str) -> str:
     """Pick an ATS-safe style for a job's archetype; classic is the fallback."""
-    return _STYLE_BY_ARCHETYPE.get((archetype_key or "").strip(), "classic")
+    return _style_by_archetype().get((archetype_key or "").strip(), "classic")
 
 
 # Characters that pdflatex treats as macro/special. Each must be escaped when
@@ -423,26 +356,49 @@ def _decide_skills_layout(
     return ("two_col", left, round(_TOTAL_TWO_COL_CM - left, 1))
 
 
+def _format_education_entries(education: list) -> list[str]:
+    """Render each education entry to a LaTeX line (escaped).
+
+    ``education`` is a list of ``{school, degree, period}`` dicts (sourced
+    from the profile's ``cv.md`` via the LLM). Entries with neither a school
+    nor a degree are dropped. Returns the rendered lines; an empty list when
+    the profile carries no education (the renderer then omits the row).
+    """
+    lines: list[str] = []
+    for entry in education or []:
+        if not isinstance(entry, dict):
+            continue
+        school = _escape_latex_safe(str(entry.get("school") or "")).strip()
+        degree = _escape_latex_safe(str(entry.get("degree") or "")).strip()
+        period = _escape_latex_safe(str(entry.get("period") or "")).strip()
+        if not school and not degree:
+            continue
+        label = f"\\textbf{{{school}}}" if school else ""
+        rest = f"{degree} ({period})" if (degree and period) else (degree or (f"({period})" if period else ""))
+        lines.append(" -- ".join(p for p in (label, rest) if p))
+    return lines
+
+
 def _build_edu_and_skills(
     skills: dict,
-    school: str,
-    degree: str,
-    edu_period: str,
+    education: list,
     layout_hint: str = "auto",
 ) -> str:
     """Render the entire Education + Technical Skills block.
 
-    Replaces the old fixed-width tabular with a layout that adapts to the
-    longest label the LLM picked. Education sits in the same column so its
-    label width matches the skills labels.
+    A layout that adapts to the longest label the LLM picked. Education sits
+    in the same column so its label width matches the skills labels. The
+    education entries come from the profile (via the LLM's CV selection);
+    when the profile carries none, the Education row is omitted entirely.
     """
     layout, left_cm, right_cm = _decide_skills_layout(skills, layout_hint)
-    edu_value = f"\\textbf{{{school}}} -- {degree} ({edu_period})"
+    edu_lines = _format_education_entries(education)
+    edu_value = " \\newline ".join(edu_lines)
 
     if layout == "two_col":
-        rows = [
-            f"\\textbf{{Education}} & {edu_value} \\\\[4pt]"
-        ]
+        rows = []
+        if edu_value:
+            rows.append(f"\\textbf{{Education}} & {edu_value} \\\\[4pt]")
         for category, skill_list in (skills or {}).items():
             safe_cat = _escape_latex_safe(category)
             safe_skills = _escape_latex_safe(skill_list)
@@ -457,9 +413,9 @@ def _build_edu_and_skills(
 
     # Stacked: each category on its own line, label bold then value indented.
     # Used when even the widest two-col layout would wrap a label.
-    blocks = [
-        f"\\textbf{{Education}}\\\\\n\\hspace*{{1em}}{edu_value}"
-    ]
+    blocks = []
+    if edu_value:
+        blocks.append(f"\\textbf{{Education}}\\\\\n\\hspace*{{1em}}{edu_value}")
     for category, skill_list in (skills or {}).items():
         safe_cat = _escape_latex_safe(category)
         safe_skills = _escape_latex_safe(skill_list)
@@ -484,17 +440,16 @@ def _build_skill_rows(skills: dict) -> str:
 def _build_experience_block(exp: dict) -> str:
     """Build LaTeX block for one employer.
 
-    Org / title / location / period come from BASE_RESUME and are hand-written
-    LaTeX (e.g. ``Algorithms \\& Analysis Engineer``), so they're inserted
-    verbatim. Project names and bullets may originate from Claude, so they
-    pass through ``_escape_latex_safe`` to neutralise any stray ``#``/``%``/
+    Org / title / location / period are now sourced from the candidate's
+    ``cv.md`` via the LLM, so they pass through ``_escape_latex_safe`` (like
+    project names and bullets) to neutralise any stray ``&``/``#``/``%``/
     ``_`` etc. without breaking deliberate LaTeX commands.
     """
     lines = []
-    org = exp["org"]
-    title = exp["title"]
-    location = exp["location"]
-    period = exp["period"]
+    org = _escape_latex_safe(str(exp.get("org") or ""))
+    title = _escape_latex_safe(str(exp.get("title") or ""))
+    location = _escape_latex_safe(str(exp.get("location") or ""))
+    period = _escape_latex_safe(str(exp.get("period") or ""))
 
     lines.append(f"\\textbf{{\\large {org}}} \\hfill {location} \\\\")
     lines.append(f"\\textit{{{title}}} \\hfill \\textit{{{period}}}")
@@ -523,29 +478,30 @@ def _render_latex(tailored: dict, style: str = "classic") -> str:
     as it drops content, so it must be cheap and side-effect-free. Unknown
     styles fall back to ``classic``.
     """
+    identity = base_identity()
     latex = STYLES.get(style) or STYLES["classic"]
-    latex = latex.replace("<<NAME>>", BASE_RESUME["name"])
-    latex = latex.replace("<<EMAIL>>", BASE_RESUME["email"])
-    latex = latex.replace("<<LOCATION>>", BASE_RESUME["location"])
-    latex = latex.replace("<<LINKEDIN>>", BASE_RESUME["linkedin"])
-    latex = latex.replace("<<WEBSITE>>", BASE_RESUME["website"])
+    latex = latex.replace("<<NAME>>", _escape_latex_safe(identity["name"]))
+    latex = latex.replace("<<EMAIL>>", _escape_latex_safe(identity["email"]))
+    latex = latex.replace("<<LOCATION>>", _escape_latex_safe(identity["location"]))
+    latex = latex.replace("<<LINKEDIN>>", identity["linkedin"])
+    latex = latex.replace("<<WEBSITE>>", identity["website"])
 
     # Education + Skills, with a column width that adapts to the labels the
     # LLM picked (see _decide_skills_layout). ``skills_layout`` is optional.
-    skills_dict = tailored.get("skills") or BASE_RESUME["skills"]
+    # Skills + education both come from the LLM's selection over the profile
+    # CV; empty fallbacks keep the renderer total even on sparse output.
+    skills_dict = tailored.get("skills") or {}
     layout_hint = (tailored.get("skills_layout") or "auto").lower()
     edu_skills_block = _build_edu_and_skills(
         skills=skills_dict,
-        school=BASE_RESUME["education"]["school"],
-        degree=BASE_RESUME["education"]["degree"],
-        edu_period=BASE_RESUME["education"]["period"],
+        education=tailored.get("education") or [],
         layout_hint=layout_hint,
     )
     latex = latex.replace("<<EDU_AND_SKILLS>>", edu_skills_block)
 
     exp_blocks = [
         _build_experience_block(exp)
-        for exp in tailored.get("experience", BASE_RESUME["experience"])
+        for exp in tailored.get("experience") or []
     ]
     latex = latex.replace(
         "<<EXPERIENCE_BLOCKS>>", "\n\n\\vspace{6pt}\n\n".join(exp_blocks)
@@ -753,13 +709,13 @@ def generate_tailored_latex(job: dict, tailoring: dict) -> dict:
     job_desc = job.get("description", "")
 
     # Match Agent transcript (optional). When present, lets the LaTeX
-    # selector lean into the projects + framing Vishal himself flagged in
-    # the dashboard chat.
+    # selector lean into the projects + framing the candidate themselves
+    # flagged in the dashboard chat.
     match_chat = (job.get("match_chat_transcript") or "").strip()
     match_chat_block = (
-        f"\n\nMATCH AGENT INTERVIEW (Vishal's own framing for THIS role — "
+        f"\n\nMATCH AGENT INTERVIEW (the candidate's own framing for THIS role — "
         f"use this to bias project selection, bullet emphasis, and skill "
-        f"category ordering toward what he actually wants highlighted):\n"
+        f"category ordering toward what they actually want highlighted):\n"
         f"{match_chat}\n"
         if match_chat else ""
     )
@@ -777,7 +733,7 @@ def generate_tailored_latex(job: dict, tailoring: dict) -> dict:
 
     prompt = load_task_prompt(
         "tailor_latex_resume",
-        base_resume_json=json.dumps(BASE_RESUME, indent=2),
+        cv_markdown=cv_source(),
         tailoring_json=json.dumps(tailoring, indent=2),
         job_title=job_title,
         company=company,
@@ -807,7 +763,7 @@ def generate_tailored_latex(job: dict, tailoring: dict) -> dict:
     # ── Style selection (deterministic per archetype) ───────────────────
     style = _select_style(archetype_meta.get("archetype", ""))
 
-    skills_dict = tailored.get("skills") or BASE_RESUME["skills"]
+    skills_dict = tailored.get("skills") or {}
     layout_hint = (tailored.get("skills_layout") or "auto").lower()
     chosen_layout, _, _ = _decide_skills_layout(skills_dict, layout_hint)
     logger.info(

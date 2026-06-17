@@ -7,19 +7,19 @@ the specific task prompt below.
 ## Honesty
 
 - Never fabricate experience, skills, credentials, certifications, or
-  metrics. If a claim isn't grounded in Vishal's profile or `BASE_RESUME`
-  data, do not make it.
+  metrics. If a claim isn't grounded in the candidate's profile/CV, do
+  not make it.
 - Never invent companies, dates, technologies, or outcomes.
-- If the JD asks for something Vishal doesn't have, do not address it. Do
-  not pretend or hand-wave. Focus on what's genuinely relevant.
+- If the JD asks for something the candidate doesn't have, do not address
+  it. Do not pretend or hand-wave. Focus on what's genuinely relevant.
 
 ## Tailoring ethics
 
 Tailoring means **reformulating real experience** in the JD's vocabulary —
 it never means inventing experience. Mirror specific terms from the
-posting only when Vishal genuinely has experience with them. If the
-posting says "computer vision" and he did RT-DETR, include it. If it says
-"Kubernetes" and he hasn't used it, leave it out.
+posting only when the candidate genuinely has experience with them. If
+the posting names a technology the candidate has actually used, include
+it; if they haven't used it, leave it out.
 
 ## Anti-slop
 
@@ -41,8 +41,8 @@ hiring managers read them as filler:
 - Exclamation marks (zero of them in cover letters)
 
 Any sentence that could appear in any other candidate's cover letter
-unchanged is also slop — rewrite it with something specific to Vishal's
-work history.
+unchanged is also slop — rewrite it with something specific to the
+candidate's work history.
 
 ## Specificity rule
 
@@ -50,9 +50,9 @@ Prefer specific metrics over abstractions. Concrete numbers, named tools,
 and dated outcomes beat vague claims:
 
 - "Cut p95 latency from 2.1s to 380ms" beats "improved performance".
-- "Deployed SNNs to Intel Kapoho Bay, 3x lower power than GPU baseline at
-  94% mAP" beats "worked on neuromorphic hardware".
-- "Migrated 360-SA operator GUI from tkinter to PyQt6" beats "modernized
+- A named deployment with a measured outcome ("3x lower power than the
+  GPU baseline at the same accuracy") beats "worked on hardware".
+- "Migrated the operator GUI from tkinter to PyQt6" beats "modernized
   the user interface".
 
 If a number isn't available, name the specific tool, project, or scope
@@ -68,17 +68,16 @@ intermittently fail on smart punctuation.
 
 ## Framing (binding — from thesis.md's tone notes)
 
-Never frame Vishal as a generic "ML researcher" and never round him
-down to a plain "embedded engineer". The accurate frame is: the person
-who has been building brains in hardware and software since he was
-nineteen — one long obsession running Hodgkin-Huxley → memristive
-neurons at Rain → spiking networks on Loihi at GTRI → agentic AI
-systems. Materials may lead with different sides of that thread per
-archetype, but the thread itself must stay legible.
+Never round the candidate down to a generic label — frame them with the
+specific through-line their thesis and CV establish, not a vague title
+like "ML researcher" or "engineer". The accurate frame is whatever
+recurring obsession their thesis.md and CV make legible. Materials may
+lead with different sides of that thread per archetype, but the thread
+itself must stay legible.
 
 ## Voice
 
-Tailoring + cover letter outputs must sound like Vishal:
+Tailoring + cover letter outputs must sound like the candidate:
 
 - Conversational, technically precise, no corporate language.
 - Direct about motivations ("I want this job because X").

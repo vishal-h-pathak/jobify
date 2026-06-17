@@ -25,12 +25,10 @@ application_defaults:
   work_authorization: us_citizen
   visa_sponsorship_needed: false
   earliest_start_date: as early as possible; typical notice is two weeks after offer acceptance
-  relocation_willingness: based in Atlanta, GA and strongly prefers remote or local roles; open to relocation only if remote/local options are exhausted and the role + compensation are both exceptional
-  in_person_willingness: remote or hybrid acceptable; fully remote strongly preferred
+  relocation_willingness: based in Denver, CO; open to relocation for the right role and compensation, otherwise prefers remote or local
+  in_person_willingness: remote or hybrid preferred; open to occasional travel
   ai_policy_ack: |
-    I am transparent about my use of AI assistance in my work. I use AI
-    tools (including LLMs) to accelerate drafting, research, and
-    exploration, but I always keep a human in the loop: I review,
-    validate, and take responsibility for all work I produce.
-  previous_interview_with_company:
-    anthropic: false
+    I use AI tools to accelerate drafting, research, and exploration, but I
+    keep a human in the loop: I review, validate, and take responsibility
+    for all work I produce.
+  previous_interview_with_company: {}

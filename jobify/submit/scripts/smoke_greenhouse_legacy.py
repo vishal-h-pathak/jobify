@@ -55,13 +55,13 @@ logger = logging.getLogger("submitter.smoke")
 # `profile_loader.load_application_defaults()` so prose drift in
 # CLAUDE.md cannot silently change what the submitter sends.
 _SMOKE_IDENTITY_STUBS = {
-    "first_name": "Vishal",
-    "last_name": "Pathak",
-    "email": "smoketest@example.invalid",
+    "first_name": "Alex",
+    "last_name": "Quinn",
+    "email": "alex.quinn@example.com",
     "phone": "+1 555 867 5309",
-    "linkedin": "https://www.linkedin.com/in/vishalhpathak/",
-    "website": "https://vishal.pa.thak.io",
-    "github": "https://github.com/vshlpthk1",
+    "linkedin": "https://www.linkedin.com/in/alexquinn-example/",
+    "website": "https://alexquinn.example.dev",
+    "github": "https://github.com/alexquinn-example",
     "location": "Atlanta, GA",
     "current_company": "(smoke test)",
     "current_title": "(smoke test)",

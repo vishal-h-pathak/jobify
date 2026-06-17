@@ -42,17 +42,17 @@ RESUME TAILORING CONTEXT (maintain consistency with these choices):
 - Keywords: {', '.join(resume_tailoring.get('keywords_to_include', []))}
 """
 
-    # Optional Match Agent transcript — direct quotes from Vishal's own
-    # conversation about this role, captured in the dashboard chat. When
+    # Optional Match Agent transcript — direct quotes from the candidate's
+    # own conversation about this role, captured in the dashboard chat. When
     # present, the cover letter should ground its angle, anecdotes, and
-    # framing in what he actually said rather than in generic inferences.
+    # framing in what they actually said rather than in generic inferences.
     match_chat = (job.get("match_chat_transcript") or "").strip()
     match_chat_block = (
-        f"\n\nMATCH AGENT INTERVIEW (Vishal's own answers about THIS role — "
-        f"use his framing, motivations, and emphasis areas verbatim where they "
+        f"\n\nMATCH AGENT INTERVIEW (the candidate's own answers about THIS role — "
+        f"use their framing, motivations, and emphasis areas verbatim where they "
         f"fit. If a draft cover letter or bullet suggestions appear at the end "
         f"of the transcript, treat them as a starting reference, not as final "
-        f"output — rewrite anything that doesn't match his voice profile):\n"
+        f"output — rewrite anything that doesn't match their voice profile):\n"
         f"{match_chat}\n"
         if match_chat else ""
     )

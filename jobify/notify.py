@@ -10,8 +10,9 @@ Two notification surfaces — kept side-by-side, not merged:
        by the legacy email path; the dashboard subsumes most of its
        role but the digest is still the heartbeat alert.
     2. The tailor / submit pipeline's per-job ``notifications`` table
-       writes consumed by the cockpit at ``vishal.pa.thak.io``. Each
-       row carries a deep link back to ``/dashboard/review/{job_id}``.
+       writes consumed by the cockpit dashboard (``PORTFOLIO_BASE_URL``).
+       Each row carries a deep link back to
+       ``/dashboard/review/{job_id}``.
 
 Naming policy (PR-8):
     - Canonical names use the ``send_*`` prefix per the consolidation
@@ -52,8 +53,8 @@ logger = logging.getLogger("jobify.notify")
 # ══════════════════════════════════════════════════════════════════════════
 
 RESEND_URL = "https://api.resend.com/emails"
-FROM_ADDR = os.environ.get("NOTIFY_FROM", "Job Agent <jobs@vishal.pa.thak.io>")
-TO_ADDR = os.environ.get("NOTIFY_TO", "vishal@pa.thak.io")
+FROM_ADDR = os.environ.get("NOTIFY_FROM", "Job Agent <jobs@example.com>")
+TO_ADDR = os.environ.get("NOTIFY_TO", "you@example.com")
 
 
 def _tier_key(tier):

@@ -3,17 +3,17 @@ load_dotenv()
 from scorer import score_job
 
 result = score_job(
-    title="Computational Neuroscientist",
-    company="eon.systems",
+    title="Staff Platform Engineer",
+    company="Acme",
     location="Remote",
     description=(
-        "At Eon we are building embodied digital twins of animals starting "
-        "with Drosophila and mouse. This role involves using FlyGym and "
-        "NeuroMechFly to simulate Drosophila behaviors in MuJoCo, integrating "
-        "connectome-based brain simulations using Brian2 and the Gymnasium "
-        "API, and creating compelling visualizations of virtual fly behavior. "
-        "Experience with computational neuroscience, spiking neural networks, "
-        "and embodied simulation required."
+        "We are building the developer platform that the rest of engineering "
+        "builds on: internal service scaffolding, CI/CD defaults, and "
+        "observability baked in. This role owns high-throughput services "
+        "end-to-end — design, ship, on-call — across a multi-region "
+        "Kubernetes + Kafka + PostgreSQL stack. Experience with distributed "
+        "systems, platform/infra ownership, and SLO-driven reliability "
+        "required."
     ),
 )
 print(result)

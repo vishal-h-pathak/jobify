@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 
 from jobify.config import TAILOR_CLAUDE_MODEL as CLAUDE_MODEL
@@ -36,8 +37,28 @@ from jobify.profile_loader import load_archetypes
 
 logger = logging.getLogger("tailor.archetype")
 
-_FALLBACK_KEY = "tier_3_mission_ml"
-_AGENTIC_KEY = "tier_1_5_agentic_builder"
+# When the classifier can't resolve a JD to a specific lane, fall back to a
+# generic archetype rather than a persona-specific key. ``JOBIFY_FALLBACK_ARCHETYPE``
+# lets a profile pin its preferred default lane; otherwise we use the LAST
+# archetype defined in profile.yml (authors put the most general / lowest-
+# priority lane last by convention).
+_FALLBACK_KEY_ENV = "JOBIFY_FALLBACK_ARCHETYPE"
+# Optional deterministic fast-path lane (see ``_is_tier_1_5``). A profile that
+# defines an agentic/applied-AI lane can name it here; absent, tier-1.5 routing
+# is simply skipped and the LLM classifier runs.
+_AGENTIC_KEY = os.environ.get("JOBIFY_AGENTIC_ARCHETYPE", "").strip()
+
+
+def _fallback_key(archs: dict) -> str:
+    """Resolve the fallback archetype key for the current profile.
+
+    Prefers ``JOBIFY_FALLBACK_ARCHETYPE`` when it names a defined archetype,
+    else the last archetype key in profile.yml, else "" when none exist.
+    """
+    pinned = os.environ.get(_FALLBACK_KEY_ENV, "").strip()
+    if pinned and pinned in archs:
+        return pinned
+    return next(reversed(archs), "") if archs else ""
 
 
 def _is_tier_1_5(tier) -> bool:
@@ -70,17 +91,18 @@ def archetype_keys() -> list[str]:
 
 
 def archetype_config(key: str) -> tuple[str, dict]:
-    """Look up one archetype's config; falls back to `tier_3_mission_ml`.
+    """Look up one archetype's config; falls back to the profile's default lane.
 
     Returns (resolved_key, cfg). The resolved key is `key` if it exists,
-    or `_FALLBACK_KEY` if a fallback was applied, or "" if nothing
-    matched at all.
+    or the profile fallback (see :func:`_fallback_key`) if a fallback was
+    applied, or "" if nothing matched at all.
     """
     archs = _load_archetypes()
     if key in archs:
         return key, archs[key]
-    if _FALLBACK_KEY in archs:
-        return _FALLBACK_KEY, archs[_FALLBACK_KEY]
+    fallback = _fallback_key(archs)
+    if fallback:
+        return fallback, archs[fallback]
     return "", {}
 
 
@@ -143,15 +165,16 @@ def classify_archetype(job: dict) -> dict:
     archs = _load_archetypes()
     if not archs:
         return {
-            "archetype": _FALLBACK_KEY,
+            "archetype": "",
             "confidence": 0.0,
             "reasoning": "no archetypes configured",
         }
 
-    # Tier 1.5 routes deterministically: the scorer only emits 1.5 for
-    # agentic / applied-AI engineering roles (thesis.md), which is
-    # exactly what tier_1_5_agentic_builder frames. Skip the LLM call.
-    if _is_tier_1_5(job.get("tier")) and _AGENTIC_KEY in archs:
+    # Tier 1.5 routes deterministically when the profile defines an
+    # agentic / applied-AI lane (``JOBIFY_AGENTIC_ARCHETYPE``): the scorer
+    # only emits 1.5 for agentic engineering roles, which is exactly what
+    # that lane frames. Absent such a lane, fall through to the LLM call.
+    if _AGENTIC_KEY and _is_tier_1_5(job.get("tier")) and _AGENTIC_KEY in archs:
         return {
             "archetype": _AGENTIC_KEY,
             "confidence": 1.0,
@@ -183,7 +206,7 @@ def classify_archetype(job: dict) -> dict:
     except Exception as exc:
         logger.warning("archetype classify failed: %s — falling back", exc)
         return {
-            "archetype": _FALLBACK_KEY,
+            "archetype": _fallback_key(archs),
             "confidence": 0.0,
             "reasoning": f"classifier error: {exc}",
         }
@@ -191,7 +214,7 @@ def classify_archetype(job: dict) -> dict:
     key = (result.get("archetype") or "").strip()
     if key not in archs:
         logger.info("classifier returned unknown archetype %r — using fallback", key)
-        key = _FALLBACK_KEY
+        key = _fallback_key(archs)
         result["reasoning"] = (result.get("reasoning") or "") + " (fallback applied)"
 
     result["archetype"] = key

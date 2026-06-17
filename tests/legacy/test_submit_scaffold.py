@@ -80,7 +80,7 @@ def test_adapter_contract_exists():
     r = SubmissionResult()
     assert r.confidence == 0.0
     assert r.recommend == "needs_review"
-    f = FieldFill(label="First name", value="Vishal", confidence=0.95)
+    f = FieldFill(label="First name", value="Alex", confidence=0.95)
     assert f.kind == "text"
 
 
@@ -210,7 +210,7 @@ def test_greenhouse_adapter_happy_path(monkeypatch, tmp_path, fake_page, fake_br
         job={
             "id": "j1", "title": "Eng", "ats_kind": "greenhouse",
             "applicant_profile": {
-                "first_name": "Vishal", "last_name": "Pathak",
+                "first_name": "Alex", "last_name": "Quinn",
                 "email": "v@example.com", "phone": "555-1212",
                 # LinkedIn intentionally present in profile but never fillable.
                 "linkedin_url": "https://linkedin.com/in/v",
@@ -373,7 +373,7 @@ def test_lever_adapter_full_name_variant(
     ctx = SubmissionContext(
         job={"id": "lv1", "title": "SWE",
              "applicant_profile": {
-                 "full_name": "Vishal Pathak",
+                 "full_name": "Alex Quinn",
                  "email": "v@example.com", "phone": "555"}},
         resume_pdf_path=resume,
         cover_letter_pdf_path=cover,
@@ -591,8 +591,8 @@ def test_applicant_fields_surfaces_expanded_profile_keys():
         "id": "jf",
         "title": "Eng",
         "applicant_profile": {
-            "first_name": "Vishal",
-            "last_name": "Pathak",
+            "first_name": "Alex",
+            "last_name": "Quinn",
             "email": "v@example.com",
             "phone": "555",
             "work_authorization": "us_citizen",
@@ -828,8 +828,8 @@ def test_generic_adapter_happy_path(monkeypatch, tmp_path, fake_page):
     async def fake_report_extract(sess, instruction, schema, *, page=None, timeout=60.0):
         return {
             "fields_filled": [
-                {"label": "First name", "value": "Vishal"},
-                {"label": "Last name", "value": "Pathak"},
+                {"label": "First name", "value": "Alex"},
+                {"label": "Last name", "value": "Quinn"},
                 {"label": "Work authorization", "value": "US citizen"},
             ],
             "fields_skipped": [
@@ -848,7 +848,7 @@ def test_generic_adapter_happy_path(monkeypatch, tmp_path, fake_page):
     ctx = SubmissionContext(
         job={"id": "wd1", "title": "SWE",
              "applicant_profile": {
-                 "first_name": "Vishal", "last_name": "Pathak",
+                 "first_name": "Alex", "last_name": "Quinn",
                  "email": "v@example.com", "phone": "555",
                  "work_authorization": "us_citizen",
                  "visa_sponsorship_needed": "no",

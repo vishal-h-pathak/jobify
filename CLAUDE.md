@@ -1,101 +1,42 @@
-# Vishal Pathak — Agent Profile
+# jobify — Agent Guide
 
-> Structured truth lives in `profile/profile.yml`; voice rules in `profile/voice-profile.md`.
-> This file is the human-readable narrative aggregator the tailor reads as
-> LLM prompt context (`jobify.tailor.paths.CANDIDATE_PROFILE_PATH`).
-> Edit the structured files in `profile/` first; mirror to this file when
-> the tailor needs the prose form.
+> **The candidate persona is NOT in this file.** All persona data — identity,
+> targeting tiers, disqualifiers, CV, voice — lives in the user-layer profile
+> directory and is read through one loader: `jobify.profile_loader`.
+> Nothing in the Python package, the prompts, or this file hard-codes a
+> specific person. Point the pipeline at any profile and it runs for that
+> persona.
 
-PR-9 consolidated the three previous repo-level `CLAUDE.md` files (one
-each under `jobify/{hunt,tailor,submit}/`) into this single file. The
-identity prose lives here once; subpackage-specific design rules live in
-each subpackage's `README.md`.
+## Where the persona lives
 
-## Identity
+The profile directory is resolved by `jobify.profile_loader.profile_dir()`:
 
-EE background with a long-running focus on neuromorphic hardware and
-brain-inspired computing. The through-line is emergence — the
-Hodgkin-Huxley model in college (ion channels as RC circuits scaling to
-cognition) pointed him toward this and he has not wandered far since.
-Rain Neuromorphics at 19 as employee #5, building memristive LIF neuron
-PCBs by hand. Four years at GTRI doing SNN deployment on Intel Kapoho
-Bay, VHDL neuron modeling, and eventually broader computer vision and
-embedded ML. Now looking to get back closer to the neuroscience end of
-the spectrum.
+1. `JOBIFY_PROFILE_DIR` env var, if set (a generated profile or a test
+   fixture).
+2. `<repo_root>/profile/` if it exists — the active user's profile, written
+   by onboarding. **Git-ignored**, never committed (it holds real PII).
+3. `<repo_root>/profile.example/` — the shipped neutral example persona
+   ("Alex Quinn"), so a fresh clone runs out of the box.
 
-## What he's looking for
+The eight user-layer files (`profile.yml`, `thesis.md`, `voice-profile.md`,
+`article-digest.md`, `learned-insights.md`, `cv.md`, `disqualifiers.yml`,
+`portals.yml`) are documented in `onboarding/schema/`. To onboard a real
+user, generate `profile/` from those schemas; everything downstream reads it
+through the loader.
 
-**Tier 1:** Computational neuroscience, neuromorphic engineering,
-connectomics, embodied simulation, BCI. eon.systems is the
-reference-point role.
-**Tier 2:** Sales engineering in AI/LLM. Strong communicator, rare
-technical depth, no formal sales experience but has pitched to DoD
-sponsors. Would need to be a domain he finds genuinely interesting.
-**Tier 3:** ML/CV engineering at mission-driven organizations. Heavily
-dependent on the company.
+- **Identity, targeting tiers, comp, archetypes, application-form defaults** →
+  `profile.yml` (`jobify.profile_loader.load_profile` /
+  `load_application_defaults` / `load_archetypes`).
+- **Hunting judgment (tiers, hard constraints, energy signals)** → `thesis.md`
+  (spliced FIRST into every scoring/tailoring prompt; wins on conflict).
+- **Resume content** → `cv.md` (the tailor selects + reorders from it; never
+  invents beyond it).
+- **Voice** → `voice-profile.md`.
 
-**Disqualifiers:**
-- DoD/defense contracts, government, roles with no clear mission.
-- Academic positions (postdoc, professor, PhD programs) — no PhD.
-
-## Location & compensation
-
-- Atlanta, GA. Open to fully remote.
-- Open to relocation only if mission + comp are both exceptional.
-  eon.systems is the bar.
-- Current: ~$110k. Target: $120–140k. Will consider same comp for the
-  right role.
-
-## How he works
-
-Good communicator, creative problem-solver, works best with clear
-direction and a compelling reason to solve the problem. Self-aware about
-needing external structure to stay focused. Strong once pointed at
-something.
-
-## Key technical skills
-
-FlyGym, MuJoCo, Brian2, Gymnasium API, VHDL SNN implementation, Intel
-Kapoho Bay (Loihi 1/2), memristive hardware, DNN→SNN conversion,
-PyTorch, TensorFlow, HPC training, RT-DETRv2, embedded ML (Jetson Orin),
-PCB design (EagleCAD/Altium), PyQt6 desktop GUI development, serial
-protocol integration (RS-232, RS-485), ruggedized sensor + cable
-deployment, AFSIM surrogate modeling, C++, Python.
-
-## Portfolio goal
-
-`vishal.pa.thak.io` should feel like a person with a specific
-long-running obsession, not a generated candidate page. The thread from
-Hodgkin-Huxley → memristors → spiking networks → connectomics should be
-legible. Prioritize personality and genuine content over polish.
-
-## Personal
-
-From Cape Canaveral, FL. Moved to Atlanta April 2022. Runs a book club
-(papercuts.cc). Into cooking, audiobooks, agentic AI projects.
-
-## Application form defaults
-
-Canonical answers the submitter's three-tier classifier reads (see
-`jobify/submit/adapters/_common.py::applicant_fields`). When the tailor
-populates `applicant_profile` on each `jobs` row, these values flow
-through verbatim.
-
-- `work_authorization`: `us_citizen`
-- `visa_sponsorship_needed`: `no`
-- `earliest_start_date`: as early as possible; typical notice is two
-  weeks after offer acceptance
-- `relocation_willingness`: based in Atlanta, GA and strongly prefers
-  remote or local roles; open to relocation only if remote/local options
-  are exhausted and the role + compensation are both exceptional
-- `in_person_willingness`: remote or hybrid acceptable; fully remote
-  strongly preferred
-- `ai_policy_ack`: "I am transparent about my use of AI assistance in
-  my work. I use AI tools (including LLMs) to accelerate drafting,
-  research, and exploration, but I always keep a human in the loop: I
-  review, validate, and take responsibility for all work I produce."
-- `previous_interview_with_company`: `{ "anthropic": false }` (extend
-  per company as history accumulates)
+The tailor and hunt prompts already receive the merged profile as LLM context
+(`prompts.cached_system_blocks` / `hunt.prompts.build_profile_prompt_string`),
+so prompts reference "the candidate" generically and let the injected profile
+supply the specifics.
 
 ---
 

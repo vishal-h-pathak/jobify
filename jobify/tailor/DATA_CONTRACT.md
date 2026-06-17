@@ -5,7 +5,7 @@ that have different ownership and replacement semantics.
 
 ## User Layer (never replaced by code updates)
 
-Hand-edited by Vishal. PR-9 consolidated the user layer into two
+Hand-edited by the user. PR-9 consolidated the user layer into two
 unified locations under the `jobify` repo:
 
 - Repo-root `profile/` — the structured + narrative files shared
@@ -39,7 +39,7 @@ If neither user-layer directory has any matching files,
 | `prompts/tailor_*.md`, `agent_*.md` | Task bodies that consume the user layer + voice profile at call time |
 | `applicant/*.py` | ATS-specific submission handlers (Ashby, universal) |
 | `scripts/*.py` | One-off scripts (CV-sync drift detector, pattern analysis) |
-| `tailor/latex_resume.py::BASE_RESUME` | Structured resume data; must mirror `jobify/hunt/profile/cv.md` (J-9 detects drift) |
+| `jobify/hunt/profile/cv.md` | Resume-content source; the LaTeX resume builder reads it via the profile loader (J-9 detects drift) |
 | `pyproject.toml`, `scripts/*.sql` | Build / DB scaffolding (PR-9 retired the per-subpackage `requirements.txt`; deps live in `pyproject.toml::[project].dependencies`). |
 
 ## Reading the user layer

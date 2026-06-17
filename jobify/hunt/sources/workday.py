@@ -37,7 +37,7 @@ from sources._portals import title_signals, workday_tenants
 
 logger = logging.getLogger("sources.workday")
 
-USER_AGENT = "job-hunter/1.0 (+https://vishal.pa.thak.io)"
+USER_AGENT = "job-hunter/1.0"
 _HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/json"}
 
 # Default pagination; per-tenant rows can override via `limit_pages`.

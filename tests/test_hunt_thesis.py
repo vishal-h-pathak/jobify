@@ -40,12 +40,15 @@ def fresh_profile_cache():
 # ── thesis.md presence + loader wiring ──────────────────────────────────
 
 
-def test_thesis_committed_in_repo_profile() -> None:
-    thesis = REPO_ROOT / "profile" / "thesis.md"
-    assert thesis.is_file(), "profile/thesis.md must be committed"
-    body = thesis.read_text(encoding="utf-8")
-    assert "Tier 1.5" in body
-    assert "degree-gate" in body.lower()
+def test_thesis_loads_from_shipped_profile() -> None:
+    # WS-A2: the active user's profile/ is git-ignored, so the committed,
+    # always-present baseline is profile.example/thesis.md. Assert a thesis
+    # loads through the single loader rather than a hard-coded repo path.
+    from jobify import profile_loader
+
+    body = profile_loader.load_thesis()
+    assert body.strip(), "a thesis.md must load through the profile loader"
+    assert "Hunting Thesis" in body
 
 
 def test_load_thesis_reads_profile_dir(tmp_profile) -> None:
@@ -80,9 +83,10 @@ def test_missing_thesis_falls_back_cleanly(tmp_profile, fresh_profile_cache) -> 
 # ── scorer.md prompt contract ───────────────────────────────────────────
 
 
-def test_scorer_prompt_accepts_tier_1_5_and_degree_gated() -> None:
+def test_scorer_prompt_accepts_tiers_and_degree_gated() -> None:
     body = (HUNT_DIR / "prompts" / "scorer.md").read_text(encoding="utf-8")
-    assert '"1.5"' in body
+    # Tiers are defined by the profile's thesis.md (1/2/3); the prompt
+    # defers to it rather than hard-coding a persona-specific lane.
     assert "degree_gated" in body
     # Calibration reference to the thesis's worked examples.
     assert "worked examples" in body.lower()

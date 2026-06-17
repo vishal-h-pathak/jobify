@@ -163,7 +163,7 @@ SESSION_BUDGET_SECONDS: Final[int]     = int(os.environ.get("SESSION_BUDGET_SECO
 MAX_ATTEMPTS_PER_JOB: Final[int]       = int(os.environ.get("MAX_ATTEMPTS_PER_JOB", "3"))
 HEADLESS: Final[bool]                  = _bool("HEADLESS", "true")
 REVIEW_DASHBOARD_URL: Final[str]       = os.environ.get(
-    "REVIEW_DASHBOARD_URL", "https://vishal.pa.thak.io/review"
+    "REVIEW_DASHBOARD_URL", "https://dashboard.example.com/review"
 )
 
 # ── Local visible-browser prepare flow (jobify-submit on the user's box) ──
@@ -205,7 +205,7 @@ AUTO_SUBMIT_MIN_TIER: Final[int]     = int(os.environ.get("AUTO_SUBMIT_MIN_TIER"
 # Used by jobify.notify.cockpit_url() to build deep links into the
 # dashboard. Override via PORTFOLIO_BASE_URL for staging / preview deploys.
 PORTFOLIO_BASE_URL: Final[str] = os.environ.get(
-    "PORTFOLIO_BASE_URL", "https://vishal.pa.thak.io"
+    "PORTFOLIO_BASE_URL", "https://dashboard.example.com"
 ).rstrip("/")
 
 

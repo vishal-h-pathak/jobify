@@ -1,16 +1,17 @@
 # Tailor LaTeX Resume
 
-You are tailoring a LaTeX resume for Vishal Pathak for a specific job
-application. You have his complete base resume data below. Your job is
-to SELECT and REORDER content to best match the target role. You may
-rewrite bullet points to emphasize relevant aspects, but you MUST NOT
-fabricate experience, skills, or projects he doesn't have.
+You are tailoring a LaTeX resume for the candidate for a specific job
+application. Your job is to SELECT and REORDER content to best match the
+target role. You may rewrite bullet points to emphasize relevant aspects,
+but you MUST NOT fabricate experience, skills, or projects the candidate
+doesn't have.
 
 The CANDIDATE PROFILE (thesis.md canonical-first) and VOICE PROFILE are
 in the system prompt.
 
-BASE RESUME DATA (this is the complete truth — all projects and bullets available):
-{base_resume_json}
+CANDIDATE'S MASTER CV (markdown) — the complete, factual source you
+SELECT and REORDER from; never fabricate beyond it:
+{cv_markdown}
 
 TAILORING GUIDANCE (from earlier analysis):
 {tailoring_json}
@@ -25,11 +26,14 @@ CHOSEN ARCHETYPE (J-4 — bias project selection + skill ordering toward
 this lane. Same candidate, different framing):
 {archetype_block}
 
+CHOSEN ARCHETYPE applies to project + skill ordering only; never invent
+content not present in the CV above.
+
 YOUR TASK — respond with a JSON object containing:
 
 1. "skills" — a dict of 4-5 skill categories with comma-separated skills.
    Rewrite category names and reorder skills to lead with what's most relevant.
-   Only include skills he actually has from the base data.
+   Only include skills the candidate actually has from the CV above.
 
    You have flexibility on category names — the resume's two-column
    skills layout auto-sizes the left column to fit the longest label
@@ -52,15 +56,21 @@ YOUR TASK — respond with a JSON object containing:
      chosen very long descriptive labels (>32 chars) or have many
      categories where readability suffers in a table.
 
-3. "experience" — a list of experience entries. Each entry has:
-   - "org", "title", "location", "period" (keep these factual)
+3. "experience" — a list of experience entries drawn from the CV. Each entry has:
+   - "org", "title", "location", "period" (keep these factual, from the CV)
    - "projects" — list of projects to INCLUDE (you can drop irrelevant ones).
-     Each project has "name" (null for Rain), "period", and "bullets".
+     Each project has "name" (use null when a role has no distinct project name),
+     "period", and "bullets".
      You may rewrite bullets to emphasize relevant aspects, but keep them factual.
-     Lead with the most relevant projects for this role.
+     Lead with the most relevant projects for this role. Include the most recent and
+     most relevant roles from the CV; do not fabricate employers or projects.
 
-4. "summary_line" — optional 1-line summary to add below the header (or null to skip).
-   If included, write it in Vishal's voice: direct, technical, no fluff.
+4. "education" — a list of objects extracted from the CV, each of shape
+   {{"school": ..., "degree": ..., "period": ...}}. Pull these from the CV's
+   education section; do not invent schools, degrees, or dates.
+
+5. "summary_line" — optional 1-line summary to add below the header (or null to skip).
+   If included, write it in the candidate's voice: direct, technical, no fluff.
 
 ONE PAGE IS MANDATORY. The resume MUST fit on a single page. Budget the
 content so it does — a downstream trim loop will mechanically drop bullets
@@ -74,12 +84,11 @@ deleted (losing content you chose). Target one page directly:
 - Keep skills compact: 4-5 categories, comma-separated.
 
 RULES:
-- GTRI projects you can include or exclude based on relevance. Always include at least
-  SPARSE and one other. Drop projects that add no value for this specific role.
-- Rain Neuromorphics should always be included.
+- Always include the candidate's most recent role and the most relevant prior roles; drop
+  roles or projects that add nothing for this specific posting.
 - Rewrite skill categories to match the job posting's language where honest.
 - Bullets should be specific and technical. No vague claims.
 - Keep the resume to 1 page worth of content — see the mandatory caps above.
-- Do NOT add projects, employers, or skills that don't exist in the base data.
+- Do NOT add projects, employers, or skills that don't exist in the CV above.
 
 Respond with valid JSON only, no markdown.

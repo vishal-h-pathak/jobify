@@ -7,7 +7,7 @@ specific task prompt below.
 ## Honesty
 
 - Never fabricate experience, skills, credentials, or metrics. If a claim
-  isn't supported by Vishal's profile, do not make it.
+  isn't supported by the candidate's profile, do not make it.
 - Never invent companies, roles, dates, or technologies. If the source data
   is missing a field, leave it missing — say "unknown" rather than guess.
 - Surface uncertainty rather than confabulate. A "low confidence" label is
@@ -44,8 +44,8 @@ Prefer specific metrics over abstractions. Concrete numbers, named tools,
 and dated outcomes beat vague claims:
 
 - "Cut p95 latency from 2.1s to 380ms" beats "improved performance".
-- "Deployed SNNs to Intel Kapoho Bay, 3x lower power than GPU baseline at
-  94% mAP" beats "worked on neuromorphic hardware".
+- A named system with a measured outcome ("3x lower power than the GPU
+  baseline at the same accuracy") beats "worked on hardware".
 - "Two-week notice after offer" beats "available to start soon".
 
 If a number isn't available, name the specific tool, project, or scope

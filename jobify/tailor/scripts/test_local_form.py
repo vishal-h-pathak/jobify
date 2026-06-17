@@ -136,7 +136,17 @@ def main():
 
     # Assertions
     filled = result.get("filled_fields") or {}
-    expected_substrings_by_field_kind = ["Vishal", "Pathak", "thak.io"]  # at least one fill landed
+    # Derive the expected fill content from the loaded profile so the check
+    # is persona-agnostic: a first name + email shaped from whoever the
+    # active profile describes.
+    from jobify import profile_loader
+    _ident = profile_loader.load_profile().get("identity", {})
+    expected_substrings_by_field_kind = [
+        s for s in [
+            _ident.get("name", "").split()[0] if _ident.get("name") else "",
+            _ident.get("email", ""),
+        ] if s
+    ] or ["@"]  # fallback: at least one email-shaped fill landed
     any_hit = any(any(s.lower() in str(v).lower() for s in expected_substrings_by_field_kind)
                   for v in filled.values())
     print(f"\nfilled count: {len(filled)}")

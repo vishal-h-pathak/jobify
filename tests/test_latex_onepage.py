@@ -25,20 +25,20 @@ def _fat_tailored() -> dict:
         "skills": {"A": "a, b, c", "B": "d, e, f"},
         "experience": [
             {
-                "org": "GTRI",
+                "org": "Northwind",
                 "title": "Engineer",
-                "location": "Atlanta",
+                "location": "Denver",
                 "period": "2021--Present",
                 "projects": [
-                    {"name": "SPARSE", "period": "2021", "bullets": [long] * 4},
-                    {"name": "360-SA", "period": "2023", "bullets": [long] * 4},
+                    {"name": "Platform", "period": "2021", "bullets": [long] * 4},
+                    {"name": "Pipeline", "period": "2023", "bullets": [long] * 4},
                 ],
             },
             {
-                "org": "Rain",
-                "title": "Intern",
-                "location": "FL",
-                "period": "2017--2018",
+                "org": "Brightwave",
+                "title": "Engineer",
+                "location": "SF",
+                "period": "2018--2021",
                 "projects": [
                     {"name": None, "period": None, "bullets": [long] * 3},
                 ],
@@ -82,12 +82,9 @@ def test_pdf_page_count_none_when_unparseable():
 @pytest.mark.parametrize(
     "archetype,expected",
     [
-        ("tier_1a_compneuro", "classic"),
-        ("tier_1b_neuromorphic", "classic"),
-        ("tier_1c_bci", "classic"),
-        ("tier_3_mission_ml", "classic"),
-        ("tier_1_5_agentic_builder", "modern"),
-        ("tier_2_ai_se", "modern"),
+        ("backend_platform", "classic"),
+        ("ml_platform", "classic"),
+        ("developer_facing", "modern"),
     ],
 )
 def test_select_style_maps_archetype(archetype, expected):
@@ -125,11 +122,12 @@ def test_trim_drops_bullet_from_longest_entry():
     # One bullet gone, no whole entry removed.
     assert _total_bullets(t) == before - 1
     assert _total_projects(t) == projects_before
-    # It came off a 4-bullet GTRI project (the longest), not the 3-bullet Rain.
-    rain = t["experience"][1]["projects"][0]
-    assert len(rain["bullets"]) == 3
-    gtri_bullets = sum(len(p["bullets"]) for p in t["experience"][0]["projects"])
-    assert gtri_bullets == 7
+    # It came off a 4-bullet first-employer project (the longest), not the
+    # 3-bullet second employer.
+    second = t["experience"][1]["projects"][0]
+    assert len(second["bullets"]) == 3
+    first_bullets = sum(len(p["bullets"]) for p in t["experience"][0]["projects"])
+    assert first_bullets == 7
 
 
 def test_trim_drops_whole_entry_only_at_floor():

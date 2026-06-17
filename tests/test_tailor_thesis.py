@@ -26,7 +26,10 @@ from tailor import archetype
 
 
 THESIS_BANNER_PREFIX = "========== thesis.md (CANONICAL"
-BINDING_FRAME = "building brains in hardware and software"
+# The binding tone note in tailor/_shared.md is persona-agnostic (WS-A2):
+# it tells the model not to flatten the candidate into a generic label and
+# to use the through-line their thesis/CV establish.
+BINDING_FRAME = "generic label"
 
 
 @pytest.fixture
@@ -121,4 +124,4 @@ def test_shared_rules_carry_binding_tone_note():
     shared = tailor_prompts._shared()
     assert BINDING_FRAME in shared
     assert "ML researcher" in shared
-    assert "embedded engineer" in shared
+    assert "through-line" in shared

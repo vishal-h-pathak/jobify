@@ -97,7 +97,7 @@ def _build_identity_block(profile_yaml: dict) -> dict[str, Any]:
     loc_comp = profile_yaml.get("location_and_compensation") or {}
     form_defaults = profile_yaml.get("application_defaults") or {}
 
-    full_name = identity.get("name") or "Vishal Pathak"
+    full_name = identity.get("name") or ""
     first, last = _split_full_name(full_name)
 
     salary_target = _format_salary_range(loc_comp.get("target_comp_usd", ""))
@@ -141,7 +141,7 @@ def _build_identity_block(profile_yaml: dict) -> dict[str, Any]:
         "current_location": (
             identity.get("location_base")
             or loc_comp.get("base")
-            or "Atlanta, GA"
+            or ""
         ),
         "willing_to_relocate": relocation_str,
         "remote_preference": remote_pref,
@@ -152,17 +152,12 @@ def _build_identity_block(profile_yaml: dict) -> dict[str, Any]:
             form_defaults.get("earliest_start_date")
             or "Standard 2-week notice"
         ),
-        # Current employment (profile.yml doesn't carry these today;
-        # CLAUDE.md narrative establishes GTRI as current)
-        "current_company": (
-            identity.get("current_company")
-            or "Georgia Tech Research Institute"
-        ),
-        "current_title": (
-            identity.get("current_title")
-            or "Algorithms & Analysis Engineer"
-        ),
-        "years_of_experience": identity.get("years_of_experience") or 7,
+        # Current employment. Sourced from profile.yml::identity when present;
+        # left blank otherwise (a form that asks for it routes to review
+        # rather than getting a fabricated employer/title).
+        "current_company": identity.get("current_company") or "",
+        "current_title": identity.get("current_title") or "",
+        "years_of_experience": identity.get("years_of_experience") or "",
         # Effectively-required Anthropic-style form fields. The submitter's
         # adapters/_common.applicant_fields reads these from form_answers
         # so the three-tier classifier can answer them instead of

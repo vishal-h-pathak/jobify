@@ -8,19 +8,15 @@ list must never block.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import yaml
-
+from jobify import profile_loader
 from jobify.hunt.sources._portals import passes_title_filter
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-# WS-A1: portals.yml lives in the consolidated profile directory now.
-PORTALS = REPO_ROOT / "profile" / "portals.yml"
 
 
 def _load() -> dict:
-    return yaml.safe_load(PORTALS.read_text(encoding="utf-8")) or {}
+    # WS-A2: read portals.yml through the single loader (honors
+    # JOBIFY_PROFILE_DIR → active profile/ → shipped profile.example/)
+    # rather than a hard-coded repo-root path.
+    return profile_loader.load_portals()
 
 
 def test_portals_yaml_parses_with_expected_sections() -> None:

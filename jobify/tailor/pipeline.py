@@ -171,7 +171,7 @@ def process_one_approved_job(job_id: str) -> None:
 
     try:
         # ── Hydrate the persisted Match Agent chat (if any) into the
-        # job dict so the tailor prompts see Vishal's own framing for
+        # job dict so the tailor prompts see the candidate's own framing for
         # this specific role. The dashboard's MatchAgent.tsx writes
         # the conversation array to jobs.match_chat after each turn;
         # here we render it to plain text and store it under the key

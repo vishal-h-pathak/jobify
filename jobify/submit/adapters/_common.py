@@ -246,7 +246,7 @@ async def paste_textarea(
 
 # ── Custom question handling ─────────────────────────────────────────────
 #
-# Three-tier policy (per Vishal, 2026-04-21):
+# Three-tier policy:
 #
 #   required_by_form    : the form HTML marks the field required. Answer if
 #                         we can; if not, route to review.

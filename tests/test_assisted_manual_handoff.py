@@ -42,9 +42,9 @@ def _job(job_id="hand-1"):
         "title": "Embedded ML Engineer",
         "resume_pdf_path": f"{job_id}/resume.pdf",
         "cover_letter_pdf_path": f"{job_id}/cover_letter.pdf",
-        "cover_letter_path": "Dear Acme,\n\nI build spiking networks.\n",
+        "cover_letter_path": "Dear Acme,\n\nI build distributed systems.\n",
         "form_answers": {
-            "first_name": "Vishal",
+            "first_name": "Alex",
             "additional_questions": [
                 {"question": "Why Acme?", "draft_answer": "Mission fit."},
                 {"question": "Salary?", "draft_answer": "$120-140k"},

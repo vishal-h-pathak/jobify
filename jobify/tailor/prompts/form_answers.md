@@ -22,17 +22,17 @@ Your job is to produce four narrative outputs:
   - `why_this_role` — string, <=120 words. Archetype-specific framing.
     Must reference a specific phrase or requirement from the JD itself
     so the reader can tell the answer was written for this posting and
-    not template-recycled. Lead with what Vishal has built that maps
-    to the role; close with why he wants this specific work next.
+    not template-recycled. Lead with what the candidate has built that
+    maps to the role; close with why they want this specific work next.
   - `why_this_company` — string, <=100 words. Must reference something
     specific about the company — its product, its mission, a signal
     from the JD about how the team works. Generic praise ("great
     company", "exciting mission") is forbidden.
   - `additional_info` — string OR null, <=150 words. Emit a string
     ONLY when the JD explicitly raises a specific challenge that maps
-    cleanly to one of Vishal's proof points (e.g. JD says "porting
-    SNNs to neuromorphic silicon" and his Kapoho Bay deployment is a
-    direct hit). Otherwise emit `null`. Do not pad — silence is fine.
+    cleanly to one of the candidate's proof points from the CV (a
+    direct, named match between a JD requirement and real experience).
+    Otherwise emit `null`. Do not pad — silence is fine.
   - `additional_questions` — list of objects of shape
     `{{"question": "...", "draft_answer": "..."}}`, one per
     role-specific question the JD explicitly asks. Examples that
@@ -64,7 +64,7 @@ JOB POSTING:
 Title: {job_title}
 Company: {company}
 Description: {job_desc}
-Tier: {tier} (1 = neuro/dream job, 1.5 = agentic/applied-AI builder, 2 = AI sales eng, 3 = mission ML/CV)
+Tier: {tier} (1 = dream-job lane, 2 = secondary lane, 3 = mission ML/CV; see thesis.md)
 
 WRITING RULES — follow strictly:
 
@@ -72,26 +72,26 @@ WRITING RULES — follow strictly:
    "passionate", no "leverage", no "spearhead", no "synergies", no
    "robust", no exclamation marks, no "I am writing to". Any sentence
    that could appear in another candidate's form answer unchanged is
-   slop — rewrite with something specific to Vishal's history.
-2. TIER 1.5 / AGENTIC ROLES: the flagship proof artifact for
-   `why_this_role` is the autonomous job-application pipeline he
-   designed and operates (multi-source discovery, LLM scoring on a
-   dual fit/legitimacy axis, tailored materials, browser pre-fill
-   with a deliberate stop-at-submit human gate, evidenced audit
-   trail, CI, closed-loop pattern analysis). Describe it concretely
-   as a running system, never as "an AI project". Neuromorphic depth
-   is the secondary differentiator.
-3. HONESTY: never claim experience he doesn't have. If a question
-   asks about something he hasn't done, draft an answer that names
-   the closest real experience he has, and acknowledge the gap
-   directly. ("I haven't shipped X in production, but at GTRI I did
-   Y, which carries the same constraints.") Tier 2 (sales-eng) roles
-   in particular: do NOT pretend he has formal SE experience; frame
-   his GTRI program-sponsor pitches and demos as the honest parallel.
+   slop — rewrite with something specific to the candidate's history.
+2. ARCHETYPE FRAMING: for `why_this_role`, lead with whatever the
+   chosen archetype emphasizes. When personal projects ARE the relevant
+   experience lane for this role, describe the most relevant one
+   concretely as a running system the candidate designed and operates —
+   its stages, the evidence behind it, how it works end to end — never
+   as "an AI project". The candidate's distinctive depth (whatever the
+   thesis/CV establishes) is the secondary differentiator.
+3. HONESTY: never claim experience the candidate doesn't have. If a
+   question asks about something they haven't done, draft an answer that
+   names the closest real experience from the CV and acknowledges the
+   gap directly. ("I haven't shipped X in production, but at <employer> I
+   did Y, which carries the same constraints.") For partial-fit roles
+   where the candidate has no formal title in the lane: do NOT pretend
+   they have it; frame the closest real CV experience as the honest
+   parallel.
 4. SPECIFICITY: concrete tools, named projects, measured outcomes.
    "Cut p95 latency from 2.1s to 380ms" beats "improved performance".
-   "Deployed CUBA SNN to Intel Kapoho Bay" beats "worked on
-   neuromorphic hardware".
+   A named deployment with a measured outcome beats "worked on
+   hardware".
 5. VOICE: conversational, technical, contractions OK, hedges where
    natural ("sort of", "honestly", "pretty much"). No corporate
    language. No exclamation marks anywhere.

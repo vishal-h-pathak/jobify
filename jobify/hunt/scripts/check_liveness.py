@@ -58,7 +58,7 @@ from jobify.shared.liveness import (  # noqa: E402
 
 logger = logging.getLogger("liveness")
 
-USER_AGENT = "job-hunter-liveness/1.0 (+https://vishal.pa.thak.io)"
+USER_AGENT = "job-hunter-liveness/1.0"
 STALE_DAYS = 7
 TIMEOUT_S = 12
 PER_HOST_DELAY_RANGE_S = (1.0, 3.0)
