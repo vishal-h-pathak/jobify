@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Local-Playwright consolidation: the legacy ``smoke`` job invoked
+# ``make smoke`` → ``scripts/smoke.py`` to validate the Browserbase +
+# Stagehand import wiring. With Path B retired, the smoke harness is
+# parked at ``scripts/smoke_legacy.py`` and is no longer a CI target —
+# pytest's default suite (which excludes the ``legacy`` marker) provides
+# the equivalent live-tree import-wiring coverage.
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Collect tests
+        run: pytest --collect-only
+      - name: Run tests
+        run: pytest -v
+      - name: Check profile sync (soft warning)
+        # profile/profile.yml is canonical; CLAUDE.md mirrors it by hand
+        # and drifts (Session C found papercuts.org vs papercuts.cc).
+        # Surface drift as a build annotation without failing CI.
+        continue-on-error: true
+        run: python scripts/check_profile_sync.py

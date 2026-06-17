@@ -1,0 +1,134 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jobify"
+version = "0.0.0"
+description = "Unified job hunt -> tailor -> submit pipeline (consolidates job-hunter, job-applicant, job-submitter)."
+requires-python = ">=3.9"
+authors = [{ name = "Vishal Pathak" }]
+readme = "README.md"
+
+dependencies = [
+    # PR-9 consolidated the three per-subpackage requirements.txt files
+    # (jobify/{hunt,tailor,submit}/requirements.txt) into this list so the
+    # unified repo has one source of truth for runtime deps. Pins use ">="
+    # to match the loosest of the three pre-merge sets — tighten only when
+    # a known-broken upstream version forces it.
+    #
+    # Shared
+    "anthropic>=0.40.0",
+    # Tailor LLM fallback (jobify.shared.llm): when ANTHROPIC_API_KEY is
+    # absent or benched by a billing/credit/auth failure, completions route
+    # through the Claude Agent SDK under Max-plan OAuth
+    # (CLAUDE_CODE_OAUTH_TOKEN). The SDK spawns the bundled Claude Code CLI
+    # as a subprocess, so the tailor workflows also `npm i -g
+    # @anthropic-ai/claude-code` — see jobify/tailor/README.md "Tailor auth".
+    "claude-agent-sdk>=0.1.0",
+    "supabase>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.27.0",
+    "pyyaml>=6.0",
+    # Hunt
+    "feedparser>=6.0.11",
+    "requests>=2.32.0",
+    # Tailor
+    "apscheduler>=3.10.0",
+    "beautifulsoup4",
+    # Cover-letter PDF rendering — lazy-imported inside
+    # jobify/tailor/tailor/cover_letter_pdf.py::render_cover_letter_pdf
+    # so test envs without it still import jobify.tailor.pipeline cleanly.
+    "reportlab",
+    # Submit
+    "pydantic>=2.6.0",
+    "stagehand>=3.19.0",            # SDK is published as "stagehand", not "stagehand-py"
+    "playwright>=1.40.0",
+    "browserbase>=1.0.0",
+    "structlog>=24.1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+# PR-3: hunt orchestrator console script. Calls the hunt agent's `run()`
+# which parses CLI args (`--mode`, `--once`) and executes the pipeline once.
+jobify-hunt = "jobify.hunt.agent:run"
+# PR-13: tailor + submit split into two console scripts so an automated
+# trigger (CI, cron) can hit tailor — pure LLM + LaTeX + Storage,
+# headless-friendly — without dragging in the visible-browser pre-fill
+# phase that needs a human at the keyboard.
+#   jobify-tailor → run_tailor_only: process_approved_jobs() only
+#                    (resume + cover letter + form-answers + STAR+R).
+#   jobify-submit → run_submit_only: process_prefill_requested_jobs()
+#                    only — opens a visible browser per row the cockpit
+#                    enqueued, fills via the per-ATS DOM handler, blocks
+#                    on terminal input() so the human submits.
+# NOT the retired Browserbase + Stagehand runner — that lives at
+# ``jobify/submit/runner_legacy.py`` and has no console-script binding.
+# PR-13 reused the ``jobify-submit`` script name on purpose.
+jobify-tailor = "jobify.tailor.pipeline:run_tailor_only"
+jobify-submit = "jobify.tailor.pipeline:run_submit_only"
+# PR-tailor-manual-url: manual job-URL tailor — paste a posting URL,
+# resolve it through the per-ATS scrapers (Greenhouse / Lever / Ashby)
+# or the Playwright generic fallback, upsert a jobs row, and either run
+# process_one_approved_job inline (high-confidence) or land it at
+# status='discovered' for the dashboard review surface (low-confidence,
+# Amendment 1). Triggered from the portfolio dashboard via the
+# tailor-manual.yml GHA workflow.
+jobify-tailor-one = "jobify.tailor.manual.cli:run"
+
+[tool.setuptools]
+# Each listed package needs to be installed so setuptools wires up the
+# console-script entry points. Sub-packages with __init__.py are picked
+# up transitively by setuptools' default discovery, but listing them
+# explicitly here keeps the surface auditable. PR-4 adds the tailor
+# subtree (jobify.tailor.*) and the new submit/adapters/prepare_dom
+# package — siblings of PR-5's deterministic/ adapters.
+packages = [
+    "jobify",
+    "jobify.shared",
+    "jobify.hunt",
+    "jobify.tailor",
+    "jobify.tailor.tailor",
+    "jobify.tailor.manual",
+    "jobify.tailor.prompts",
+    "jobify.tailor.scripts",
+    "jobify.submit",
+    "jobify.submit.adapters",
+    "jobify.submit.adapters.deterministic",
+    "jobify.submit.adapters.prepare_dom",
+    "jobify.submit.browser",
+]
+
+[tool.setuptools.package-data]
+# status.json is the generated cross-repo enum artifact (Session E) —
+# ship it with the package so installed copies can read it too.
+"jobify.shared" = ["status.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# PR-5: dropped `pythonpath = ["."]` — `pip install -e .` now installs
+# `jobify`, `jobify.shared`, `jobify.hunt`, and `jobify.submit`,
+# which is enough for both the root tests and the submit tests (the
+# submit tests self-bootstrap their own subtree onto sys.path inside the
+# fixture). Reinstate this only if a future test plugin needs it and
+# document why.
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# Local-Playwright consolidation: the Path-B (Browserbase + Stagehand)
+# scaffold tests live under tests/legacy/ and are auto-tagged with the
+# ``legacy`` marker by tests/legacy/conftest.py. Default pytest run
+# excludes them so future PRs don't have to keep the dead-code suite
+# green. Run them on demand with ``pytest -m legacy``.
+addopts = "-m 'not legacy'"
+markers = [
+    "legacy: Forensic-only tests for the retired Browserbase + Stagehand path. Excluded by default; run with `pytest -m legacy`.",
+]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+extend-exclude = ["jobify/hunt", "jobify/tailor", "jobify/submit"]

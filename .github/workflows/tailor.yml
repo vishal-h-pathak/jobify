@@ -1,0 +1,100 @@
+name: tailor
+
+# Dashboard "Run tailor" button. Manual-only — no cron because PR-13's
+# split made jobify-tailor tailor-only (it processes status='approved'
+# rows), and there's no value in firing it on a clock without fresh
+# human approvals to pick up.
+#
+# Wiring matches hunt.yml: portfolio's RunsPanel inserts a public.runs
+# row at click time, dispatches this workflow with the row id as the
+# `run_id` input, and scripts/mark_run.py transitions the row through
+# running → completed/failed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "public.runs.id to update (omit for manual smoke runs)"
+        required: false
+      job_id:
+        description: "Single jobs.id to tailor (PR-14). Omit to tailor every approved row."
+        required: false
+
+jobs:
+  tailor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Claude Code CLI (for OAuth fallback)
+        # jobify.shared.llm falls back to the Claude Agent SDK under
+        # Max-plan OAuth when ANTHROPIC_API_KEY is absent or benched by a
+        # billing/credit failure. The SDK spawns the bundled Claude Code
+        # CLI as a subprocess, so it must be on PATH. No-op for the API
+        # path — only invoked when the fallback fires.
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Install LaTeX (for resume PDF compile)
+        # ubuntu-latest doesn't ship pdflatex; the tailor pipeline calls
+        # it via jobify.tailor.tailor.latex_resume to render the
+        # resume to PDF. --no-install-recommends keeps install at
+        # ~400-600 MB instead of 4+ GB. Verified \usepackage list
+        # against the STYLES templates in latex_resume.py — these
+        # packages cover article + fontenc + geometry + enumitem
+        # + titlesec + hyperref + xcolor + textcomp + Computer Modern.
+        # lmodern is pinned explicitly: the "modern" style uses it as the
+        # sans family, and --no-install-recommends would otherwise skip it.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            texlive-latex-base \
+            texlive-latex-recommended \
+            texlive-latex-extra \
+            texlive-fonts-recommended \
+            lmodern
+      - name: Install package
+        run: pip install -e .
+      - name: Mark run as running
+        if: inputs.run_id != ''
+        run: python scripts/mark_run.py ${{ inputs.run_id }} running
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      - name: Tailor
+        id: tailor
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Max-plan OAuth fallback (jobify.shared.llm). Used only when
+          # ANTHROPIC_API_KEY is unset or has been benched by a
+          # billing/credit/auth failure. Safe to leave empty if not
+          # configured — the API path stays primary.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # Key contract (Session E): the pipeline tables have RLS with no
+          # anon policies, so jobify runs service-role only. The
+          # SUPABASE_KEY secret also holds the service-role key (legacy
+          # fallback name); jobify.db fails loud on a demonstrably anon key.
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: |
+          if [ -n "${{ inputs.job_id }}" ]; then
+            jobify-tailor --once --job-id "${{ inputs.job_id }}" 2>&1 | tee tailor.log
+          else
+            jobify-tailor --once 2>&1 | tee tailor.log
+          fi
+          echo "EXITCODE=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+      - name: Mark run completed
+        if: always() && inputs.run_id != ''
+        run: |
+          python scripts/mark_run.py ${{ inputs.run_id }} \
+            ${{ steps.tailor.outputs.EXITCODE == '0' && 'completed' || 'failed' }} \
+            --log "$(tail -50 tailor.log)" \
+            --gha-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

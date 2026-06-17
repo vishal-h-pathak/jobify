@@ -1,0 +1,34 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+.venv/
+venv/
+env/
+.env
+.env.local
+
+*.egg-info/
+dist/
+build/
+
+.DS_Store
+.idea/
+.vscode/
+
+graphify-out/
+.graphify_*.json
+.graphify_python
+.graphifyignore
+obsidian/
+cache/
+
+# Forensic backup of .git/ from a prior secret-removal pass. 2.2 MB,
+# kept on local disk only — never commit.
+.git.backup-pre-secret-cleanup/

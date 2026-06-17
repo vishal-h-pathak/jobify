@@ -1,0 +1,250 @@
+"""PR-8 schema-consistency test (preamble convention #9).
+
+Confirms the unified ``jobify.db`` / ``jobify.notify`` / ``jobify.config``
+modules expose the **union** of symbols every pre-PR-8 caller relied on,
+and that function signatures match what the callers expect.
+
+These tests guard against:
+    1. Accidentally dropping a function during the merge.
+    2. Silently changing a kwarg name or default value.
+    3. The per-subtree shims drifting out of sync with the canonical
+       module — each shim re-exports from the canonical file, so symbols
+       importable through the shim must also be importable through the
+       canonical module.
+
+The test runs without secrets — ``jobify.db`` and ``jobify.notify``
+have lazy Supabase clients, so importing them does not fire any HTTP.
+``jobify.config`` exports soft-default values (empty strings for
+secrets) so importing it likewise does not raise.
+"""
+
+from __future__ import annotations
+
+import inspect
+
+import pytest
+
+import jobify.config as cfg
+import jobify.db as db
+import jobify.notify as notify
+
+
+# ── jobify.db: union surface ─────────────────────────────────────────────
+
+# (callable_name, expected_param_names_in_order)
+# Where expected_param_names is the call-site's positional + keyword
+# expectation — kwargs with defaults are listed by name only.
+_EXPECTED_DB_SIGNATURES: dict[str, tuple[str, ...]] = {
+    # hunt
+    "upsert_job":               ("job", "result"),
+    "get_seen_ids":             (),
+    # tailor
+    "get_jobs_by_status":       ("status", "limit"),
+    "get_approved_jobs":        ("limit",),
+    "get_prefill_requested_jobs": ("limit",),
+    "update_job_status":        ("job_id", "status"),
+    "mark_preparing":           ("job_id",),
+    "mark_ready_for_review": (
+        "job_id", "resume_path", "cover_letter_path", "application_url",
+        "application_notes", "resume_pdf_path", "cover_letter_pdf_path",
+        "archetype", "archetype_confidence", "submission_url",
+    ),
+    "mark_prefilling":          ("job_id",),
+    "mark_awaiting_submit":     ("job_id", "screenshot_path"),
+    "mark_skipped":             ("job_id", "reason"),
+    "mark_applied": (
+        "job_id", "application_notes", "submission_notes", "clear_materials",
+    ),
+    "delete_job_materials":     ("job_id",),
+    "mark_tailor_failed": (
+        "job_id", "reason", "clear_materials", "screenshot_path",
+        "uncertain_fields",
+    ),
+    "get_job_counts_by_status": (),
+    # submit
+    "get_jobs_ready_for_submission": ("limit",),
+    "get_job":                  ("job_id",),
+    "next_attempt_n":           ("job_id",),
+    "mark_submitting":          ("job_id",),
+    "record_submission_log":    ("job_id", "log", "confidence"),
+    "mark_failed":              ("job_id", "reason"),
+    "open_attempt":             ("job_id", "attempt_n", "adapter"),
+    "close_attempt": (
+        "attempt_id", "outcome", "confidence", "stagehand_session_id",
+        "browserbase_replay_url", "notes",
+    ),
+    "verify_materials_hash":    ("job", "resume_bytes", "cover_letter_text"),
+}
+
+
+@pytest.mark.parametrize("name,expected_params", list(_EXPECTED_DB_SIGNATURES.items()))
+def test_db_symbol_exists_with_expected_signature(name, expected_params):
+    fn = getattr(db, name, None)
+    assert fn is not None, (
+        f"PR-8: jobify.db must export {name}() — "
+        "every pre-PR-8 caller relied on it"
+    )
+    assert callable(fn), f"jobify.db.{name} must be callable"
+    if not expected_params:
+        # Forwarders (*args/**kwargs) or zero-arg functions — skip param check.
+        return
+    sig = inspect.signature(fn)
+    actual = tuple(sig.parameters.keys())
+    # Trim the actual to the same length: the expected list is the
+    # ordered subset the callers care about; extra kwargs added later
+    # are allowed as long as they come AFTER the expected ones.
+    assert actual[: len(expected_params)] == expected_params, (
+        f"jobify.db.{name} signature drifted: "
+        f"expected leading params {expected_params}, got {actual}"
+    )
+
+
+def test_db_lazy_client_attributes_resolve():
+    """``client`` and ``service_client`` must be reachable as attributes
+    (PR-8 preserved this via module __getattr__) without raising at
+    attribute lookup. The lazy client itself isn't created until a
+    method is called on it."""
+    import os
+    if not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY")):
+        pytest.skip("Supabase env not present; skipping live client construction")
+    assert db.client is not None
+    assert db.service_client is not None
+
+
+# ── jobify.notify: union surface ─────────────────────────────────────────
+
+_EXPECTED_NOTIFY_SIGNATURES: dict[str, tuple[str, ...]] = {
+    # hunt — Resend digest
+    "send_digest":              ("entries",),
+    # tailor / submit — Supabase notifications table
+    "cockpit_url":              ("job_id",),
+    "create_notification":      ("notification_type", "job", "message"),
+    "send_awaiting_review":     ("job",),
+    "send_awaiting_submit":     ("job", "screenshot_path"),
+    "send_applied":             ("job",),
+    "send_failed":              ("job", "reason"),
+}
+
+
+@pytest.mark.parametrize("name,expected_params",
+                         list(_EXPECTED_NOTIFY_SIGNATURES.items()))
+def test_notify_symbol_exists_with_expected_signature(name, expected_params):
+    fn = getattr(notify, name, None)
+    assert fn is not None, (
+        f"PR-8: jobify.notify must export {name}()"
+    )
+    assert callable(fn)
+    sig = inspect.signature(fn)
+    actual = tuple(sig.parameters.keys())
+    assert actual[: len(expected_params)] == expected_params, (
+        f"jobify.notify.{name} signature drifted: "
+        f"expected leading params {expected_params}, got {actual}"
+    )
+
+
+def test_notify_aliases_removed():
+    """Session C removed the PR-8 deprecated ``notify_*`` aliases after
+    verifying no callers remained. They must not silently reappear —
+    ``send_*`` is the only notification surface."""
+    for removed in (
+        "notify_ready_for_review",
+        "notify_awaiting_submit",
+        "notify_applied",
+        "notify_failed",
+    ):
+        assert not hasattr(notify, removed), (
+            f"jobify.notify.{removed} was removed in Session C; "
+            "use the canonical send_* function instead"
+        )
+
+
+def test_notification_type_strings_decoupled_from_symbol_names():
+    """PR-8 contract: send_awaiting_review writes type='ready_for_review'
+    to the notifications table (decoupled from the symbol rename).
+
+    The function symbol was renamed during PR-8 (Q2 in the resolution
+    memo), but the cockpit / dashboard contract that keys off the
+    notification.type string and the jobs.status CHECK enum is unchanged.
+    """
+    captured: dict = {}
+
+    def _capture(notification_type, job, message=""):
+        captured["type"] = notification_type
+        return True
+
+    saved = notify.create_notification
+    try:
+        notify.create_notification = _capture
+        notify.send_awaiting_review({"id": "job-1", "company": "Acme",
+                                     "title": "X", "score": 9, "tier": 1})
+        assert captured["type"] == "ready_for_review", (
+            "decoupling rule violated: send_awaiting_review must write "
+            "notification.type='ready_for_review' to preserve the dashboard "
+            "contract."
+        )
+        captured.clear()
+        notify.send_awaiting_submit({"id": "job-2", "company": "B", "title": "Y"})
+        assert captured["type"] == "awaiting_human_submit"
+    finally:
+        notify.create_notification = saved
+
+
+# ── jobify.config: union surface ─────────────────────────────────────────
+
+_EXPECTED_CONFIG_SYMBOLS: tuple[str, ...] = (
+    # Cross-subtree helper.
+    "require_env",
+    # Supabase soft defaults.
+    "SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_ROLE_KEY",
+    # Anthropic.
+    "ANTHROPIC_API_KEY",
+    # Claude model — PR-8 keeps the two distinct subtree constants.
+    "TAILOR_CLAUDE_MODEL", "SUBMITTER_CLAUDE_MODEL", "CLAUDE_MODEL",
+    # Browserbase.
+    "BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID",
+    # Polling.
+    "POLL_INTERVAL_SECONDS", "POLL_INTERVAL_MINUTES",
+    # Submitter knobs.
+    "MAX_CONCURRENT_SUBMISSIONS", "AUTO_SUBMIT_THRESHOLD",
+    "SESSION_BUDGET_SECONDS", "MAX_ATTEMPTS_PER_JOB",
+    "HEADLESS", "REVIEW_DASHBOARD_URL", "ATS_CONFIDENCE_MIN",
+    # Tailor knobs.
+    "HUMAN_APPROVAL_REQUIRED", "AUTO_SUBMIT_ENABLED",
+    "AUTO_SUBMIT_MIN_SCORE", "AUTO_SUBMIT_MIN_TIER",
+    # Notify.
+    "PORTFOLIO_BASE_URL",
+    # Hunter mode + location helpers.
+    "Mode", "DEFAULT_MODE", "set_mode", "get_mode",
+    "LOCAL_LOCATION_SUBSTRINGS", "REMOTE_LOCATION_SUBSTRINGS",
+    "is_local_or_remote", "location_filter_enabled",
+)
+
+
+@pytest.mark.parametrize("name", _EXPECTED_CONFIG_SYMBOLS)
+def test_config_exports_expected_symbol(name):
+    assert hasattr(cfg, name), (
+        f"PR-8: jobify.config must export {name}"
+    )
+
+
+def test_config_two_distinct_claude_models_per_pr8():
+    """PR-8 explicitly does not unify CLAUDE_MODEL — each subtree has its
+    own constant defaulting to its current value, with a CLAUDE_MODEL env
+    fallback for future unify."""
+    assert isinstance(cfg.TAILOR_CLAUDE_MODEL, str)
+    assert isinstance(cfg.SUBMITTER_CLAUDE_MODEL, str)
+    # Backward-compat: jobify.config.CLAUDE_MODEL tracks SUBMITTER_*.
+    assert cfg.CLAUDE_MODEL == cfg.SUBMITTER_CLAUDE_MODEL
+
+
+# ── Per-subtree shim consistency ──────────────────────────────────────────
+# PR-9 deleted the per-subtree db.py / notifier.py / notify.py / config.py
+# shims along with their callers' bare-import dependencies. The five
+# `test_*_shim_reexports_*` tests that lived here were specifically asserting
+# the shim re-export surface — once the shims are gone the assertions become
+# meaningless (they would just import-error). The canonical-surface tests
+# above (test_db_symbol_exists_with_expected_signature,
+# test_notify_symbol_exists_with_expected_signature,
+# test_config_exports_expected_symbol, …) still exercise the same union of
+# functions / signatures that every pre-PR-8 caller relied on, so the
+# coverage they provided is preserved.

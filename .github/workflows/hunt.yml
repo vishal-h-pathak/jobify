@@ -1,0 +1,115 @@
+name: hunt
+
+# Dashboard "Run hunt" button + daily cron.
+#
+# The portfolio dashboard's RunsPanel inserts a public.runs row at click
+# time (status='pending') and dispatches this workflow with the row id as
+# the `run_id` input. scripts/mark_run.py transitions that row through
+# running → completed/failed and attaches the GHA run URL + tail-of-log
+# so the panel can link out and surface failures inline.
+#
+# The daily cron fires the same workflow without a run_id; in that case
+# the "Create run row (cron)" step inserts its own public.runs row
+# (kind='hunt', triggered_by='cron', born status='running') via
+# scripts/mark_run.py create, so cron runs show up in the dashboard's
+# runs panel just like dispatched ones. The closing mark_run step
+# resolves the row id from whichever source produced it. Row creation
+# is continue-on-error: a Supabase hiccup must not block the hunt.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "local_remote | us_wide"
+        required: false
+        default: "local_remote"
+      run_id:
+        description: "public.runs.id to update (omit for cron / manual smoke runs)"
+        required: false
+  schedule:
+    - cron: "0 14 * * *"
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Claude Code CLI (for OAuth fallback)
+        # The hunt scorer (jobify.hunt.scorer) routes through
+        # jobify.shared.llm, which falls back to the Claude Agent SDK
+        # under Max-plan OAuth when ANTHROPIC_API_KEY is absent or benched
+        # by a billing/credit failure. The SDK spawns the bundled Claude
+        # Code CLI as a subprocess, so it must be on PATH. No-op for the
+        # API path — only invoked when the fallback fires.
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Install package
+        run: pip install -e .
+      - name: Create run row (cron)
+        id: create_run
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        run: |
+          RUN_ID=$(python scripts/mark_run.py create hunt --triggered-by cron)
+          echo "RUN_ID=$RUN_ID" >> "$GITHUB_OUTPUT"
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      - name: Mark run as running
+        if: inputs.run_id != ''
+        run: python scripts/mark_run.py ${{ inputs.run_id }} running
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      - name: Hunt
+        id: hunt
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Max-plan OAuth fallback (jobify.shared.llm). Used only when
+          # ANTHROPIC_API_KEY is unset or has been benched by a
+          # billing/credit/auth failure. Safe to leave empty if not
+          # configured — the API path stays primary.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # Key contract (Session E): the pipeline tables have RLS with no
+          # anon policies, so jobify runs service-role only. The
+          # SUPABASE_KEY secret also holds the service-role key (legacy
+          # fallback name); jobify.db fails loud on a demonstrably anon key.
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          # Paid discovery sources (hunt-only): SerpAPI (jobify.hunt.sources
+          # .serpapi + .linkedin) and JSearch/RapidAPI (jobify.hunt.sources
+          # .jsearch). No other workflow runs discovery, so this is the only
+          # step that needs them.
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          JSEARCH_API_KEY: ${{ secrets.JSEARCH_API_KEY }}
+        run: |
+          jobify-hunt --once --mode "${{ inputs.mode || 'local_remote' }}" 2>&1 | tee hunt.log
+          echo "EXITCODE=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+      - name: Morning digest (cron)
+        # Session I: top-5 fresh 'new' jobs (score ≥ 7) emailed after the
+        # hunt. continue-on-error — a digest failure never fails the hunt.
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: python scripts/send_morning_digest.py
+      - name: Mark run completed
+        if: always() && (inputs.run_id != '' || steps.create_run.outputs.RUN_ID != '')
+        run: |
+          python scripts/mark_run.py "${{ inputs.run_id || steps.create_run.outputs.RUN_ID }}" \
+            ${{ steps.hunt.outputs.EXITCODE == '0' && 'completed' || 'failed' }} \
+            --log "$(tail -50 hunt.log)" \
+            --gha-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
