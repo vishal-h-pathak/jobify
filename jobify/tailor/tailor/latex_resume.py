@@ -64,135 +64,32 @@ def cv_source() -> str:
     return profile_loader.load_cv()
 
 
-# ── Resume styles (PR: one-page guarantee + a few ATS-safe styles) ─────────
+# ── Resume template gallery (WS-F) ──────────────────────────────────────────
 #
-# Every style MUST stay ATS-parseable: single-column body, standard fonts,
-# selectable text, NO images/icons/graphics, NO multi-column body, NO color
-# blocks behind text. "Style" = typography / section-heading / spacing /
-# subtle-rule variation only. The shared base below carries the structure
-# (header → education/skills → experience) and the defensive special-char
-# macros; per-style tokens (%%FONT%%, %%SECTION%%, %%TITLESPACE%%, %%LIST%%,
-# %%PTSIZE%%, %%MARGIN%%) get filled by _apply_style so the rendered string
-# for each style still uses the identical <<...>> body placeholders.
-
-_BASE_TEMPLATE = r"""
-\documentclass[%%PTSIZE%%, letterpaper]{article}
-
-\usepackage[T1]{fontenc}
-\usepackage[margin=%%MARGIN%%]{geometry}
-\usepackage{enumitem}
-\usepackage{titlesec}
-\usepackage{hyperref}
-\usepackage{xcolor}
-\usepackage{textcomp}
-%%FONT%%
-% Defensive macros for special-character commands the LLM occasionally
-% emits instead of the unicode literals it sees in the source CV (e.g.
-% rewriting "360°" as "360\degree"). _escape_latex_safe deliberately
-% lets backslash sequences pass through (since the template uses many
-% legitimately), so an undefined macro would otherwise crash compile.
-% \providecommand only defines if not already defined, so this is safe
-% even when a future package upgrade ships its own \degree.
-\providecommand{\degree}{\ensuremath{^\circ}}
-\providecommand{\micro}{\ensuremath{\mu}}
-\providecommand{\celsius}{\ensuremath{^\circ}C}
-\providecommand{\ohm}{\ensuremath{\Omega}}
-
-% ── Formatting ─────────────────────────────────────────────────────────────
-\pagestyle{empty}
-\setlength{\parindent}{0pt}
-\definecolor{linkblue}{HTML}{2563EB}
-
-\hypersetup{
-    colorlinks=true,
-    urlcolor=linkblue,
-    linkcolor=linkblue,
-}
-
-%%SECTION%%
-%%TITLESPACE%%
-
-%%LIST%%
-
-\begin{document}
-
-% ── Header ─────────────────────────────────────────────────────────────────
-\begin{center}
-{\LARGE \textbf{<<NAME>>}} \\[4pt]
-\small <<EMAIL>> $\cdot$ <<LOCATION>> $\cdot$ \href{https://<<LINKEDIN>>}{<<LINKEDIN>>} $\cdot$ \href{https://<<WEBSITE>>}{<<WEBSITE>>}
-\end{center}
-
-% ── Education & Skills ─────────────────────────────────────────────────────
-\section{Education \& Technical Skills}
-
-<<EDU_AND_SKILLS>>
-
-% ── Experience ─────────────────────────────────────────────────────────────
-\section{Experience}
-
-<<EXPERIENCE_BLOCKS>>
-
-\end{document}
-"""
-
-
-def _apply_style(
-    *, ptsize: str, margin: str, font: str,
-    section: str, titlespace: str, listspace: str,
-) -> str:
-    """Fill the per-style tokens in _BASE_TEMPLATE, leaving the <<...>> body
-    placeholders for _render_latex."""
-    out = _BASE_TEMPLATE
-    out = out.replace("%%PTSIZE%%", ptsize)
-    out = out.replace("%%MARGIN%%", margin)
-    out = out.replace("%%FONT%%", font)
-    out = out.replace("%%SECTION%%", section)
-    out = out.replace("%%TITLESPACE%%", titlespace)
-    out = out.replace("%%LIST%%", listspace)
-    return out
-
-
-# Section heading format shared by the serif styles (classic + compact):
-# bold, link-blue, hairline rule under the title.
-_SERIF_SECTION = (
-    r"\titleformat{\section}{\large\bfseries\color{linkblue}}{}{0em}{}[\titlerule]"
+# The catalog of ATS-safe one-page templates lives in
+# ``jobify.resume_templates``. Every template is the same single-column body
+# with only typography tokens varied, so ATS-safety holds by construction
+# (single column, standard fonts, selectable text, no graphics, nothing in
+# headers/footers). The user picks one during onboarding; the tailor honors
+# it via ``_select_template`` below. See that package's README for the gallery
+# and the parse-gate rules, and ``tests/test_resume_templates.py`` for the
+# automated extraction proof.
+from jobify.resume_templates import (
+    DEFAULT_TEMPLATE_ID,
+    TEMPLATES as _TEMPLATES,
+    is_valid_template_id,
 )
+from jobify import profile_loader
 
+# Backwards-compat: callers (and the trim loop's _render_latex) look up the
+# rendered template source by id in ``STYLES``. Keep it as a thin view over
+# the gallery so the rest of this module is unchanged.
 STYLES: dict[str, str] = {
-    # classic — serif headings, hairline rule, link-blue titles (the
-    # original look). Default for the tier-1 neuro lanes + mission ML.
-    "classic": _apply_style(
-        ptsize="11pt", margin="0.5in", font="",
-        section=_SERIF_SECTION,
-        titlespace=r"\titlespacing*{\section}{0pt}{12pt}{6pt}",
-        listspace=r"\setlist[itemize]{leftmargin=1.2em, itemsep=2pt, parsep=0pt, topsep=2pt}",
-    ),
-    # modern — clean sans, bold section titles, a touch more whitespace.
-    # Used for the agentic-builder + AI-SE lanes. We use Latin Modern Sans
-    # (lmodern, in texlive-latex-recommended) rather than helvet/Helvetica:
-    # the URW Helvetica TFMs aren't in every texlive set (e.g. the basic
-    # local install), and a missing-font compile failure would flip the row
-    # to needs_review. lmodern ships with full T1 coverage, is ATS-safe
-    # (standard selectable text), and renders a clean professional sans.
-    "modern": _apply_style(
-        ptsize="11pt", margin="0.5in",
-        font="\\usepackage{lmodern}\n\\renewcommand\\familydefault{\\sfdefault}",
-        section=_SERIF_SECTION,
-        titlespace=r"\titlespacing*{\section}{0pt}{14pt}{8pt}",
-        listspace=r"\setlist[itemize]{leftmargin=1.2em, itemsep=3pt, parsep=0pt, topsep=3pt}",
-    ),
-    # compact — serif, tighter spacing + smaller section gaps for
-    # content-dense roles. Same single-column, selectable-text body.
-    "compact": _apply_style(
-        ptsize="11pt", margin="0.45in", font="",
-        section=_SERIF_SECTION,
-        titlespace=r"\titlespacing*{\section}{0pt}{8pt}{3pt}",
-        listspace=r"\setlist[itemize]{leftmargin=1.1em, itemsep=1pt, parsep=0pt, topsep=1pt}",
-    ),
+    tid: tpl.latex_source for tid, tpl in _TEMPLATES.items()
 }
 
 # Backwards-compat alias for the retired single template.
-LATEX_TEMPLATE = STYLES["classic"]
+LATEX_TEMPLATE = STYLES[DEFAULT_TEMPLATE_ID]
 
 
 # Deterministic archetype → style map. Keyed on the profile's archetype
@@ -227,6 +124,32 @@ def _style_by_archetype() -> dict[str, str]:
 def _select_style(archetype_key: str) -> str:
     """Pick an ATS-safe style for a job's archetype; classic is the fallback."""
     return _style_by_archetype().get((archetype_key or "").strip(), "classic")
+
+
+def _select_template(archetype_key: str) -> str:
+    """Resolve which gallery template to render (WS-F).
+
+    Precedence:
+      1. The user's explicit onboarding pick — ``resume_template`` in
+         ``profile.yml`` — applied to *every* job when it names a real
+         gallery template.
+      2. Otherwise the per-archetype auto-selection (``_select_style``),
+         which defaults to ``classic``.
+
+    A profile value that doesn't match the gallery is ignored (we don't want
+    a typo to silently fall through to a broken render), and we log it so it
+    surfaces during onboarding QA.
+    """
+    chosen = (profile_loader.load_resume_template() or "").strip()
+    if chosen:
+        if is_valid_template_id(chosen):
+            return chosen
+        logger.warning(
+            "profile resume_template=%r is not in the gallery %s; "
+            "falling back to archetype selection.",
+            chosen, sorted(STYLES),
+        )
+    return _select_style(archetype_key)
 
 
 # Characters that pdflatex treats as macro/special. Each must be escaped when
@@ -760,8 +683,8 @@ def generate_tailored_latex(job: dict, tailoring: dict) -> dict:
 
     tailored = json.loads(response_text.strip())
 
-    # ── Style selection (deterministic per archetype) ───────────────────
-    style = _select_style(archetype_meta.get("archetype", ""))
+    # ── Template selection: user's onboarding pick wins, else per-archetype ──
+    style = _select_template(archetype_meta.get("archetype", ""))
 
     skills_dict = tailored.get("skills") or {}
     layout_hint = (tailored.get("skills_layout") or "auto").lower()

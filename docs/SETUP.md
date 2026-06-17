@@ -20,6 +20,17 @@ installs and Supabase provisioning.
 - **git**
 - A **Supabase** account (free tier is fine) — https://supabase.com
 - An **Anthropic API key** — https://console.anthropic.com
+- **A TeX distribution with `pdflatex`** — the tailor compiles the resume to a
+  one-page PDF. macOS: BasicTeX or MacTeX (`brew install --cask basictex`);
+  Debian/Ubuntu: `sudo apt-get install texlive-latex-recommended
+  texlive-fonts-recommended`. The resume gallery uses only standard fonts
+  (Computer Modern + Latin Modern Sans), so the recommended set is enough.
+  Without `pdflatex` the tailor still runs but skips PDF generation.
+- **`pdftotext`** (from **poppler**) — optional, used by the resume
+  template parse-gate test (`pytest -k resume_templates`). macOS:
+  `brew install poppler`; Debian/Ubuntu: `sudo apt-get install poppler-utils`.
+  `pdfminer.six` (installed via `pip install -e ".[dev]"`) is a pure-Python
+  fallback the gate also accepts, so poppler is not strictly required.
 
 ---
 

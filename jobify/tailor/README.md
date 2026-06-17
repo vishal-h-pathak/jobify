@@ -105,6 +105,13 @@ status=applied  (the cockpit click is the source of truth)
 Every LLM call along the way uses the prompts in `prompts/` and reads
 the canonical user-layer profile.
 
+The `[LaTeX compile + PDF upload]` step renders the resume in one of the
+ATS-safe templates from the gallery in `jobify/resume_templates/`
+(`latex_resume._select_template`): the user's onboarding pick
+(`profile.yml::resume_template`) wins, otherwise the per-archetype default.
+Every template passes an automated parse-gate — see that package's `README.md`
+and `tests/test_resume_templates.py`.
+
 ---
 
 ## Running manually

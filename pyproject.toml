@@ -49,7 +49,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5"]
+# pdfminer.six: pure-Python PDF text extractor used by the resume-template
+# parse-gate (tests/test_resume_templates.py) so the gate runs in CI without
+# requiring the poppler `pdftotext` system binary.
+dev = ["pytest>=8", "ruff>=0.5", "pdfminer.six>=20221105"]
 
 [project.scripts]
 # PR-3: hunt orchestrator console script. Calls the hunt agent's `run()`
@@ -88,6 +91,7 @@ jobify-tailor-one = "jobify.tailor.manual.cli:run"
 # package — siblings of PR-5's deterministic/ adapters.
 packages = [
     "jobify",
+    "jobify.resume_templates",
     "jobify.shared",
     "jobify.hunt",
     "jobify.tailor",
@@ -106,6 +110,9 @@ packages = [
 # status.json is the generated cross-repo enum artifact (Session E) —
 # ship it with the package so installed copies can read it too.
 "jobify.shared" = ["status.json"]
+# Gallery docs ship with the package so onboarding can present the template
+# choices straight from the installed copy (WS-F / WS-E).
+"jobify.resume_templates" = ["README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
