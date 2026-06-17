@@ -47,28 +47,36 @@ from jobify import profile_loader  # noqa: E402
 logger = logging.getLogger("submitter.smoke")
 
 
-# Throwaway identity stubs — never sent to a real ATS because we never
-# click submit. Smoke-test values only (deliberately invalid email,
-# placeholder phone) so the adapter has something to attempt to fill
-# with. The canonical form-default answers (work auth, start date,
-# relocation, etc.) come from the user-layer YAML via
-# `profile_loader.load_application_defaults()` so prose drift in
-# CLAUDE.md cannot silently change what the submitter sends.
-_SMOKE_IDENTITY_STUBS = {
-    "first_name": "Vishal",
-    "last_name": "Pathak",
-    "email": "smoketest@example.invalid",
-    "phone": "+1 555 867 5309",
-    "linkedin": "https://www.linkedin.com/in/vishalhpathak/",
-    "website": "https://vishal.pa.thak.io",
-    "github": "https://github.com/vshlpthk1",
-    "location": "Atlanta, GA",
-    "current_company": "(smoke test)",
-    "current_title": "(smoke test)",
-}
+# Identity for the smoke fill is read from the user-layer profile
+# (`profile.yml::identity`) via `profile_loader` — never hard-coded — so this
+# script is persona-agnostic and exercises the exact source the live pre-fill
+# path reads. Nothing is ever submitted (this script never clicks submit and
+# never invokes confirm.py), so filling the loaded identity on a live page is
+# safe. The canonical form-default answers (work auth, start date, relocation,
+# etc.) come from the same YAML via `load_application_defaults()`, so prose
+# drift in CLAUDE.md cannot silently change what the submitter sends.
+def _smoke_identity() -> dict:
+    ident = profile_loader.load_profile().get("identity") or {}
+    name = str(ident.get("name") or "").strip()
+    first, _, last = name.partition(" ")
+    return {
+        "first_name": first or name,
+        "last_name": last,
+        "email": ident.get("email") or "",
+        "phone": ident.get("phone") or "",
+        "linkedin": ident.get("linkedin") or "",
+        "website": ident.get("website") or "",
+        "github": ident.get("github") or "",
+        "location": ident.get("location_base") or "",
+        # Literal smoke markers — not applicant data; the adapter only needs
+        # *something* present to attempt a fill on these two optional fields.
+        "current_company": "(smoke test)",
+        "current_title": "(smoke test)",
+    }
+
 
 FAKE_APPLICANT = {
-    **_SMOKE_IDENTITY_STUBS,
+    **_smoke_identity(),
     **profile_loader.load_application_defaults(),
 }
 
