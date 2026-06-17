@@ -45,12 +45,35 @@ package returns nothing, and the pipeline runs on the example persona.
    generic fixtures.
 6. **`cv_sync_check.py`** (if kept) — point it at the example persona's `cv.md`
    + article-digest; keep it as an optional drift check.
+6b. **Generalize / remove the Vishal-pinned tests** (these fail the moment
+   `profile.example` becomes the baseline — they assert dropped archetypes and
+   Vishal's values):
+   - `tests/test_agentic_archetype.py` — the `tier_1_5_agentic_builder` archetype
+     was intentionally dropped; delete this test (or rewrite it to assert the
+     generic example archetypes resolve, if a routing test is still wanted).
+   - `tests/test_application_defaults_consistency.py::test_real_profile_application_defaults_matches_expected`
+     — stop pinning a real person's defaults; assert against `profile.example`
+     (or drop the "real profile" assertion).
+   - `tests/test_tailor_thesis.py::test_classifier_prompt_includes_thesis` and
+     the tier-routing tests — replace hard-coded archetype names
+     (`tier_3_mission_ml`, `tier_1a_compneuro`, …) with the example persona's
+     archetype keys, or make them archetype-name-agnostic.
+   The whole suite must pass with `JOBIFY_PROFILE_DIR=profile.example`.
 7. Remove any remaining references to the deleted `interview_prep` /
    pattern-analysis modules.
+8. **Delete the live `profile/` directory (Vishal's real PII).** It sits at the
+   repo root and is NOT inside the `jobify/` package, so a package-only grep
+   misses it — but it ships the real person's name/email/location otherwise.
+   Remove it from the repo, and add `profile/` to `.gitignore` so an onboarded
+   user's generated profile is never committed. The shipped neutral baseline is
+   `profile.example/`; the test suite and all commands run against that
+   (`JOBIFY_PROFILE_DIR=profile.example`).
 
 ## Exit criteria
 
-- `grep -rEi "vishal|pathak|gtri|thak\.io|rain neuromorphic|eon\.systems|cape canaveral|papercuts" jobify/` (the package) returns nothing.
+- `grep -rEi "vishal|pathak|gtri|thak\.io|rain neuromorphic|eon\.systems|cape canaveral|papercuts"` over the **whole repo** (not just `jobify/`), excluding `profile.example/`, `onboarding/examples/`, and `planning/`, returns nothing.
+- The live `profile/` dir is gone and `profile/` is git-ignored.
+- `pytest` is green with `JOBIFY_PROFILE_DIR=profile.example`.
 - `pytest` is green with `JOBIFY_PROFILE_DIR=profile.example`.
 - `JOBIFY_PROFILE_DIR=profile.example jobify-hunt --once --mode local_remote`
   runs and scores against the example `portals.yml` (free sources OK).

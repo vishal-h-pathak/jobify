@@ -34,10 +34,10 @@ from tailor import latex_resume as latex_mod
 
 
 # ── Representative content fixture ───────────────────────────────────────────
-# Persona-neutral on purpose (WS-A2 owns generalizing latex_resume.BASE_RESUME;
+# Persona-neutral on purpose (WS-A2 generalized this: identity now comes from base_identity();
 # WS-F owns layout). Sized to fit one page in every gallery template. Includes
 # special characters (&, $, %, °) so the gate also proves escaping survives
-# extraction. Header/contact text comes from latex_mod.BASE_RESUME so this stays
+# extraction. Header/contact text comes from latex_mod.base_identity() so this stays
 # correct after WS-A2 generalizes that block.
 
 _CONTENT: dict = {
@@ -104,7 +104,7 @@ _BULLET_FRAGMENTS = [
 ]
 # Reading-order spine: name → headings → first employer → second employer.
 _ORDER_SPINE = [
-    latex_mod.BASE_RESUME["name"],
+    latex_mod.base_identity()["name"],
     "Education",
     "Experience",
     "Northwind",
@@ -259,11 +259,11 @@ def test_section_headings_extract_as_text(rendered, tid):
 def test_contact_info_is_real_text(rendered, tid):
     # Real selectable text, not an image — every contact field round-trips.
     contact = [
-        latex_mod.BASE_RESUME["email"],
-        latex_mod.BASE_RESUME["location"],
-        latex_mod.BASE_RESUME["website"],
-        latex_mod.BASE_RESUME["linkedin"],
-        latex_mod.BASE_RESUME["name"],
+        latex_mod.base_identity()["email"],
+        latex_mod.base_identity()["location"],
+        latex_mod.base_identity()["website"],
+        latex_mod.base_identity()["linkedin"],
+        latex_mod.base_identity()["name"],
     ]
     for text in _texts_or_skip(rendered, tid).values():
         low = text.lower()
@@ -322,19 +322,19 @@ def test_independent_parsers_agree(rendered, tid):
 def test_select_template_honors_profile_pick(monkeypatch):
     monkeypatch.setattr(latex_mod.profile_loader, "load_resume_template", lambda: "executive")
     # Profile pick wins over the archetype default (which would be 'modern').
-    assert latex_mod._select_template("tier_2_ai_se") == "executive"
+    assert latex_mod._select_template("developer_facing") == "executive"
 
 
 def test_select_template_ignores_unknown_pick(monkeypatch):
     monkeypatch.setattr(latex_mod.profile_loader, "load_resume_template", lambda: "nope")
     # Bad id is ignored; fall through to archetype selection.
-    assert latex_mod._select_template("tier_2_ai_se") == "modern"
+    assert latex_mod._select_template("developer_facing") == "modern"
 
 
 def test_select_template_falls_back_to_archetype_when_unset(monkeypatch):
     monkeypatch.setattr(latex_mod.profile_loader, "load_resume_template", lambda: "")
-    assert latex_mod._select_template("tier_1a_compneuro") == "classic"
-    assert latex_mod._select_template("tier_2_ai_se") == "modern"
+    assert latex_mod._select_template("backend_platform") == "classic"
+    assert latex_mod._select_template("developer_facing") == "modern"
     assert latex_mod._select_template("unknown") == "classic"
 
 

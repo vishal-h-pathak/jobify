@@ -40,7 +40,17 @@ README + quickstart.
    any drift in `docs/` as known-issues.
 4. **`README.md`** — what jobify is, the three-click flow, a 5-minute quickstart
    for the friend that points at SETUP.md + ONBOARDING.md. No personal data.
-5. **Optional:** dispatch a `general-purpose` subagent to do an independent
+5. **Dashboard cleanup carry-forwards from WS-B** (deferred there on purpose):
+   - Remove the now-dead `view=insights` branch in
+     `dashboard/app/api/dashboard/jobs/route.ts`, plus the stale
+     MatchAgent/ReviewPanel comments left in that file and the review pages.
+     The `insights`/`stories` pages and MatchAgent are gone, so this branch is
+     unreachable. Confirm `tsc --noEmit` + `npm run build` still pass after.
+   - Decide on the Next 16 `middleware.ts` → `proxy` deprecation warning: either
+     migrate the password-gate to the new `proxy` convention or document it as a
+     known non-blocking warning in `docs/`. The gate behavior is the contract —
+     don't break it.
+6. **Optional:** dispatch a `general-purpose` subagent to do an independent
    "fresh eyes" sweep for leftover personal data, dead imports, and broken doc
    links; fix what it finds.
 

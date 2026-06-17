@@ -134,10 +134,10 @@ application_defaults:
   previous_interview_with_company: {}
 
 # ── resume_template ───────────────────────────────────────────────────────
-# Stage-7 gallery pick (filename stem from jobify/tailor/templates/). The
-# tailor honors this once WS-F's template wiring lands; harmless extra key
-# until then.
-resume_template: Research_ML_Resume
+# Stage-7 gallery pick. Must be one of the ids in jobify.resume_templates:
+# classic | modern | compact | accent | executive. The tailor honors this pick
+# for every job (see latex_resume._select_template).
+resume_template: modern
 
 # ── personal ──────────────────────────────────────────────────────────────
 personal: |
