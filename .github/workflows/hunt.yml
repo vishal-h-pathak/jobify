@@ -1,5 +1,11 @@
 name: hunt
 
+# OPT-IN on a fork. This workflow is safe to keep disabled: nothing runs
+# until you (a) add the repository secrets it reads (see docs/SETUP.md →
+# "Optional: the hunt cron") and (b) un-comment the `schedule:` block below
+# to enable the daily cron. The `workflow_dispatch` trigger lets you run it
+# manually (or via the dashboard's "Run hunt" button) without any cron.
+#
 # Dashboard "Run hunt" button + daily cron.
 #
 # The portfolio dashboard's RunsPanel inserts a public.runs row at click
@@ -26,8 +32,10 @@ on:
       run_id:
         description: "public.runs.id to update (omit for cron / manual smoke runs)"
         required: false
-  schedule:
-    - cron: "0 14 * * *"
+  # Daily cron — DISABLED by default. Un-comment to enable on your fork
+  # (and make sure the SUPABASE_* / ANTHROPIC_API_KEY secrets are set).
+  # schedule:
+  #   - cron: "0 14 * * *"
 
 jobs:
   hunt:
