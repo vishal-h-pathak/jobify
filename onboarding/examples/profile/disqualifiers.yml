@@ -1,0 +1,22 @@
+# ════════════════════════════════════════════════════════════════════════
+# disqualifiers.yml — GOLDEN ONBOARDING EXAMPLE (Sam Rivera).
+#
+# Read by the hunt scorer. `hard_disqualifiers` short-circuit a posting into
+# the "disqualify" tier (won't surface). `soft_concerns` don't auto-reject but
+# drag the score down and should be called out in the scorer's reasoning. Both
+# keys are lists of free-text strings the LLM reads. Fictional throughout.
+# ════════════════════════════════════════════════════════════════════════
+
+hard_disqualifiers:
+  - Ad-tech / surveillance / tracking-centric products — not a domain of interest
+  - Roles with no real frontend craft (translate mockups pixel-by-pixel, no API ownership)
+  - On-site-only roles outside the Austin metro (Sam is not relocating)
+  - Below-market compensation (a pay cut from current total comp)
+  - Backend-heavy "full-stack" roles where frontend is a minor side duty
+
+soft_concerns:
+  # Don't auto-disqualify but should lower the score and be flagged.
+  - Accessibility treated as a last-minute checkbox rather than a priority
+  - No design partner / design team to collaborate with
+  - Very early-stage startups with no existing design system to build on
+  - Heavy process / low autonomy ("translate the spec exactly as given")

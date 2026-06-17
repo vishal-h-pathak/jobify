@@ -1,0 +1,146 @@
+# ════════════════════════════════════════════════════════════════════════
+# profile.yml — GOLDEN ONBOARDING EXAMPLE (Sam Rivera, a fictional frontend /
+# design-systems engineer). Produced by running onboarding/SKILL.md against a
+# sample resume + a short interview; see ../interview-transcript.md. Everything
+# here is invented and obviously fictional — it exists as the shared test
+# fixture for the rest of the pipeline (WS-A2 / WS-D / WS-F) and as a worked
+# reference for what a finished profile looks like.
+#
+# This is a SECOND complete persona alongside profile.example/ (a backend
+# engineer) on purpose: the two together prove the contract holds across very
+# different candidates. Required top-level keys: `identity`,
+# `application_defaults`. The rest is strongly recommended.
+# ════════════════════════════════════════════════════════════════════════
+
+# ── identity ──────────────────────────────────────────────────────────────
+identity:
+  name: Sam Rivera
+  email: sam.rivera@example.com
+  phone: "+1-555-0179"
+  location_base: Austin, TX
+  linkedin: linkedin.com/in/samrivera-example
+  website: samrivera.example.dev
+  github: github.com/samrivera-example
+
+# ── background_summary ────────────────────────────────────────────────────
+background_summary: |
+  Frontend engineer (~7 years) focused on design systems and accessibility.
+  Builds the component libraries and tooling that let product teams ship
+  consistent, usable interfaces fast — and treats accessibility as a
+  correctness property, not a checkbox. Happiest owning the seam between
+  design and engineering: tokens, component APIs, and the docs that make them
+  adoptable. Looking for a senior design-systems or frontend-platform role at
+  a product company that takes craft and inclusivity seriously.
+
+# ── location_and_compensation ─────────────────────────────────────────────
+location_and_compensation:
+  base: Austin, TX
+  remote_acceptable: true
+  in_person_acceptable: hybrid acceptable in/near Austin; remote preferred
+  relocation: not relocating; remote or Austin-local only
+  current_comp_usd: 145000
+  target_comp_usd: "150000-180000"
+
+# ── what_he_is_looking_for ────────────────────────────────────────────────
+what_he_is_looking_for:
+  tier_1:
+    label: Design systems / frontend platform engineering
+    reference_role: Senior Design Systems Engineer at a product company
+    notes: Owning a component library + tokens + adoption tooling other teams build on.
+  tier_2:
+    label: Accessibility-focused frontend engineering
+    notes: A11y is a first-class mandate, not an afterthought. Strong fit.
+  tier_3:
+    label: Senior product frontend at a mission-driven company
+    notes: Company-dependent — the mission and the design culture have to carry it.
+
+# ── archetypes ────────────────────────────────────────────────────────────
+# Two framing lanes derived from the tiers above. The tailor classifies each
+# job into the best-fit lane and injects its framing. Keep them distinct.
+archetypes:
+  design_systems:
+    label: Design systems / frontend platform engineering
+    framing: |
+      Engineer who builds the component library and tooling other product
+      teams build on. Frame as someone who owns the design-engineering seam —
+      tokens, accessible component APIs, versioning, and the docs that drive
+      adoption — and measures success by how many teams ship on the system.
+      Lead with libraries built and adoption outcomes.
+    emphasis_proof_points:
+      - Component libraries adopted across multiple product teams
+      - Design tokens / theming infrastructure
+      - Accessibility built into the component layer (keyboard, ARIA, focus)
+      - Docs + contribution model that drove adoption
+    tone_guidance: |
+      Craft-oriented and pragmatic. Name the frameworks, the adoption numbers,
+      and the trade-offs between flexibility and consistency. This audience
+      values judgment about API design and a11y over breadth of buzzwords.
+    bullet_template: |
+      [verb] [component/system] adopted by [scope], [consistency/a11y outcome].
+      Example: "Built a themeable component library adopted by 9 product teams,
+      cutting net-new UI code ~30% and standardizing focus handling."
+
+  accessibility:
+    label: Accessibility-focused frontend engineering
+    framing: |
+      Frontend engineer who treats accessibility as a correctness property.
+      Frame as someone who finds and fixes a11y defects at the component layer
+      so they never reach users — audits, automated a11y testing, and WCAG
+      fluency grounded in real shipped fixes, not certifications.
+    emphasis_proof_points:
+      - WCAG audits and remediation that reached production
+      - Automated accessibility testing in CI
+      - Keyboard / screen-reader support designed into components
+      - Teaching other engineers to ship accessible UI by default
+    tone_guidance: |
+      Precise and user-centered. Be concrete about which WCAG criteria and
+      which assistive tech; credibility comes from shipped fixes, not jargon.
+    bullet_template: |
+      [verb] [a11y improvement] for [surface], [measurable user/defect outcome].
+      Example: "Added axe-core checks to CI and remediated 40+ violations,
+      bringing the checkout flow to WCAG 2.1 AA."
+
+# ── how_he_works ──────────────────────────────────────────────────────────
+how_he_works: |
+  Works best with a clear problem and real users to anchor decisions. Strong
+  written communicator, biased toward small composable APIs and good docs.
+  Enjoys pairing with designers and teaching teams to ship accessible UI.
+
+# ── key_technical_skills ──────────────────────────────────────────────────
+key_technical_skills:
+  - TypeScript, JavaScript (ES2020+), HTML, CSS
+  - React, design systems, component-library architecture
+  - Design tokens, theming, Storybook
+  - Accessibility (WCAG 2.1/2.2, ARIA, keyboard + screen-reader support)
+  - CSS architecture (CSS Modules, Tailwind, CSS-in-JS)
+  - Testing (Jest, React Testing Library, Playwright, axe-core)
+  - Build tooling (Vite, Webpack), monorepos (Turborepo)
+  - Figma-to-code workflows, design-engineering collaboration
+
+# ── application_defaults ──────────────────────────────────────────────────
+# Canonical answers the submit pre-fill types into application forms. Every
+# key here is read by jobify/submit/adapters/_common.py::applicant_fields —
+# do not rename. This is the only place these PII facts live.
+application_defaults:
+  work_authorization: us_citizen
+  visa_sponsorship_needed: false
+  earliest_start_date: as early as possible; typical notice is two weeks after offer acceptance
+  relocation_willingness: based in Austin, TX; not relocating — remote or Austin-local roles only
+  in_person_willingness: remote or hybrid preferred; comfortable with occasional onsite collaboration
+  ai_policy_ack: |
+    I use AI tools to accelerate drafting, research, and exploration, but I
+    keep a human in the loop: I review, validate, and take responsibility for
+    all work I produce.
+  previous_interview_with_company: {}
+
+# ── resume_template ───────────────────────────────────────────────────────
+# Stage-7 gallery pick (filename stem from jobify/tailor/templates/). The
+# tailor honors this once WS-F's template wiring lands; harmless extra key
+# until then.
+resume_template: Research_ML_Resume
+
+# ── personal ──────────────────────────────────────────────────────────────
+personal: |
+  Austin-based after growing up in the Rio Grande Valley. Volunteers teaching
+  intro web dev at a local nonprofit, collects mechanical keyboards, and bakes
+  ambitious sourdough on weekends.

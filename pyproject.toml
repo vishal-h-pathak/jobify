@@ -49,7 +49,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5"]
+# `jsonschema` powers the strict Draft 2020-12 pass in
+# onboarding/validate_profile.py (it falls back to required-key checks when
+# absent, so it stays a dev-only dep, not a runtime one).
+dev = ["pytest>=8", "ruff>=0.5", "jsonschema>=4.18"]
 
 [project.scripts]
 # PR-3: hunt orchestrator console script. Calls the hunt agent's `run()`

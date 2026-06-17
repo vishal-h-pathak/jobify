@@ -1,0 +1,75 @@
+# ════════════════════════════════════════════════════════════════════════
+# portals.yml — GOLDEN ONBOARDING EXAMPLE (Sam Rivera).
+#
+# The ATS portal map the hunter polls directly via public APIs (Greenhouse /
+# Lever / Ashby / Workday), plus a cheap title pre-filter applied BEFORE any
+# LLM scoring. Discovery is zero-token. The companies below are EXAMPLES seeded
+# from Sam's stated targets — every slug must be verified before it works (see
+# ../../references/portals-seeding.md for the find + verify procedure).
+# Fictional throughout.
+# ════════════════════════════════════════════════════════════════════════
+
+# ── Greenhouse — https://boards-api.greenhouse.io/v1/boards/<slug>/jobs ────
+greenhouse:
+  companies:
+    # EXAMPLES — verify each before relying on it.
+    - slug: figma
+      name: Figma               # verify: boards-api.greenhouse.io/v1/boards/figma/jobs
+    - slug: vercel
+      name: Vercel              # verify: .../boards/vercel/jobs
+
+# ── Lever — https://api.lever.co/v0/postings/<slug> ───────────────────────
+lever:
+  companies:
+    # EXAMPLE — verify before relying on it.
+    - slug: shopify
+      name: Shopify             # verify: api.lever.co/v0/postings/shopify
+
+# ── Ashby — https://api.ashbyhq.com/posting-api/job-board/<slug> ──────────
+ashby:
+  companies:
+    # EXAMPLE — verify before relying on it.
+    - slug: linear
+      name: Linear              # verify: api.ashbyhq.com/posting-api/job-board/linear
+
+# ── Workday — <tenant>.wd<N>.myworkdayjobs.com/<site> ─────────────────────
+# Empty is safe; most companies Sam targets don't run a public Workday board.
+workday:
+  companies: []
+
+# ── Title pre-filter — applied BEFORE LLM scoring ─────────────────────────
+# Pure case-insensitive substring match. All three lists must be non-empty.
+title_filter:
+  # Auto-skip titles containing any of these. Real disqualifiers only.
+  reject_substrings:
+    - "intern"
+    - "vp of"
+    - "vice president"
+    - "chief"
+    - "director"
+    - "manager"
+    - "recruiter"
+    - "account executive"
+    - "sales"
+    - "backend engineer"
+    - "data engineer"
+
+  # Strong-positive title signals for Sam — logged as a hint, does not gate.
+  prefer_substrings:
+    - "design systems"
+    - "frontend engineer"
+    - "front-end engineer"
+    - "ui engineer"
+    - "accessibility engineer"
+    - "design engineer"
+    - "frontend platform"
+    - "web platform"
+
+  # Seniority hint — boosts logging only.
+  seniority_substrings:
+    - "senior"
+    - "staff"
+    - "principal"
+    - "lead"
+    - "sr."
+    - "sr "
