@@ -35,6 +35,17 @@ README + quickstart.
    anywhere outside `onboarding/examples/` and `profile.example/`:
    `vishal|pathak|gtri|thak\.io|papercuts|cape canaveral|sbmsxerwgylpfkkkjtku|vishal-h-pathak`.
    Run it; fix any hits.
+   - **Scan binaries too — do NOT restrict to text extensions.** A real résumé
+     PDF (`Research_ML_Resume.pdf`, `Comp_Neuroscience_Resume.pdf`) leaked through
+     a Wave-2 merge precisely because an `--include='*.py'`-style grep skipped
+     `.pdf`. Use `grep -rEI` without extension filters AND a separate check that
+     fails on any tracked `*.pdf` / `*.docx` outside `resume_templates/` and
+     `onboarding/examples/` (those are the only legitimate homes for sample
+     documents). `git ls-files '*.pdf' '*.docx'` is a cheap way to enumerate.
+   - **Re-grep note:** a Wave-2 branch (wsD) was based pre-A2, so its merge could
+     have resurrected persona data in any file it carried. The repo-wide,
+     binary-inclusive grep above covers this — run it over the whole tree, not
+     just changed files.
 3. **Per-adapter submit smoke** (R4): a quick check that each of Greenhouse,
    Lever, Ashby fillers still find their fields on a current sample posting; note
    any drift in `docs/` as known-issues.
