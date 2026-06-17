@@ -111,7 +111,12 @@
       "items": { "type": "string" },
       "description": "Flat list of real, defensible skills. Recommended."
     },
-    "personal": { "type": "string", "description": "Optional humanizing color." }
+    "personal": { "type": "string", "description": "Optional humanizing color." },
+    "resume_template": {
+      "type": "string",
+      "enum": ["classic", "modern", "compact", "accent", "executive"],
+      "description": "Optional. Which ATS-safe template the tailor renders the resume in (WS-F; gallery in jobify/resume_templates/). Onboarding offers the pick. Unset → tailor auto-selects by archetype (default classic)."
+    }
   },
   "additionalProperties": true
 }

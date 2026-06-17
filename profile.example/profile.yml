@@ -223,3 +223,17 @@ personal: |
   Based in Denver after a few years in the Bay Area. Trail runner, amateur
   woodworker, and a reliable source of overengineered home-automation
   projects. Helps run a local backend-engineering meetup.
+
+# ── resume_template ─────────────────────────────────────────────────────────
+# Which look the tailor renders your one-page resume in (WS-F). Pick ONE id
+# from the ATS-safe gallery in `jobify/resume_templates/` (onboarding offers
+# the choice). Every template passes the same ATS-parsability gate, so this is
+# purely aesthetic. Leave it unset to let the tailor auto-pick by role
+# archetype (defaults to `classic`). Options:
+#   classic    — serif, hairline-ruled link-blue headings (the safe default)
+#   modern     — clean sans-serif, ruled headings, a touch more whitespace
+#   compact    — serif, tight spacing for content-dense histories
+#   accent     — minimalist sans, large name, uppercase accent headings, no rule
+#   executive  — traditional serif, uppercase black ruled headings
+# See jobify/resume_templates/README.md for thumbnails + the parse rules.
+resume_template: classic

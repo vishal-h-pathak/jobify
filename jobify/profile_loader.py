@@ -134,6 +134,20 @@ def load_application_defaults() -> dict:
     return defaults if isinstance(defaults, dict) else {}
 
 
+def load_resume_template() -> str:
+    """Return the user's chosen resume template id from `profile.yml`.
+
+    WS-F: the onboarding flow lets the user pick one template from the
+    ``jobify.resume_templates`` gallery; the choice is stored as a top-level
+    ``resume_template`` string in ``profile.yml`` and honored by the tailor
+    (``jobify.tailor.tailor.latex_resume._select_template``). Returns ``""``
+    when unset or not a string, so the tailor falls back to its default; the
+    tailor — not this loader — validates the id against the gallery.
+    """
+    value = load_profile().get("resume_template")
+    return value.strip() if isinstance(value, str) else ""
+
+
 def load_cv() -> str:
     """Return `cv.md` contents (master CV markdown; empty string if missing).
 

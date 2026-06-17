@@ -102,8 +102,13 @@ def test_select_style_falls_back_to_classic():
 # ── STYLES dict ───────────────────────────────────────────────────────────
 
 
-def test_styles_has_three_ats_safe_variants():
-    assert set(latex_mod.STYLES) == {"classic", "modern", "compact"}
+def test_styles_expose_the_ats_safe_gallery():
+    # WS-F expanded the three original styles into the resume_templates
+    # gallery (3-5). STYLES stays a thin view over it for back-compat; the
+    # three originals must remain present. Deep ATS-parsability is enforced
+    # by tests/test_resume_templates.py — here we only sanity-check the view.
+    assert {"classic", "modern", "compact"} <= set(latex_mod.STYLES)
+    assert 3 <= len(latex_mod.STYLES) <= 5
     for key, template in latex_mod.STYLES.items():
         # ATS safety: no graphics/multicolumn/colored text blocks.
         assert "\\pagestyle{empty}" in template
