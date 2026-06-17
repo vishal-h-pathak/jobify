@@ -283,8 +283,10 @@ def test_digest_sorts_tier_1_5_between_1_and_2() -> None:
 
 
 def test_degree_gated_migration_file_present() -> None:
+    # The degree-gate columns were folded into the squashed baseline
+    # (migrations/0001_init.sql) — see migrations/README.md.
     sql = (
-        REPO_ROOT / "jobify" / "tailor" / "scripts" / "010_degree_gated.sql"
+        REPO_ROOT / "jobify" / "migrations" / "0001_init.sql"
     ).read_text(encoding="utf-8")
     assert "degree_gated" in sql
     assert "rescored_at" in sql

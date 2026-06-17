@@ -5,13 +5,6 @@ on:
     branches: [main]
   pull_request:
 
-# Local-Playwright consolidation: the legacy ``smoke`` job invoked
-# ``make smoke`` → ``scripts/smoke.py`` to validate the Browserbase +
-# Stagehand import wiring. With Path B retired, the smoke harness is
-# parked at ``scripts/smoke_legacy.py`` and is no longer a CI target —
-# pytest's default suite (which excludes the ``legacy`` marker) provides
-# the equivalent live-tree import-wiring coverage.
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -28,9 +21,25 @@ jobs:
         run: pytest --collect-only
       - name: Run tests
         run: pytest -v
-      - name: Check profile sync (soft warning)
-        # profile/profile.yml is canonical; CLAUDE.md mirrors it by hand
-        # and drifts (Session C found papercuts.org vs papercuts.cc).
-        # Surface drift as a build annotation without failing CI.
-        continue-on-error: true
-        run: python scripts/check_profile_sync.py
+
+  # ── Identity / infra scrub gate (STUB) ──────────────────────────────────
+  # Placeholder for the full gate that Phase F defines in
+  # planning/session-prompts/08_phaseF_verify.md: fail the build if any
+  # personal or infra identifier reappears anywhere outside the golden test
+  # persona (onboarding/examples/, landed by WS-E).
+  #
+  # It is intentionally a no-op until two upstream workstreams land:
+  #   • WS-A scrubs the persona layer out of jobify/ and profile/
+  #   • WS-E adds onboarding/examples/ (the allowed home for the fixture)
+  # Wiring a real grep here now would fail CI on persona data WS-A still
+  # owns. Phase F supplies the identifier list (kept out of this file so the
+  # gate doesn't flag itself) and flips this step to a hard failure.
+  scrub-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scrub gate (stub — Phase F defines the pattern)
+        run: |
+          echo "scrub gate stub: no identifier pattern wired yet."
+          echo "Phase F (planning/.../08_phaseF_verify.md) replaces this with"
+          echo "the real grep gate once WS-A + WS-E have landed."

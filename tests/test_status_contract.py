@@ -59,10 +59,11 @@ def test_legacy_map_targets_are_canonical():
         assert legacy not in CANONICAL_STATUSES
 
 
-def test_migration_011_check_constraint_lists_exactly_the_canonical_enum():
-    sql = (JOBIFY_DIR / "tailor" / "scripts" / "011_canonical_status.sql").read_text(
-        encoding="utf-8"
-    )
+def test_baseline_check_constraint_lists_exactly_the_canonical_enum():
+    """The squashed baseline (migrations/0001_init.sql) carries the
+    canonical jobs_status_check. Its quoted-status list must equal
+    CANONICAL_STATUSES — the third leg of the cross-repo contract."""
+    sql = (JOBIFY_DIR / "migrations" / "0001_init.sql").read_text(encoding="utf-8")
     constraint = sql.split("ADD CONSTRAINT jobs_status_check")[1].split(";")[0]
     in_constraint = {
         line.strip().strip(",").strip("'")
@@ -70,7 +71,7 @@ def test_migration_011_check_constraint_lists_exactly_the_canonical_enum():
         if line.strip().startswith("'")
     }
     assert in_constraint == set(CANONICAL_STATUSES), (
-        "011_canonical_status.sql CHECK constraint drifted from "
+        "migrations/0001_init.sql jobs_status_check drifted from "
         "CANONICAL_STATUSES"
     )
 
