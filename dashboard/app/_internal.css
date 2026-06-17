@@ -1,0 +1,142 @@
+@import "tailwindcss";
+
+/*
+  Dashboard surface — Notebook & Bench token bridge.
+
+  The marketing surface owns the tokens (:root in app/globals.css);
+  this file only maps them into Tailwind 4 utilities so the dashboard
+  speaks the same visual language without duplicating a single hex.
+  `@theme inline` keeps the var() references live instead of snapshotting
+  values at build time.
+
+  Accent semantics carry over from the notebook (see MASTER.md):
+    green = research / live      amber = bench / build / needs-human
+  Red exists only on this surface — the cockpit needs a "failed" tone
+  the notebook never does. It is defined here, NOT in globals.css, so
+  the marketing palette stays two-accent.
+*/
+
+:root {
+  --red: #e0655b; /* darkest warm red that clears 4.5:1 on --bg */
+  --red-dim: rgba(224, 101, 91, 0.4);
+  /* Blue is the submit accent — a third action color the cockpit needs
+     for the approve(green) → tailor(amber) → submit(blue) progression.
+     Like --red above it lives ONLY on this dashboard surface, NOT in
+     globals.css, so the marketing palette stays two-accent. */
+  --blue: #5aa2e6; /* clears 4.5:1 on --bg; reads blue, not cyan/green */
+  --blue-dim: rgba(90, 162, 230, 0.4);
+}
+
+@theme inline {
+  --color-*: initial;
+  --color-bg: var(--bg);
+  --color-bg-raised: var(--bg-raised);
+  --color-bg-card: var(--bg-card);
+  --color-ink: var(--ink);
+  --color-ink-dim: var(--ink-dim);
+  --color-ink-faint: var(--ink-faint);
+  --color-rule: var(--rule);
+  --color-rule-soft: var(--rule-soft);
+  --color-green: var(--green);
+  --color-green-dim: var(--green-dim);
+  --color-amber: var(--amber);
+  --color-amber-dim: var(--amber-dim);
+  --color-red: var(--red);
+  --color-red-dim: var(--red-dim);
+  --color-blue: var(--blue);
+  --color-blue-dim: var(--blue-dim);
+  --color-black: #000;
+  --color-white: #fff;
+  --color-transparent: transparent;
+
+  --font-mono: var(--mono);
+  --font-serif: var(--serif);
+}
+
+/*
+  Register base — "lab instrument": utilitarian, dense, quiet.
+  Mono is the working voice; serif is reserved for page titles and
+  long-form prose (job reasoning, cover letters) via explicit classes.
+*/
+.internal-surface {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+  globals.css (marketing) styles bare h1–h3 and anchors WITHOUT a
+  cascade layer; unlayered author styles outrank every layered Tailwind
+  utility, so dashboard classes like text-[10px] or hover:text-ink were
+  silently losing. revert-layer rolls those marketing declarations back
+  inside the register only, letting utilities (and Tailwind's preflight
+  defaults beneath them) take over.
+*/
+.internal-surface :is(h1, h2, h3, h4) {
+  font-family: revert-layer;
+  font-size: revert-layer;
+  font-weight: revert-layer;
+  letter-spacing: revert-layer;
+  line-height: revert-layer;
+  margin: revert-layer;
+  text-wrap: revert-layer;
+}
+.internal-surface a {
+  color: revert-layer;
+  text-decoration: revert-layer;
+}
+
+/* Single focus language for the whole register. */
+.internal-surface :focus-visible {
+  outline: 1px solid var(--amber);
+  outline-offset: 2px;
+}
+
+.internal-surface button:not(:disabled),
+.internal-surface [role="button"],
+.internal-surface label[for],
+.internal-surface summary,
+.internal-surface input[type="checkbox"]:not(:disabled),
+.internal-surface select:not(:disabled) {
+  cursor: pointer;
+}
+
+/* Skeleton blocks — first-load placeholders (no spinners). */
+.skeleton {
+  background: var(--bg-raised);
+  border: 1px solid var(--rule-soft);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .skeleton {
+    animation: skeleton-breathe 1.6s ease-in-out infinite;
+  }
+}
+@keyframes skeleton-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Toast rail enter motion — gated for reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .toast-enter {
+    animation: toast-in 180ms ease-out;
+  }
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
