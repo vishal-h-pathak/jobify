@@ -22,12 +22,6 @@ from jobify import profile_loader
 
 _PROMPTS_DIR = Path(__file__).parent
 _REPO_ROOT = _PROMPTS_DIR.parent
-# Hunt-local profile dir holds files PR-2 didn't migrate up: `cv.md`
-# and `disqualifiers.yml`. The top-level `<repo>/profile/` is canonical
-# for `profile.yml`, `article-digest.md`, and `learned-insights.md`.
-# A future PR can move cv / disqualifiers up; until then this fallback
-# keeps the prompt complete.
-_LOCAL_PROFILE_DIR = _REPO_ROOT / "profile"
 _SHARED_CACHE: Optional[str] = None
 _PROFILE_CACHE: Optional[str] = None
 
@@ -37,13 +31,6 @@ def _shared() -> str:
     if _SHARED_CACHE is None:
         _SHARED_CACHE = (_PROMPTS_DIR / "_shared.md").read_text(encoding="utf-8")
     return _SHARED_CACHE
-
-
-def _read_local(name: str) -> str:
-    f = _LOCAL_PROFILE_DIR / name
-    if not f.exists():
-        return ""
-    return f.read_text(encoding="utf-8")
 
 
 def build_profile_prompt_string() -> str:
@@ -60,12 +47,8 @@ def build_profile_prompt_string() -> str:
     Renamed from ``load_profile`` in PR-3 to disambiguate from
     ``jobify.profile_loader.load_profile`` (which returns a dict).
 
-    Source resolution per file:
-      - ``profile.yml``, ``article-digest.md``, ``learned-insights.md``
-        come from the canonical top-level ``<repo>/profile/`` via
-        ``jobify.profile_loader``.
-      - ``cv.md`` and ``disqualifiers.yml`` are still hunt-local
-        (``jobify/hunt/profile/``) until a future PR migrates them up.
+    WS-A1: every file now resolves through ``jobify.profile_loader`` from
+    the single consolidated profile directory — no hunt-local path reads.
 
     Falls back to legacy ``CLAUDE.md`` only if every loader returns empty
     — keeps the migration cutover safe.
@@ -76,8 +59,8 @@ def build_profile_prompt_string() -> str:
 
     sections: list[tuple[str, str]] = [
         ("profile.yml", profile_loader.load_profile_text()),
-        ("disqualifiers.yml", _read_local("disqualifiers.yml")),
-        ("cv.md", _read_local("cv.md")),
+        ("disqualifiers.yml", profile_loader.load_disqualifiers_text()),
+        ("cv.md", profile_loader.load_cv()),
         ("article-digest.md", profile_loader.load_article_digest()),
         # J-11 — Match Agent appends generalizable preferences here.
         # Loaded last so insights override earlier statements when they

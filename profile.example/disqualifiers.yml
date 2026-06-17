@@ -1,0 +1,28 @@
+# ════════════════════════════════════════════════════════════════════════
+# disqualifiers.yml — EXAMPLE persona (Alex Quinn).
+#
+# Read by the hunt scorer. `hard_disqualifiers` short-circuit a posting into
+# the "disqualify" tier (it won't be surfaced). `soft_concerns` don't auto-
+# reject but drag the score down and should be called out in the scorer's
+# reasoning. Hand-edit only — code never writes this file.
+#
+# Shape (both keys are lists of free-text strings the LLM reads):
+#   hard_disqualifiers: [ ... ]
+#   soft_concerns:      [ ... ]
+# Everything below is invented; replace with your own dealbreakers.
+# ════════════════════════════════════════════════════════════════════════
+
+hard_disqualifiers:
+  - Crypto / Web3 / trading products — not a domain of genuine interest
+  - Roles with no real platform/infra ownership (pure ticket implementation)
+  - On-site-only roles outside the Denver metro with no relocation package
+  - Below-market compensation (a pay cut from current total comp)
+  - Defense / weapons work
+
+soft_concerns:
+  # These don't auto-disqualify but should lower the score and be flagged
+  # in the scorer's `reasoning`.
+  - Very early-stage startups with no senior engineers to learn from
+  - Heavy process / low autonomy ("work with stakeholders to groom the backlog")
+  - Legacy-maintenance-heavy roles with no mandate to modernize
+  - Fully in-office with no remote flexibility (acceptable only if local)

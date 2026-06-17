@@ -1,0 +1,106 @@
+# ════════════════════════════════════════════════════════════════════════
+# portals.yml — EXAMPLE persona (Alex Quinn).
+#
+# The user-layer ATS portal map: the companies the hunter polls directly via
+# their public ATS APIs (Greenhouse / Lever / Ashby / Workday), plus a cheap
+# title pre-filter applied BEFORE any LLM scoring. Discovery is zero-token:
+# pure HTTP/JSON, no LLM spend until a posting passes the title filter and
+# reaches the scorer. Read by `jobify.hunt.sources` via
+# `jobify.profile_loader.load_portals()`.
+#
+# The companies below are EXAMPLES — replace them with boards that match YOUR
+# targeting. Every slug must be verified before it works.
+#
+# To add a company:
+#   1. Find its ATS slug from the careers-page URL, e.g.
+#        boards.greenhouse.io/<slug>     jobs.ashbyhq.com/<slug>
+#        jobs.lever.co/<slug>            <tenant>.wd1.myworkdayjobs.com/<site>
+#   2. VERIFY the board API returns jobs for the RIGHT company, e.g.
+#        curl https://boards-api.greenhouse.io/v1/boards/<slug>/jobs
+#        curl https://api.ashbyhq.com/posting-api/job-board/<slug>
+#      A slug that 404s is dropped at runtime with a warning (won't crash the
+#      run) — but remove dead entries so the log stays clean.
+#   3. Drop the row in the matching list below with the verify URL as a
+#      comment.
+# ════════════════════════════════════════════════════════════════════════
+
+# ── Greenhouse — https://boards-api.greenhouse.io/v1/boards/<slug>/jobs ────
+greenhouse:
+  companies:
+    # EXAMPLES — verify each before relying on it.
+    - slug: stripe
+      name: Stripe              # verify: boards-api.greenhouse.io/v1/boards/stripe/jobs
+    - slug: databricks
+      name: Databricks          # verify: .../boards/databricks/jobs
+
+# ── Lever — https://api.lever.co/v0/postings/<slug> ───────────────────────
+# An empty list is safe (the source just yields nothing). Add rows as needed.
+lever:
+  companies: []
+
+# ── Ashby — https://api.ashbyhq.com/posting-api/job-board/<slug> ──────────
+ashby:
+  companies:
+    # EXAMPLES — verify each before relying on it.
+    - slug: linear
+      name: Linear              # verify: api.ashbyhq.com/posting-api/job-board/linear
+    - slug: notion
+      name: Notion              # verify: .../job-board/notion
+
+# ── Workday — <tenant>.wd<N>.myworkdayjobs.com/<site> ─────────────────────
+# Workday rows carry richer metadata (tenant, site, dc). Each row needs at
+# least: tenant, site, dc, name. Empty is safe; most small companies don't
+# run a public Workday board. Example shape (commented out):
+#   companies:
+#     - tenant: examplecorp
+#       site: External
+#       dc: 1            # the wd<N> number from the careers URL
+#       name: Example Corp
+workday:
+  companies: []
+
+# ── Title pre-filter — applied BEFORE LLM scoring ─────────────────────────
+# Pure case-insensitive substring match. Cheap and conservative: prefer to
+# over-score than to miss a good role on a noisy keyword. All three lists
+# must be non-empty.
+title_filter:
+  # Auto-skip titles containing any of these. Real disqualifiers only —
+  # leadership / non-engineering / clearly-irrelevant roles.
+  reject_substrings:
+    - "intern"
+    - "vp of"
+    - "vice president"
+    - "chief"
+    - "ceo"
+    - "cfo"
+    - "recruiter"
+    - "talent acquisition"
+    - "account executive"
+    - "sales development"
+    - "office manager"
+    - "social media"
+
+  # Strong-positive signals for THIS persona — logged as a hint; does not
+  # gate filtering. Tune these to your own target titles.
+  prefer_substrings:
+    - "platform engineer"
+    - "infrastructure engineer"
+    - "backend engineer"
+    - "distributed systems"
+    - "site reliability"
+    - "sre"
+    - "staff engineer"
+    - "developer experience"
+    - "data platform"
+    - "ml platform"
+    - "solutions engineer"
+
+  # Seniority hint — boosts logging only. Filter against leadership lives in
+  # reject_substrings, not here.
+  seniority_substrings:
+    - "senior"
+    - "staff"
+    - "principal"
+    - "lead"
+    - "sr."
+    - "sr "

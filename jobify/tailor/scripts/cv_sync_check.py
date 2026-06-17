@@ -3,14 +3,12 @@
 Compares quantitative claims across the four sources of truth in the
 unified `job-pipeline` repo:
 
-  - `jobify/hunt/profile/cv.md`               — master CV (markdown)
-  - `profile/article-digest.md`                — proof-point digest
-                                                 (top-level user layer, moved
-                                                 here in PR-2)
+  - `profile/cv.md`                            — master CV (markdown), via
+                                                 `jobify.profile_loader.load_cv`
+  - `profile/article-digest.md`                — proof-point digest, via
+                                                 `profile_loader.load_article_digest`
   - `tailor/latex_resume.py::BASE_RESUME`      — structured LaTeX data
-  - `jobify/hunt/CLAUDE.md`                   — narrative aggregator
-                                                 (per-package CLAUDE.md files
-                                                 get consolidated in PR-9)
+  - `CLAUDE.md`                                — repo-root narrative aggregator
 
 Reports:
   - Anchored claims (employee number, neuron count, years-of-experience,
@@ -38,7 +36,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 # `_PKG_ROOT` is the tailor package root (`jobify/tailor/`); kept on
 # sys.path so `from tailor.latex_resume import BASE_RESUME` resolves
@@ -122,17 +120,19 @@ def _claims_for(text: str) -> dict[str, set[str]]:
 
 
 def _gather_sources() -> dict[str, str]:
-    """Read all four sources into a {name: text} dict."""
+    """Read all four sources into a {name: text} dict.
+
+    WS-A1: ``cv.md`` and ``article-digest.md`` resolve through
+    ``jobify.profile_loader`` from the consolidated profile directory rather
+    than hard-coded paths; the narrative aggregator is the repo-root
+    ``CLAUDE.md`` (PR-9 consolidated the per-subpackage files into it).
+    """
+    from jobify import profile_loader  # noqa: WPS433 — local to keep script standalone
+
     sources: dict[str, str] = {}
-    sources["profile/cv.md"] = _read(
-        _REPO_ROOT / "jobify" / "hunt" / "profile" / "cv.md"
-    )
-    sources["profile/article-digest.md"] = _read(
-        _REPO_ROOT / "profile" / "article-digest.md"
-    )
-    sources["job-hunter/CLAUDE.md"] = _read(
-        _REPO_ROOT / "jobify" / "hunt" / "CLAUDE.md"
-    )
+    sources["profile/cv.md"] = profile_loader.load_cv()
+    sources["profile/article-digest.md"] = profile_loader.load_article_digest()
+    sources["CLAUDE.md"] = _read(_REPO_ROOT / "CLAUDE.md")
 
     # BASE_RESUME — import the dict + serialize so the regex can match.
     try:

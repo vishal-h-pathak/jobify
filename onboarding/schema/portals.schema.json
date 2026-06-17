@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jobify/onboarding/schema/portals.schema.json",
+  "title": "portals.yml",
+  "description": "The user's ATS portal map + title pre-filter, read by jobify.hunt.sources via jobify.profile_loader.load_portals(). Discovery is zero-token: the hunter polls each board's public API directly. The four ATS sections may have empty company lists (the source just yields nothing), but `title_filter` and its three substring lists must be present and non-empty for the pre-filter to behave.",
+  "type": "object",
+  "required": ["greenhouse", "lever", "ashby", "workday", "title_filter"],
+  "properties": {
+    "greenhouse": { "$ref": "#/$defs/slugBoard" },
+    "lever": { "$ref": "#/$defs/slugBoard" },
+    "ashby": { "$ref": "#/$defs/slugBoard" },
+    "workday": {
+      "type": "object",
+      "description": "Workday tenants carry richer metadata than slug+name.",
+      "properties": {
+        "companies": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "required": ["tenant", "site", "dc", "name"],
+            "properties": {
+              "tenant": { "type": "string" },
+              "site": { "type": "string" },
+              "dc": { "type": ["integer", "string"], "description": "The wd<N> data-center number." },
+              "name": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "title_filter": {
+      "type": "object",
+      "required": ["reject_substrings", "prefer_substrings", "seniority_substrings"],
+      "properties": {
+        "reject_substrings": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Case-insensitive substrings; a title containing any is skipped before scoring."
+        },
+        "prefer_substrings": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Positive-signal substrings; logged as a hint, does not gate filtering."
+        },
+        "seniority_substrings": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Seniority hints; logged only."
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "slugBoard": {
+      "type": "object",
+      "description": "A Greenhouse/Lever/Ashby section: { companies: [ {slug, name}, ... ] }. `companies` may be an empty list or null.",
+      "properties": {
+        "companies": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "required": ["slug", "name"],
+            "properties": {
+              "slug": { "type": "string", "minLength": 1, "description": "The ATS board slug." },
+              "name": { "type": "string", "minLength": 1, "description": "Human display name." }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

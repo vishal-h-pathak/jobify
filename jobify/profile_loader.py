@@ -1,13 +1,22 @@
 """jobify.profile_loader — single import surface for the user-layer profile.
 
-Centralizes reads of files under the top-level ``profile/`` directory so
-callers across ``jobify.hunt``, ``jobify.tailor``, and ``jobify.submit``
-all hit one consistent loader instead of resolving paths ad-hoc.
+Centralizes reads of the eight user-layer profile files so callers across
+``jobify.hunt``, ``jobify.tailor``, and ``jobify.submit`` all hit one
+consistent loader instead of resolving paths ad-hoc. WS-A1 consolidated the
+contract: all eight files (``profile.yml``, ``thesis.md``, ``voice-profile.md``,
+``article-digest.md``, ``learned-insights.md``, ``cv.md``, ``disqualifiers.yml``,
+``portals.yml``) live under ONE directory that this module resolves. Nothing
+outside this module should read a persona file by a hard-coded path.
 
 Resolution order for the profile directory:
-  1. ``JOBIFY_PROFILE_DIR`` environment variable, if set and non-empty.
-  2. Walk up from this file until ``pyproject.toml`` is found; use
-     ``<root>/profile/``.
+  1. ``JOBIFY_PROFILE_DIR`` environment variable, if set and non-empty
+     (a real user's generated profile, or a test fixture).
+  2. ``<repo_root>/profile/`` if that directory exists (the active user's
+     profile — onboarding writes here).
+  3. ``<repo_root>/profile.example/`` — the shipped neutral example, so a
+     fresh clone with no generated profile still loads *something* valid.
+
+The repo root is found by walking up from this file until ``pyproject.toml``.
 
 A missing profile dir or missing individual file is not fatal: dict loaders
 return ``{}`` and string loaders return ``""``. Callers that need a stricter
@@ -37,8 +46,10 @@ def _walk_up_for_pyproject(start: Path) -> Optional[Path]:
 def profile_dir() -> Path:
     """Resolve the user-layer profile directory.
 
-    Honors `JOBIFY_PROFILE_DIR`, otherwise walks up from this module until
-    `pyproject.toml` is found and returns `<repo_root>/profile`.
+    Honors ``JOBIFY_PROFILE_DIR`` first. Otherwise walks up from this module
+    until ``pyproject.toml`` is found and prefers ``<repo_root>/profile`` when
+    it exists (the active user's generated profile), falling back to
+    ``<repo_root>/profile.example`` so a fresh clone loads the neutral example.
     """
     env_override = os.environ.get("JOBIFY_PROFILE_DIR", "").strip()
     if env_override:
@@ -50,7 +61,10 @@ def profile_dir() -> Path:
             "profile_loader: could not locate pyproject.toml walking up from "
             f"{Path(__file__).resolve()}; set JOBIFY_PROFILE_DIR to override."
         )
-    return repo_root / "profile"
+    active = repo_root / "profile"
+    if active.is_dir():
+        return active
+    return repo_root / "profile.example"
 
 
 def _read_text(name: str) -> str:
@@ -118,6 +132,44 @@ def load_application_defaults() -> dict:
     """
     defaults = load_profile().get("application_defaults")
     return defaults if isinstance(defaults, dict) else {}
+
+
+def load_cv() -> str:
+    """Return `cv.md` contents (master CV markdown; empty string if missing).
+
+    The single source of truth for resume content. Read by the hunt scorer
+    and the tailor; tailoring may *select* and *reorder* from it but never
+    invents beyond it.
+    """
+    return _read_text("cv.md")
+
+
+def load_disqualifiers() -> dict:
+    """Return the parsed `disqualifiers.yml` as a dict (empty dict if missing).
+
+    Shape: ``hard_disqualifiers`` (list) + ``soft_concerns`` (list). Read by
+    the scorer to short-circuit / penalize jobs.
+    """
+    return _read_yaml("disqualifiers.yml")
+
+
+def load_disqualifiers_text() -> str:
+    """Return the raw text of `disqualifiers.yml` (empty string if missing).
+
+    Used when splicing the file verbatim into an LLM prompt (comments and
+    ordering survive) rather than re-emitting a parsed dict.
+    """
+    return _read_text("disqualifiers.yml")
+
+
+def load_portals() -> dict:
+    """Return the parsed `portals.yml` as a dict (empty dict if missing).
+
+    Shape: per-ATS ``{greenhouse,lever,ashby,workday}.companies`` lists plus a
+    ``title_filter`` block. Read by the hunt sources (``jobify.hunt.sources``)
+    to know which boards to poll and how to pre-filter titles before scoring.
+    """
+    return _read_yaml("portals.yml")
 
 
 def load_article_digest() -> str:

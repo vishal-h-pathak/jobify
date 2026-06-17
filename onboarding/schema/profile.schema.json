@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jobify/onboarding/schema/profile.schema.json",
+  "title": "profile.yml",
+  "description": "Structured user-layer ground truth. Loaded by jobify.profile_loader.load_profile() as a dict. WS-E should validate a generated profile.yml against this; WS-A2/WS-D/WS-F may rely on it. Only `identity` and `application_defaults` are hard-required — the rest are strongly recommended for scoring/tailoring quality but the loaders degrade gracefully when absent.",
+  "type": "object",
+  "required": ["identity", "application_defaults"],
+  "properties": {
+    "identity": {
+      "type": "object",
+      "description": "Who the user is + contact info the submit pre-fill types into forms.",
+      "required": ["name", "email"],
+      "properties": {
+        "name": { "type": "string", "description": "Full display name." },
+        "email": { "type": "string", "description": "Contact email." },
+        "phone": { "type": "string", "description": "Phone, form-ready (optional)." },
+        "location_base": { "type": "string", "description": "Home city/state (optional)." },
+        "linkedin": { "type": "string", "description": "LinkedIn URL/handle (optional)." },
+        "website": { "type": "string", "description": "Portfolio/personal site (optional)." },
+        "github": { "type": "string", "description": "GitHub URL/handle (optional)." }
+      },
+      "additionalProperties": true
+    },
+    "application_defaults": {
+      "type": "object",
+      "description": "Canonical form-fill answers. EVERY key here is read by jobify/submit/adapters/_common.py::applicant_fields — do not rename. This is the single source of truth for these PII facts (load_application_defaults()).",
+      "required": [
+        "work_authorization",
+        "visa_sponsorship_needed",
+        "earliest_start_date",
+        "relocation_willingness",
+        "in_person_willingness",
+        "ai_policy_ack",
+        "previous_interview_with_company"
+      ],
+      "properties": {
+        "work_authorization": {
+          "type": "string",
+          "description": "e.g. us_citizen | permanent_resident | visa_holder | needs_sponsorship."
+        },
+        "visa_sponsorship_needed": {
+          "type": "boolean",
+          "description": "true if sponsorship is needed now or in future."
+        },
+        "earliest_start_date": { "type": "string", "description": "Free text, form-ready." },
+        "relocation_willingness": { "type": "string", "description": "Free text." },
+        "in_person_willingness": { "type": "string", "description": "Free text (remote/hybrid/in-person)." },
+        "ai_policy_ack": { "type": "string", "description": "Free text AI-use statement." },
+        "previous_interview_with_company": {
+          "type": "object",
+          "description": "Map of company-slug -> bool. May be {} initially; extend per company.",
+          "additionalProperties": { "type": "boolean" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "background_summary": {
+      "type": "string",
+      "description": "2-5 sentence professional narrative. Recommended."
+    },
+    "location_and_compensation": {
+      "type": "object",
+      "description": "Hard logistics feeding the scorer's constraint checks. Recommended.",
+      "properties": {
+        "base": { "type": "string" },
+        "remote_acceptable": { "type": "boolean" },
+        "in_person_acceptable": { "type": "string" },
+        "relocation": { "type": "string" },
+        "current_comp_usd": { "type": ["number", "integer", "string"] },
+        "target_comp_usd": { "type": "string", "description": "Range or single, as a string." }
+      },
+      "additionalProperties": true
+    },
+    "what_he_is_looking_for": {
+      "type": "object",
+      "description": "Targeting by tier. Each tier is an object with at least a `label`; optional `notes`, `reference_role`. Recommended.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["label"],
+        "properties": {
+          "label": { "type": "string" },
+          "notes": { "type": "string" },
+          "reference_role": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "archetypes": {
+      "type": "object",
+      "description": "Named lanes the tailor frames the candidate as (load_archetypes()). 2-4 generic lanes recommended. The classifier prompt reads keys + framings at runtime, so adding an entry makes it live immediately.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["label"],
+        "properties": {
+          "label": { "type": "string", "description": "One-line human name for the lane." },
+          "framing": { "type": "string", "description": "How to position the candidate for this lane." },
+          "emphasis_proof_points": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Experiences to lead with for this lane."
+          },
+          "tone_guidance": { "type": "string", "description": "Register/vocabulary notes." },
+          "bullet_template": { "type": "string", "description": "Fill-in pattern + example." }
+        },
+        "additionalProperties": true
+      }
+    },
+    "how_he_works": { "type": "string", "description": "Working-style note. Recommended." },
+    "key_technical_skills": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Flat list of real, defensible skills. Recommended."
+    },
+    "personal": { "type": "string", "description": "Optional humanizing color." }
+  },
+  "additionalProperties": true
+}

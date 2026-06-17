@@ -1,6 +1,7 @@
 """sources/_portals.py — Shared portal-config + title-filter helpers (J-1).
 
-Loads `profile/portals.yml` (canonical user-layer ATS map) and exposes:
+Loads `portals.yml` (canonical user-layer ATS map) via
+``jobify.profile_loader`` and exposes:
 
 - `companies(platform)` — list of (slug, name) tuples for a given ATS
 - `passes_title_filter(title)` — cheap pre-filter so we skip LLM scoring
@@ -11,35 +12,29 @@ Loads `profile/portals.yml` (canonical user-layer ATS map) and exposes:
 The fallback path keeps the hunter running if `portals.yml` is missing
 — `companies()` returns an empty list, `passes_title_filter()` returns
 True. This makes the move from hard-coded lists to YAML opt-in.
+
+WS-A1: the portal map resolves through the consolidated profile directory
+(``jobify.profile_loader.load_portals``) instead of a hunt-local path, so
+``JOBIFY_PROFILE_DIR`` (or the active ``profile/`` / shipped
+``profile.example/``) governs which boards are polled.
 """
 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Iterable, Optional
+
+from jobify import profile_loader
 
 logger = logging.getLogger("sources._portals")
 
 _PORTALS_CACHE: Optional[dict] = None
-_PORTALS_PATH = Path(__file__).parent.parent / "profile" / "portals.yml"
 
 
 def _load_portals() -> dict:
     global _PORTALS_CACHE
-    if _PORTALS_CACHE is not None:
-        return _PORTALS_CACHE
-    if not _PORTALS_PATH.exists():
-        logger.warning("portals.yml not found at %s — sources will fall back to in-module defaults", _PORTALS_PATH)
-        _PORTALS_CACHE = {}
-        return _PORTALS_CACHE
-    try:
-        import yaml  # PyYAML — already a transitive dep via requirements
-    except ImportError:
-        logger.warning("PyYAML not installed; install pyyaml to read portals.yml")
-        _PORTALS_CACHE = {}
-        return _PORTALS_CACHE
-    _PORTALS_CACHE = yaml.safe_load(_PORTALS_PATH.read_text(encoding="utf-8")) or {}
+    if _PORTALS_CACHE is None:
+        _PORTALS_CACHE = profile_loader.load_portals()
     return _PORTALS_CACHE
 
 

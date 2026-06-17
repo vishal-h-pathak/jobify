@@ -79,15 +79,17 @@ def degree_gate_block(job: dict) -> str:
 
 # User-layer files in the order they should appear when concatenated for
 # an LLM. profile.yml first (structured ground truth), then disqualifiers,
-# then narrative artifacts (CV, article digest).
-_USER_LAYER_FILES = (
-    "profile.yml",
-    "disqualifiers.yml",
-    "cv.md",
-    "article-digest.md",
+# then narrative artifacts (CV, article digest). Each entry pairs the
+# display banner with the profile_loader function that returns its text —
+# WS-A1 routes every file through the single consolidated profile dir.
+_USER_LAYER_SECTIONS = (
+    ("profile.yml", profile_loader.load_profile_text),
+    ("disqualifiers.yml", profile_loader.load_disqualifiers_text),
+    ("cv.md", profile_loader.load_cv),
+    ("article-digest.md", profile_loader.load_article_digest),
     # J-11 — Match Agent appends generalizable preferences here. Loaded
     # last so insights override earlier statements when they conflict.
-    "learned-insights.md",
+    ("learned-insights.md", profile_loader.load_learned_insights),
 )
 
 
@@ -100,31 +102,6 @@ def _walk_up_for_pyproject(start: Path) -> Optional[Path]:
     return None
 
 
-def _resolve_profile_search_dirs() -> tuple[Path, ...]:
-    """Return the directories that may contain user-layer profile files.
-
-    PR-9: the unified jobify repo splits the user layer across two
-    locations: the structured + narrative files (``profile.yml``,
-    ``article-digest.md``, ``learned-insights.md``,
-    ``voice-profile.md``) live at the repo-root ``profile/`` directory,
-    while the hunt-specific files (``cv.md``, ``disqualifiers.yml``,
-    ``portals.yml``) live at ``jobify/hunt/profile/`` because they're
-    only consumed by the hunter's source-side filtering. ``load_profile``
-    scans both and concatenates whichever files it finds.
-    """
-    repo_root = _walk_up_for_pyproject(_PROMPTS_DIR)
-    if repo_root is None:
-        return ()
-    dirs: list[Path] = []
-    top = repo_root / "profile"
-    if top.exists():
-        dirs.append(top)
-    hunt = repo_root / "jobify" / "hunt" / "profile"
-    if hunt.exists():
-        dirs.append(hunt)
-    return tuple(dirs)
-
-
 def _shared() -> str:
     global _SHARED_CACHE
     if _SHARED_CACHE is None:
@@ -135,38 +112,32 @@ def _shared() -> str:
 def load_profile() -> str:
     """Load the merged user-layer profile.
 
-    Concatenates ``profile.yml`` + ``disqualifiers.yml`` + ``cv.md`` +
-    ``article-digest.md`` + ``learned-insights.md`` (whichever exist)
-    into a single string suitable for injecting into prompts. PR-9: the
-    user-layer files now live at unified repo-root locations
-    (``profile/`` + ``jobify/hunt/profile/``) — see
-    :func:`_resolve_profile_search_dirs`. Falls back to the consolidated
-    repo-root ``CLAUDE.md`` if no profile files are found.
+    Concatenates ``thesis.md`` (canonical, FIRST) + ``profile.yml`` +
+    ``disqualifiers.yml`` + ``cv.md`` + ``article-digest.md`` +
+    ``learned-insights.md`` (whichever exist) into a single string suitable
+    for injecting into prompts. WS-A1: every file resolves through
+    ``jobify.profile_loader`` from the single consolidated profile directory
+    (``JOBIFY_PROFILE_DIR`` → active ``profile/`` → shipped
+    ``profile.example/``). Falls back to the repo-root ``CLAUDE.md`` if no
+    profile files are found.
     """
     global _PROFILE_CACHE
     if _PROFILE_CACHE is not None:
         return _PROFILE_CACHE
 
-    search_dirs = _resolve_profile_search_dirs()
-    if search_dirs:
-        parts: list[str] = []
-        # thesis.md is canonical and goes FIRST — same contract as the
-        # hunt scorer's build_profile_prompt_string.
-        thesis = thesis_section()
-        if thesis:
-            parts.append(thesis)
-        for name in _USER_LAYER_FILES:
-            for d in search_dirs:
-                f = d / name
-                if f.exists():
-                    parts.append(
-                        f"========== {name} ==========\n"
-                        + f.read_text(encoding="utf-8").strip()
-                    )
-                    break
-        _PROFILE_CACHE = "\n\n".join(parts) if parts else ""
-        if _PROFILE_CACHE:
-            return _PROFILE_CACHE
+    parts: list[str] = []
+    # thesis.md is canonical and goes FIRST — same contract as the
+    # hunt scorer's build_profile_prompt_string.
+    thesis = thesis_section()
+    if thesis:
+        parts.append(thesis)
+    for name, loader in _USER_LAYER_SECTIONS:
+        text = (loader() or "").strip()
+        if text:
+            parts.append(f"========== {name} ==========\n{text}")
+    if parts:
+        _PROFILE_CACHE = "\n\n".join(parts)
+        return _PROFILE_CACHE
 
     # Last-resort fallback: the repo-root narrative CLAUDE.md (PR-9
     # consolidated the per-subpackage CLAUDE.md files into one top-level

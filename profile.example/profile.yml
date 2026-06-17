@@ -1,0 +1,225 @@
+# ════════════════════════════════════════════════════════════════════════
+# profile.yml — EXAMPLE persona (Alex Quinn, a fictional mid-career
+# backend/platform engineer). This file is the structured heart of the
+# user-layer profile contract. Everything here is invented; replace it with
+# your own facts (the onboarding flow generates this for you).
+#
+# HOW THIS FILE IS USED
+#   - The hunt scorer reads it (verbatim) to judge how well a posting fits.
+#   - The tailor reads it to write your resume + cover letter + form answers.
+#   - The submit pre-fill reads `application_defaults` + `identity` to type
+#     your PII into application forms.
+#   Code NEVER overwrites this file. Hand-edit it (or re-run onboarding).
+#
+# CONTRACT: the loader (jobify.profile_loader.load_profile) returns this as a
+# dict. Required top-level keys: `identity`, `application_defaults`. The rest
+# are strongly recommended — scoring and tailoring degrade gracefully but get
+# noticeably worse without them.
+# ════════════════════════════════════════════════════════════════════════
+
+# ── identity ──────────────────────────────────────────────────────────────
+# Who you are + how to reach you. The submit pre-fill types these straight
+# into application forms, so keep them accurate and form-ready. `name` and
+# `email` are required; the rest are filled when a form asks for them.
+identity:
+  name: Alex Quinn                       # full legal/display name (required)
+  email: alex.quinn@example.com          # contact email (required)
+  phone: "+1-555-0142"                   # used to fill "Phone" form fields
+  location_base: Denver, CO              # your home base city/state
+  linkedin: linkedin.com/in/alexquinn-example
+  website: alexquinn.example.dev         # portfolio / personal site (optional)
+  github: github.com/alexquinn-example   # optional; filled into "GitHub" fields
+
+# ── background_summary ────────────────────────────────────────────────────
+# A short narrative (2-5 sentences) of who you are professionally and the
+# through-line of your career. The scorer uses this for "is this person a
+# fit?"; the tailor uses it for tone. Write it the way you'd describe
+# yourself to a peer, not the way a recruiter would.
+background_summary: |
+  Backend and platform engineer with ~8 years building and operating
+  high-throughput services. Started in web backends, moved deeper into
+  distributed systems and developer platforms: API gateways, event
+  pipelines, and the internal tooling teams build on. Comfortable owning a
+  service end-to-end — design, ship, on-call — and happiest when the work
+  is making other engineers faster. Looking for a platform/infra role at a
+  product company with real scale and a healthy engineering culture.
+
+# ── location_and_compensation ─────────────────────────────────────────────
+# Hard logistics. `remote_acceptable` and the comp band feed directly into
+# the scorer's hard-constraint checks (a role that violates these gets
+# floored). Be honest — a too-wide band surfaces roles you'll reject.
+location_and_compensation:
+  base: Denver, CO
+  remote_acceptable: true                # will take fully-remote roles
+  in_person_acceptable: hybrid acceptable in/near Denver; remote preferred
+  relocation: open to relocation for an exceptional role + comp package
+  current_comp_usd: 165000               # current total — informs "no pay cut"
+  target_comp_usd: "175000-205000"       # target band (string: range or single)
+
+# ── what_he_is_looking_for ────────────────────────────────────────────────
+# Your targeting, by tier. Tier 1 = the dream; lower tiers = acceptable but
+# less exciting. The scorer maps each posting to a tier and scores within it.
+# `archetypes` (below) extends each tier into a concrete "lane" the tailor
+# frames you as. Keep tiers to a short label + optional notes.
+what_he_is_looking_for:
+  tier_1:
+    label: Platform / infrastructure / distributed-systems engineering
+    reference_role: Staff Platform Engineer at a mid-size product company
+    notes: Owning developer-facing platforms, infra, or core services at scale.
+  tier_2:
+    label: ML / data-platform engineering (the systems around models, not the models)
+    notes: Feature stores, training/serving infra, data pipelines. Strong fit given backend depth.
+  tier_3:
+    label: Generalist senior backend / full-stack at a mission-driven product company
+    notes: Heavily company-dependent — the mission and the team have to be right.
+
+# ── archetypes ────────────────────────────────────────────────────────────
+# An archetype is one "lane" you can be framed as. The tailor classifies each
+# job description into the best-fit archetype, loads the entry below, and
+# injects its framing/emphasis/tone into the resume + cover-letter prompts.
+# Same candidate, multiple lanes — picked per-job. Keep these GENERIC and
+# tied to your real strengths; 2-4 is plenty.
+#
+# Each archetype entry supports these keys (all optional except `label`):
+#   label                 — one-line human name for the lane
+#   framing               — how to position the candidate for this lane
+#   emphasis_proof_points — bullet list of the experiences to lead with
+#   tone_guidance         — register / vocabulary notes for this audience
+#   bullet_template       — a fill-in pattern for resume bullets + an example
+#
+# HOW TO ADD YOUR OWN ARCHETYPE
+#   Append a new entry below. The classifier prompt
+#   (`prompts/classify_archetype.md`) reads the keys + framings at runtime,
+#   so a new archetype is live immediately after you save this file — no
+#   code change needed. Give it a stable snake_case key and make its
+#   `framing` distinct enough that the classifier can tell lanes apart.
+archetypes:
+  backend_platform:
+    label: Backend / platform / distributed-systems engineering
+    framing: |
+      Engineer who builds the systems other engineers build on. Frame as
+      someone who owns services end-to-end at scale — designs the API,
+      ships it, carries the pager — and treats reliability, observability,
+      and developer ergonomics as first-class. Lead with concrete systems
+      built and the scale they ran at.
+    emphasis_proof_points:
+      - Designed and operated high-throughput services (QPS / latency SLOs)
+      - Internal platform / tooling that other teams adopted
+      - On-call ownership, incident response, reliability improvements
+      - Distributed-systems fundamentals (queues, caching, data modeling)
+    tone_guidance: |
+      Direct and systems-grounded. Name the technologies, the scale, and
+      the trade-offs. This audience values judgment about reliability and
+      simplicity over breadth of buzzwords.
+    bullet_template: |
+      [verb] [system/service] handling [scale], [reliability/perf outcome].
+      Example: "Rebuilt the notification pipeline on Kafka, cutting
+      delivery p99 from 4s to 300ms at 20k events/sec."
+
+  ml_platform:
+    label: ML / data-platform engineering (infra around models)
+    framing: |
+      Backend engineer who builds the infrastructure ML teams depend on —
+      feature pipelines, training/serving infra, data platforms — NOT a
+      research/modeling role. Frame as the person who makes models
+      shippable and reproducible, bringing systems rigor to ML ops.
+    emphasis_proof_points:
+      - Data pipelines / ETL feeding models or analytics
+      - Model-serving or training infrastructure
+      - Reproducibility, versioning, and pipeline reliability
+      - Backend + cloud fundamentals applied to ML workloads
+    tone_guidance: |
+      Pragmatic and ops-aware. Be explicit that the strength is the systems
+      around ML, not the modeling itself — credibility comes from honesty
+      about the lane.
+    bullet_template: |
+      [verb] [data/ML system] for [use case], [throughput/reliability outcome].
+      Example: "Built a feature pipeline serving 200 features at <50ms,
+      enabling the ranking team to ship daily model refreshes."
+
+  developer_facing:
+    label: Developer-facing / solutions / sales engineering
+    framing: |
+      Strong communicator with real engineering depth who wants to be
+      closer to users and product. Frame as someone who can explain complex
+      systems to mixed audiences and build credible demos — drawing on a
+      track record of internal platform work where the "customers" were
+      other engineers. Acknowledge any pivot candidly.
+    emphasis_proof_points:
+      - Internal platform adoption — winning over engineer "customers"
+      - Technical writing, docs, and onboarding others to systems
+      - Demos / proofs-of-concept that drove adoption decisions
+      - Comfort translating between technical and non-technical audiences
+    tone_guidance: |
+      Conversational and customer-empathetic, still technically precise.
+      Lead with "deep engineer who wants to be customer-facing," never a
+      marketer with a veneer of technical knowledge.
+    bullet_template: |
+      [verb] [technical artifact] for [audience], resulting in [adoption outcome].
+      Example: "Wrote the platform migration guide and ran 6 office-hours
+      sessions; 12 teams migrated in a quarter with zero escalations."
+
+# ── how_he_works ──────────────────────────────────────────────────────────
+# A short note on working style + what gets the best out of you. The tailor
+# uses this for cover-letter tone and "why this team" framing.
+how_he_works: |
+  Works best with autonomy and a clear problem to own. Strong written
+  communicator, biased toward simple designs and incremental delivery.
+  Enjoys mentoring and leaving systems better-documented than found.
+
+# ── key_technical_skills ──────────────────────────────────────────────────
+# A flat list of your real, defensible skills. The scorer matches these
+# against JD requirements; the tailor pulls from them for the skills section.
+# List things you can speak to in an interview — not aspirational keywords.
+key_technical_skills:
+  - Go, Python, TypeScript
+  - Distributed systems, microservices, event-driven architecture
+  - PostgreSQL, Redis, Kafka
+  - Kubernetes, Docker, Terraform
+  - AWS (EC2, S3, RDS, Lambda), GCP basics
+  - gRPC / REST API design, OpenAPI
+  - Observability (Prometheus, Grafana, OpenTelemetry)
+  - CI/CD (GitHub Actions), infrastructure-as-code
+  - Data pipelines / ETL, Airflow
+
+# ── application_defaults ──────────────────────────────────────────────────
+# Canonical answers the submit pre-fill types into application forms. This
+# is the ONLY place these PII facts live; `jobify.profile_loader
+# .load_application_defaults()` is the single read surface, and the submit
+# adapters (`jobify/submit/adapters/_common.py::applicant_fields`) read every
+# key below. Keep values phrased as you'd want them to appear in a form.
+#
+# Every key here is read by the submitter — do not rename them:
+application_defaults:
+  # Work authorization. Typical values: us_citizen | permanent_resident |
+  # visa_holder | needs_sponsorship. Used to answer "Are you authorized to
+  # work in the US?" style questions.
+  work_authorization: us_citizen
+  # Boolean. true if you need visa sponsorship now or in the future.
+  visa_sponsorship_needed: false
+  # Free text — how soon you can start. Phrased for a form field.
+  earliest_start_date: as early as possible; typical notice is two weeks after offer acceptance
+  # Free text — your relocation stance, in your own words.
+  relocation_willingness: based in Denver, CO; open to relocation for the right role and compensation, otherwise prefers remote or local
+  # Free text — remote/hybrid/in-person preference.
+  in_person_willingness: remote or hybrid preferred; open to occasional travel
+  # Free text — your standing statement on AI-assistance use, for forms that
+  # ask about it. Keep it honest and human-in-the-loop.
+  ai_policy_ack: |
+    I use AI tools to accelerate drafting, research, and exploration, but I
+    keep a human in the loop: I review, validate, and take responsibility
+    for all work I produce.
+  # Map of company-slug → bool ("have you interviewed here before?").
+  # Starts empty; extend per company as your history accumulates, e.g.
+  #   previous_interview_with_company:
+  #     stripe: true
+  #     datadog: false
+  previous_interview_with_company: {}
+
+# ── personal ──────────────────────────────────────────────────────────────
+# Optional color — hobbies, location story, anything that humanizes a cover
+# letter when a role's culture invites it. The tailor uses this sparingly.
+personal: |
+  Based in Denver after a few years in the Bay Area. Trail runner, amateur
+  woodworker, and a reliable source of overengineered home-automation
+  projects. Helps run a local backend-engineering meetup.

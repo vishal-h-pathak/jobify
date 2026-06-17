@@ -15,7 +15,8 @@ import yaml
 from jobify.hunt.sources._portals import passes_title_filter
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PORTALS = REPO_ROOT / "jobify" / "hunt" / "profile" / "portals.yml"
+# WS-A1: portals.yml lives in the consolidated profile directory now.
+PORTALS = REPO_ROOT / "profile" / "portals.yml"
 
 
 def _load() -> dict:

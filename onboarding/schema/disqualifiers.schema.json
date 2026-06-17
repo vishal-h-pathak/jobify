@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jobify/onboarding/schema/disqualifiers.schema.json",
+  "title": "disqualifiers.yml",
+  "description": "Hard dealbreakers + soft concerns read by the hunt scorer (jobify.profile_loader.load_disqualifiers()). hard_disqualifiers short-circuit a posting into the 'disqualify' tier; soft_concerns lower the score and should be surfaced in the scorer's reasoning. Both are lists of free-text strings the LLM reads.",
+  "type": "object",
+  "required": ["hard_disqualifiers", "soft_concerns"],
+  "properties": {
+    "hard_disqualifiers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Dealbreakers. A posting matching any of these is floored and not surfaced."
+    },
+    "soft_concerns": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Non-fatal concerns. Drag the score down; the scorer should call them out."
+    }
+  },
+  "additionalProperties": true
+}
