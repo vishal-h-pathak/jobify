@@ -49,10 +49,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# pdfminer.six: pure-Python PDF text extractor used by the resume-template
-# parse-gate (tests/test_resume_templates.py) so the gate runs in CI without
-# requiring the poppler `pdftotext` system binary.
-dev = ["pytest>=8", "ruff>=0.5", "pdfminer.six>=20221105"]
+# pdfminer.six: pure-Python PDF text extractor for the resume-template
+# parse-gate (tests/test_resume_templates.py) so it runs in CI without the
+# poppler `pdftotext` system binary.
+# jsonschema: strict Draft 2020-12 pass in onboarding/validate_profile.py
+# (falls back to required-key checks when absent, so it stays dev-only).
+dev = ["pytest>=8", "ruff>=0.5", "pdfminer.six>=20221105", "jsonschema>=4.18"]
 
 [project.scripts]
 # PR-3: hunt orchestrator console script. Calls the hunt agent's `run()`
