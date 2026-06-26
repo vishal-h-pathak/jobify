@@ -1,3 +1,5 @@
+> Cross-project context: ~/dev/jarvis/memory/INDEX.md — read it before asking the user to re-explain. This repo's capsule: ~/dev/jarvis/memory/projects/jobify.md
+
 # jobify — Agent Guide
 
 > **The candidate persona is NOT in this file.** All persona data — identity,
