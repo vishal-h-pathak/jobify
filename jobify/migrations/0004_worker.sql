@@ -23,3 +23,18 @@
 -- onboarding that the worker hasn't picked up for a scoring run).
 
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS validation_status TEXT;
+
+
+-- ══════════════════════════════════════════════════════════════════════════
+--  budget_ledger.user_id → nullable (H4 Task 2: embeddings)
+-- ══════════════════════════════════════════════════════════════════════════
+-- `budget_ledger.user_id` was NOT NULL in 0002_multitenant.sql, but posting
+-- embeddings (jobify.hosted.embed.ensure_posting_embedding) are a GLOBAL
+-- cost: a shared posting is embedded ONCE and reused by every user's
+-- match, so no single user owns that spend. Loosening a NOT NULL
+-- constraint is additive/safe — it never breaks existing rows, all of
+-- which already have a non-null user_id. Profile-embedding ledger rows
+-- (jobify.hosted.embed.ensure_profile_embedding) keep writing the
+-- specific user_id; only the global posting-embedding rows use NULL.
+
+ALTER TABLE budget_ledger ALTER COLUMN user_id DROP NOT NULL;

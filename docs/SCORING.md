@@ -120,6 +120,43 @@ recompiles, cheaply:
   once `NEEDS_RECOMPILE_MIN_EVENTS` (20) events have accumulated, or once
   dismissals exceed `NEEDS_RECOMPILE_DISMISS_RATIO` (60%) of events.
 
+## Stage 3 — embedding rerank
+
+`jobify/hosted/embed.py` (H4 Task 2) computes vector embeddings for
+postings and profiles so stage 3 can rerank stage 2's survivors by
+`cosine(profile_embedding, posting_embedding)` before stage 4 spends any
+LLM tokens.
+
+**Provider: Voyage AI, `voyage-3.5-lite`.** Confirmed against Voyage's
+docs (2026-07): `voyage-3.5-lite` supports an explicit `output_dimension`
+parameter with valid values `{256, 512, 1024, 2048}` (default 1024). We
+request `output_dimension=1024` explicitly on every call so the vectors
+match the existing `vector(1024)` columns on `profiles.embedding` and
+`postings.embedding` (`jobify/migrations/0002_multitenant.sql`) — no
+dimension-altering migration was needed.
+
+**Cost:** $0.02 per 1M input tokens (first 200M tokens free on a new
+Voyage account), no separate output-token charge for embeddings. A
+typical posting description (~500-800 tokens after the existing 3000-char
+truncation the hunt sources already apply) costs roughly $0.00001-0.000016
+— and it's paid ONCE per posting, shared across every user who ends up
+matched against it, not once per user. Every embedding call writes an
+`event='embedding'` row to `budget_ledger` (real token counts from
+Voyage's `total_tokens` response field, not estimated): posting-embedding
+rows use `user_id=None` (a global, unattributed cost —
+`jobify/migrations/0004_worker.sql` drops `budget_ledger.user_id`'s NOT
+NULL for exactly this case); profile-embedding rows use the specific
+`user_id`.
+
+**Degradation:** embeddings are OFF — cleanly skipped, no exception, no
+network call — whenever `EMBEDDINGS_ENABLED=false` (or unset with
+`VOYAGE_API_KEY` empty). `jobify.hosted.embed.embeddings_enabled()` is the
+single source of truth every call site checks first; `embed_texts()` and
+the `ensure_*_embedding()` helpers all return `None`/`False` rather than
+raising in that state. The ladder still works end-to-end (stage 1 -> 2 ->
+4) with stage 3 skipped — Task 3's fan-out treats a missing embedding
+exactly like "no rerank happened," not an error.
+
 ## Profile source: directory or DB row
 
 Everything above reads the profile through `jobify.profile_loader`, which

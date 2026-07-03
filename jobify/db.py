@@ -13,10 +13,15 @@ Tables touched:
     - ``star_stories``          — reserved (no helpers here yet; PR-9 will
                                    move tailor's star-story queries in
                                    when those modules consolidate)
-    - ``profiles``               — ``validation_status`` only (H4); the
-                                   8-file ``doc`` contract itself is read
-                                   via ``jobify.profile_loader``
-    - ``budget_ledger``          — append-only per-user token/cost events
+    - ``profiles``               — ``validation_status`` + ``embedding``
+                                   (H4); the 8-file ``doc`` contract itself
+                                   is read via ``jobify.profile_loader``
+    - ``postings``                — GLOBAL job-postings pool (no user_id),
+                                   written once per cycle by H4 Task 2's
+                                   discovery worker, keyed by
+                                   ``jobify.shared.jobid.make_job_id``
+    - ``budget_ledger``          — append-only per-user (or global,
+                                   ``user_id=None``) token/cost events
                                    (H4 fan-out worker + H2 rubric compiler)
     - ``budget_caps``            — per-user monthly spend cap (read-only
                                    here; caps are set out of band)
@@ -236,8 +241,17 @@ def set_profile_validation_status(user_id: str, status: str) -> None:
     ).eq("user_id", user_id).execute()
 
 
+def list_profile_user_ids() -> list[str]:
+    """Every `user_id` with a `profiles` row — the hosted worker's roster
+    for a discovery/fan-out cycle (H4 Task 2). Global discovery unions
+    every one of these users' `portals.yml` boards before fetching.
+    """
+    rows = _get_client().table("profiles").select("user_id").execute().data or []
+    return [r["user_id"] for r in rows if r.get("user_id")]
+
+
 def insert_budget_ledger_row(
-    user_id: str,
+    user_id: str | None,
     event: str,
     *,
     model: str | None = None,
@@ -252,6 +266,12 @@ def insert_budget_ledger_row(
     `event` is free text by convention, not a CHECK-constrained enum:
     the hosted plan already names `'rubric_compile'`, `'llm_verdict'`,
     and `'embedding'` as the values callers use.
+
+    `user_id=None` is valid (H4 Task 2, `0004_worker.sql` drops the column's
+    NOT NULL) for a cost that isn't attributable to any single user — e.g.
+    a shared posting embedding computed once and reused by every user's
+    match. Every other event stays attributed to the specific user whose
+    action incurred the cost.
     """
     _get_client().table("budget_ledger").insert(
         {
@@ -314,6 +334,92 @@ def get_budget_cap(user_id: str) -> float:
         return DEFAULT_MONTHLY_USD_CAP
     value = rows[0].get("monthly_usd_cap")
     return float(value) if value is not None else DEFAULT_MONTHLY_USD_CAP
+
+
+def upsert_posting(job: dict) -> None:
+    """Upsert one row into the GLOBAL `postings` pool (H4 Task 2 discovery).
+
+    Keyed by `jobify.shared.jobid.make_job_id`'s deterministic id — the
+    same scheme the single-user `jobs` table uses — so two users watching
+    the same board collapse to ONE row here, never two. On conflict
+    (posting already seen), refreshes `last_seen_at` plus every field
+    worth re-checking on a re-sighting (`title`, `location`, `description`,
+    `application_url`, `ats_kind`, `link_status`) rather than silently
+    dropping them; `first_seen_at` is deliberately left OUT of the payload
+    so its own column DEFAULT (`now()`) only fires on the initial insert
+    and a re-upsert never overwrites it.
+
+    Service-role write via `_get_client()` — matches `upsert_job`'s
+    pattern exactly. `postings` RLS allows SELECT-all to authed users but
+    has no insert/update policy, so an anon-scoped client would silently
+    no-op here.
+    """
+    _get_client().table("postings").upsert(
+        {
+            "id": job["id"],
+            "title": job.get("title"),
+            "company": job.get("company"),
+            "location": job.get("location"),
+            "description": job.get("description"),
+            "application_url": job.get("application_url"),
+            "ats_kind": job.get("ats_kind"),
+            "link_status": job.get("link_status"),
+            "source": job.get("source"),
+            "last_seen_at": _utcnow(),
+        },
+        on_conflict="id",
+    ).execute()
+
+
+def get_posting_embedding(posting_id: str) -> list[float] | None:
+    """Return `postings.embedding` for `posting_id`, or `None` if the row
+    is missing or has no embedding yet. Read by
+    `jobify.hosted.embed.ensure_posting_embedding` to skip re-computing an
+    embedding a prior cycle (or another user's fan-out) already stored —
+    posting embeddings are global and computed exactly once.
+    """
+    result = (
+        _get_client().table("postings")
+        .select("embedding")
+        .eq("id", posting_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return None
+    return rows[0].get("embedding")
+
+
+def set_posting_embedding(posting_id: str, embedding: list[float]) -> None:
+    """Write a computed embedding to `postings.embedding`."""
+    _get_client().table("postings").update(
+        {"embedding": embedding}
+    ).eq("id", posting_id).execute()
+
+
+def get_profile_embedding(user_id: str) -> list[float] | None:
+    """Return `profiles.embedding` for `user_id`, or `None` if the row is
+    missing or has no embedding yet. Read by
+    `jobify.hosted.embed.ensure_profile_embedding` when it isn't forced to
+    recompute.
+    """
+    result = (
+        _get_client().table("profiles")
+        .select("embedding")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return None
+    return rows[0].get("embedding")
+
+
+def set_profile_embedding(user_id: str, embedding: list[float]) -> None:
+    """Write a computed embedding to `profiles.embedding`."""
+    _get_client().table("profiles").update(
+        {"embedding": embedding}
+    ).eq("user_id", user_id).execute()
 
 
 # ══════════════════════════════════════════════════════════════════════════

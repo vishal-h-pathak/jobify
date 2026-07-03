@@ -154,8 +154,17 @@ def _fetch_one(row: dict) -> Iterable[dict]:
     )
 
 
-def fetch():
-    """Yield job dicts from every Workday tenant in portals.yml."""
-    for row in workday_tenants():
+def fetch(tenants: list[dict] | None = None):
+    """Yield job dicts from every Workday tenant in portals.yml.
+
+    ``tenants`` optionally overrides the portals.yml-derived tenant-row
+    list — the H4 hosted discovery worker (``jobify.hosted.discovery``)
+    passes the UNION of every user's tenants here so one process fetch
+    serves everyone, instead of re-deriving the single active profile's
+    list. Omit it (every existing ``jobify-hunt`` call site) and behavior
+    is byte-identical to before.
+    """
+    rows = tenants if tenants is not None else workday_tenants()
+    for row in rows:
         yield from _fetch_one(row)
         sleep_between_requests()

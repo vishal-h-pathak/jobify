@@ -1,12 +1,13 @@
 """tests/test_db_hosted.py — jobify.db's H4 additions.
 
-`set_profile_validation_status`, `insert_budget_ledger_row`,
-`get_month_to_date_spend`, `get_budget_cap`: the profile-validation write
-and budget-ledger read/write helpers Task 2/3 (embeddings, rubric
-compile, LLM verdict, the stage-4 budget check) call. Chainable Supabase
-double, mirroring `tests/test_manual_upsert.py` / `tests/test_rescore.py`'s
-pattern. Wired in via the shared `patch_db_client` fixture
-(`tests/conftest.py`) — no live Supabase.
+`set_profile_validation_status`, `list_profile_user_ids`,
+`insert_budget_ledger_row`, `get_month_to_date_spend`, `get_budget_cap`,
+`upsert_posting`, and the posting/profile embedding get/set helpers: the
+profile-validation write, budget-ledger read/write, and (Task 2) global
+discovery + embedding storage helpers the hosted worker calls. Chainable
+Supabase double, mirroring `tests/test_manual_upsert.py` /
+`tests/test_rescore.py`'s pattern. Wired in via the shared
+`patch_db_client` fixture (`tests/conftest.py`) — no live Supabase.
 """
 
 from __future__ import annotations
@@ -37,6 +38,8 @@ class _FakeQuery:
         self._mode: str | None = None
         self.insert_payload: dict | None = None
         self.update_payload: dict | None = None
+        self.upsert_payload: dict | None = None
+        self.upsert_on_conflict: str | None = None
         self.eq_calls: list[tuple[str, object]] = []
         self.gte_calls: list[tuple[str, object]] = []
 
@@ -54,6 +57,12 @@ class _FakeQuery:
         self.update_payload = payload
         return self
 
+    def upsert(self, payload, on_conflict=None):
+        self._mode = "upsert"
+        self.upsert_payload = payload
+        self.upsert_on_conflict = on_conflict
+        return self
+
     def eq(self, col, val):
         self.eq_calls.append((col, val))
         self._rows = [r for r in self._rows if r.get(col) == val]
@@ -64,7 +73,7 @@ class _FakeQuery:
         return self
 
     def execute(self):
-        if self._mode in ("insert", "update"):
+        if self._mode in ("insert", "update", "upsert"):
             return _FakeResult([])
         return _FakeResult(list(self._rows))
 
@@ -192,3 +201,146 @@ def test_get_budget_cap_falls_back_to_default_when_row_missing(patch_db_client):
 
     assert db.get_budget_cap("user-1") == db.DEFAULT_MONTHLY_USD_CAP
     assert db.DEFAULT_MONTHLY_USD_CAP == 5.00
+
+
+# ── list_profile_user_ids (H4 Task 2) ────────────────────────────────────
+
+
+def test_list_profile_user_ids_returns_every_row(patch_db_client):
+    fake = _FakeClient({
+        "profiles": [{"user_id": "user-1"}, {"user_id": "user-2"}],
+    })
+    patch_db_client(fake)
+
+    assert db.list_profile_user_ids() == ["user-1", "user-2"]
+
+
+def test_list_profile_user_ids_empty_table(patch_db_client):
+    fake = _FakeClient({"profiles": []})
+    patch_db_client(fake)
+
+    assert db.list_profile_user_ids() == []
+
+
+# ── insert_budget_ledger_row: nullable user_id (H4 Task 2) ──────────────
+
+
+def test_insert_budget_ledger_row_accepts_null_user_id_for_global_cost(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.insert_budget_ledger_row(
+        None, "embedding", model="voyage-3.5-lite", input_tokens=50, cost_usd=0.000001,
+    )
+
+    _, q = fake.queries[-1]
+    assert q.insert_payload["user_id"] is None
+    assert q.insert_payload["event"] == "embedding"
+
+
+# ── upsert_posting (H4 Task 2 discovery) ─────────────────────────────────
+
+
+def _posting_job(**overrides):
+    job = {
+        "id": "posting-1",
+        "title": "Platform Engineer",
+        "company": "Acme Co",
+        "location": "Remote",
+        "description": "desc",
+        "application_url": "https://boards.greenhouse.io/acmeco/jobs/1",
+        "ats_kind": "greenhouse",
+        "link_status": "direct",
+        "source": "greenhouse",
+    }
+    job.update(overrides)
+    return job
+
+
+def test_upsert_posting_writes_expected_payload_and_on_conflict(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.upsert_posting(_posting_job())
+
+    name, q = fake.queries[-1]
+    assert name == "postings"
+    assert q.upsert_on_conflict == "id"
+    payload = q.upsert_payload
+    assert payload["id"] == "posting-1"
+    assert payload["title"] == "Platform Engineer"
+    assert payload["application_url"] == "https://boards.greenhouse.io/acmeco/jobs/1"
+    assert payload["ats_kind"] == "greenhouse"
+    assert payload["link_status"] == "direct"
+    assert payload["source"] == "greenhouse"
+    assert "last_seen_at" in payload
+    # first_seen_at is deliberately absent so the column's own DB DEFAULT
+    # only fires on the initial insert and a re-upsert never touches it.
+    assert "first_seen_at" not in payload
+
+
+def test_upsert_posting_uses_service_role_client(patch_db_client):
+    """Matches upsert_job's pattern exactly: writes go through
+    `_get_client()`, the same client attribute the single-user pipeline's
+    write helpers use (refuses a demonstrably-anon key)."""
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.upsert_posting(_posting_job())
+
+    assert fake.queries[-1][0] == "postings"
+
+
+# ── posting/profile embedding get/set (H4 Task 2 embed.py) ──────────────
+
+
+def test_get_posting_embedding_returns_none_when_missing(patch_db_client):
+    fake = _FakeClient({"postings": []})
+    patch_db_client(fake)
+
+    assert db.get_posting_embedding("posting-1") is None
+
+
+def test_get_posting_embedding_returns_stored_vector(patch_db_client):
+    fake = _FakeClient({"postings": [{"id": "posting-1", "embedding": [0.1, 0.2]}]})
+    patch_db_client(fake)
+
+    assert db.get_posting_embedding("posting-1") == [0.1, 0.2]
+
+
+def test_set_posting_embedding_writes_expected_payload(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.set_posting_embedding("posting-1", [0.1, 0.2])
+
+    name, q = fake.queries[-1]
+    assert name == "postings"
+    assert q.update_payload == {"embedding": [0.1, 0.2]}
+    assert q.eq_calls == [("id", "posting-1")]
+
+
+def test_get_profile_embedding_returns_none_when_missing(patch_db_client):
+    fake = _FakeClient({"profiles": []})
+    patch_db_client(fake)
+
+    assert db.get_profile_embedding("user-1") is None
+
+
+def test_get_profile_embedding_returns_stored_vector(patch_db_client):
+    fake = _FakeClient({"profiles": [{"user_id": "user-1", "embedding": [0.3, 0.4]}]})
+    patch_db_client(fake)
+
+    assert db.get_profile_embedding("user-1") == [0.3, 0.4]
+
+
+def test_set_profile_embedding_writes_expected_payload(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.set_profile_embedding("user-1", [0.3, 0.4])
+
+    name, q = fake.queries[-1]
+    assert name == "profiles"
+    assert q.update_payload == {"embedding": [0.3, 0.4]}
+    assert q.eq_calls == [("user_id", "user-1")]

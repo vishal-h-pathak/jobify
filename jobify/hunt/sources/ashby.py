@@ -81,9 +81,17 @@ def _fetch_one(slug: str, display_name: str):
     )
 
 
-def fetch():
-    """Yield job dicts from every tracked Ashby board."""
-    targets = companies("ashby") or _FALLBACK_COMPANIES
-    for slug, name in targets:
+def fetch(targets: list[tuple[str, str]] | None = None):
+    """Yield job dicts from every tracked Ashby board.
+
+    ``targets`` optionally overrides the portals.yml-derived company list
+    with an explicit ``[(slug, name), ...]`` list — the H4 hosted discovery
+    worker (``jobify.hosted.discovery``) passes the UNION of every user's
+    boards here so one process fetch serves everyone, instead of
+    re-deriving the single active profile's list. Omit it (every existing
+    ``jobify-hunt`` call site) and behavior is byte-identical to before.
+    """
+    boards = targets if targets is not None else (companies("ashby") or _FALLBACK_COMPANIES)
+    for slug, name in boards:
         yield from _fetch_one(slug, name)
         sleep_between_requests()
