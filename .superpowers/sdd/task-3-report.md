@@ -278,3 +278,65 @@ needed; `0004_worker.sql` untouched.
 
 No functional issues found in self-review; no changes made post-review
 beyond what's captured above as documented, intentional decisions.
+
+## Fix note — profile-embedding recompute on thesis change (post-review)
+
+Review flagged the self-review gap above as an Important defect, not just
+a documented gap: stage 3's cosine rerank silently kept using a user's
+FIRST-EVER profile embedding forever, even after a `thesis.md` edit —
+unlike stage 2 (rubric, re-reads `load_thesis` fresh) and stage 4 (LLM
+verdict, same), which both reflect edits immediately. `embed.py`'s
+docstring and the original brief both framed "recompute when the
+profile's underlying text changed" as the expected behavior.
+
+**Mechanism (no migration, no new `profiles` column):** two on-disk stamp
+files, both living in the same per-user cache dir
+`materialize_profile_dir(user_id)` already returns:
+
+- `profile_loader.materialize_profile_dir` already writes
+  `.materialized_updated_at` (`_STAMP_FILENAME`) recording
+  `profiles.updated_at` on every (re)materialization. Added
+  `profile_loader.get_materialized_updated_at(profile_dir) -> str` to read
+  it back — zero extra DB round-trips, reuses the fetch
+  `materialize_profile_dir` already did.
+- `fanout.py` adds its own sibling stamp, `.embedding_stamp`
+  (`_EMBEDDING_STAMP_FILENAME`), recording the `updated_at` value as of
+  the last successful profile-embedding recompute
+  (`_embedding_stamp_path` / `_embedding_is_stale` / `_mark_embedding_fresh`).
+
+In `_stage3_embed_rerank`: compare `get_materialized_updated_at(profile_dir)`
+against `.embedding_stamp` via `_embedding_is_stale` to compute `force`,
+pass `force=force` into `embed.ensure_profile_embedding`, and only rewrite
+`.embedding_stamp` when `ensure_profile_embedding` actually returns `True`
+(a real recompute happened) — a failed/no-op call leaves the stamp stale
+so the next cycle retries rather than silently accepting a missing or
+outdated vector. Unchanged profiles compare equal on the second cycle and
+skip the recompute (no wasted Voyage call / ledger row every cycle); a
+changed `profiles.updated_at` (thesis edit -> re-materialization ->
+`.materialized_updated_at` moves) makes the comparison unequal and forces
+exactly one fresh recompute, after which the stamps re-converge.
+
+**Tests added** (`tests/test_hosted_fanout.py`):
+`test_embedding_recompute_skipped_when_profile_unchanged` (two cycles,
+same `.materialized_updated_at` -> `force` sequence `[True, False]`) and
+`test_embedding_recompute_triggered_when_profile_updated_at_changes`
+(stamp file rewritten between cycles -> `force` sequence `[True, True]`).
+Both fake `embed.ensure_profile_embedding` directly to isolate the `force`
+decision from Voyage-call mechanics (already covered elsewhere).
+
+**Results:**
+
+```
+$ python -m pytest tests/test_hosted_fanout.py tests/test_hosted_embed.py tests/test_db_hosted.py -q
+61 passed (was 59; +2 new)
+
+$ python -m pytest -q   # full suite
+584 passed, 1 skipped, 26 deselected   (was 582 passed pre-fix)
+
+$ python -m ruff check jobify/hosted/fanout.py jobify/profile_loader.py tests/test_hosted_fanout.py
+All checks passed!
+```
+
+Files touched: `jobify/hosted/fanout.py`, `jobify/profile_loader.py`
+(additive `get_materialized_updated_at`), `tests/test_hosted_fanout.py`.
+No migration, no `0004_worker.sql` change.

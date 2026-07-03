@@ -234,6 +234,23 @@ def materialize_profile_dir(user_id: str) -> Path:
     return cache_dir
 
 
+def get_materialized_updated_at(profile_dir: Path) -> str:
+    """Return the `profiles.updated_at` value recorded for `profile_dir` by
+    the last `materialize_profile_dir()` call that wrote to it.
+
+    Reads `_STAMP_FILENAME` back off disk — no DB round-trip — so callers
+    that already hold a materialized dir (H4's fan-out worker, deciding
+    whether to force a profile-embedding recompute) can compare against
+    it without duplicating `_fetch_profile_row`. Returns `""` when the
+    stamp file is missing (a dir not produced by `materialize_profile_dir`,
+    e.g. `profile.example/` or a test fixture) rather than raising.
+    """
+    stamp_path = profile_dir / _STAMP_FILENAME
+    if not stamp_path.is_file():
+        return ""
+    return stamp_path.read_text(encoding="utf-8").strip()
+
+
 # Pre-H4 name, kept as an alias: `tests/test_profile_loader_db.py` and
 # `profile_dir()` (below) both call this directly. No behavior difference —
 # `materialize_profile_dir` IS `_materialize_from_db`, just under the public

@@ -59,6 +59,7 @@ import jobify.hunt.agent  # noqa: F401
 from jobify.hunt.rubric import RubricResult
 from jobify.profile_loader import (
     VALIDATION_STATUS_INVALID,
+    get_materialized_updated_at,
     load_disqualifiers_text,
     load_profile,
     load_thesis,
@@ -243,6 +244,45 @@ def _ensure_rubric(user_id: str, profile_dir: Path) -> dict:
     return data
 
 
+# ── Stage 3 support: profile-embedding staleness bookkeeping ─────────────
+#
+# `embed.ensure_profile_embedding` recomputes when the caller passes
+# `force=True`; deciding WHEN to force is this module's job (per
+# `embed.py`'s docstring). We need "has this user's profile changed since
+# the LAST time we computed its embedding" — a different question than
+# `profile_loader._cache_is_stale` answers ("has the DB row changed since
+# the cache dir was last materialized"). No new migration/column: a small
+# sibling stamp file lives alongside the existing per-user cache dir,
+# recording the `profiles.updated_at` value as of the last embedding
+# compute. Compared against `get_materialized_updated_at(profile_dir)`
+# (itself a read of `materialize_profile_dir`'s own stamp file — no extra
+# DB round-trip either) to decide `force`.
+_EMBEDDING_STAMP_FILENAME = ".embedding_stamp"
+
+
+def _embedding_stamp_path(profile_dir: Path) -> Path:
+    return profile_dir / _EMBEDDING_STAMP_FILENAME
+
+
+def _embedding_is_stale(profile_dir: Path, updated_at: str) -> bool:
+    """True when the profile embedding must be recomputed: no prior
+    embedding-stamp exists, or it records a different `updated_at` than
+    the profile's current materialized value."""
+    stamp_path = _embedding_stamp_path(profile_dir)
+    if not stamp_path.is_file():
+        return True
+    return stamp_path.read_text(encoding="utf-8").strip() != str(updated_at).strip()
+
+
+def _mark_embedding_fresh(profile_dir: Path, updated_at: str) -> None:
+    """Record `updated_at` as the profile state the embedding now reflects.
+    Only called after a successful recompute — a failed/no-op
+    `ensure_profile_embedding` call must leave the stamp stale so the next
+    cycle retries rather than silently accepting a missing/outdated vector.
+    """
+    _embedding_stamp_path(profile_dir).write_text(str(updated_at), encoding="utf-8")
+
+
 # ── Stage 3 support: cosine rerank ────────────────────────────────────────
 
 
@@ -284,12 +324,18 @@ def _stage3_embed_rerank(
     if not embed.embeddings_enabled():
         return {}
 
+    updated_at = get_materialized_updated_at(profile_dir)
+    force = _embedding_is_stale(profile_dir, updated_at)
     try:
-        embed.ensure_profile_embedding(user_id, _profile_embed_text(profile_dir))
+        recomputed = embed.ensure_profile_embedding(
+            user_id, _profile_embed_text(profile_dir), force=force,
+        )
         profile_vec = db.get_profile_embedding(user_id)
     except Exception as exc:  # noqa: BLE001 — stage 3 is best-effort, never fatal to the ladder
         logger.error("fanout: profile embedding failed for user_id=%s: %s", user_id, exc)
         return {}
+    if recomputed:
+        _mark_embedding_fresh(profile_dir, updated_at)
     if profile_vec is None:
         return {}
 

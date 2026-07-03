@@ -427,6 +427,72 @@ def test_stage3_skipped_when_embeddings_disabled_ladder_still_completes(tmp_path
     assert stage2_row["embed_score"] is None
 
 
+# ── Stage 3: profile-embedding recompute-on-change (review follow-up) ────
+#
+# `embed.ensure_profile_embedding` only recomputes when `fanout.py` passes
+# `force=True`; `fanout.py` decides that by comparing the profile's
+# materialized `updated_at` stamp (`.materialized_updated_at`, written by
+# `profile_loader.materialize_profile_dir`) against its own sibling
+# `.embedding_stamp` bookkeeping file. These two tests drive that decision
+# directly through two fan-out cycles for the same on-disk profile dir,
+# without touching `jobify.db` or the real Voyage client.
+
+
+def _setup_embedding_recompute_test(tmp_path, monkeypatch, d: Path):
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-1")])
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: None)
+    _fixed_verdict_llm(monkeypatch)
+
+    monkeypatch.setattr(embed, "embeddings_enabled", lambda: True)
+    profile_store: dict[str, list[float]] = {}
+    force_calls: list[bool] = []
+
+    def _fake_ensure_profile_embedding(user_id, text, *, force=False):
+        force_calls.append(force)
+        profile_store[user_id] = [1.0, 0.0]
+        return True  # always "recomputed" when called, so `force_calls` isolates our own decision
+    monkeypatch.setattr(embed, "ensure_profile_embedding", _fake_ensure_profile_embedding)
+    monkeypatch.setattr(db, "get_profile_embedding", lambda uid: profile_store.get(uid))
+    monkeypatch.setattr(embed, "ensure_posting_embedding", lambda pid, text: True)
+    monkeypatch.setattr(db, "get_posting_embedding", lambda pid: [1.0, 0.0])
+    monkeypatch.setattr(db, "set_posting_embedding", lambda pid, vec: None)
+
+    return force_calls
+
+
+def test_embedding_recompute_skipped_when_profile_unchanged(tmp_path, monkeypatch):
+    d = _profile_dir(tmp_path, "user-a")
+    (d / ".materialized_updated_at").write_text("2026-01-01T00:00:00Z", encoding="utf-8")
+    force_calls = _setup_embedding_recompute_test(tmp_path, monkeypatch, d)
+
+    fanout.run_fanout_cycle(["user-a"])
+    fanout.run_fanout_cycle(["user-a"])
+
+    assert force_calls == [True, False], (
+        "unchanged profiles.updated_at across cycles must not re-force the embedding"
+    )
+
+
+def test_embedding_recompute_triggered_when_profile_updated_at_changes(tmp_path, monkeypatch):
+    d = _profile_dir(tmp_path, "user-a")
+    (d / ".materialized_updated_at").write_text("2026-01-01T00:00:00Z", encoding="utf-8")
+    force_calls = _setup_embedding_recompute_test(tmp_path, monkeypatch, d)
+
+    fanout.run_fanout_cycle(["user-a"])
+    (d / ".materialized_updated_at").write_text("2026-02-02T00:00:00Z", encoding="utf-8")
+    fanout.run_fanout_cycle(["user-a"])
+
+    assert force_calls == [True, True], (
+        "a changed profiles.updated_at must force a fresh embedding on the next cycle"
+    )
+
+
 # ── Fan-out isolation (the headline regression test) ─────────────────────
 
 
