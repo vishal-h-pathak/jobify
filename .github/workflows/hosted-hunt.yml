@@ -1,0 +1,68 @@
+name: hosted-hunt
+
+# OPT-IN on a fork, same posture as hunt.yml. Nothing runs until you (a)
+# add the repository secrets read below and (b) un-comment the
+# `schedule:` block to enable the cron. `workflow_dispatch` lets you run
+# it manually without any cron.
+#
+# This is the H4 hosted (multitenant) worker: one cycle = global
+# discovery (jobify.hosted.discovery.run_discovery_cycle — fills the
+# shared `postings` pool once) THEN per-user fan-out scoring
+# (jobify.hosted.fanout.run_fanout_cycle), composed by the
+# `jobify-hosted-hunt` console script (jobify.hosted.worker:run).
+#
+# Deliberately simpler than hunt.yml: no dashboard-run-row integration
+# (scripts/mark_run.py, the `run_id` input) — that's single-user-dashboard
+# plumbing owned by H3 / a later task, not this branch's job.
+
+on:
+  workflow_dispatch: {}
+  # Cron — DISABLED by default. Un-comment to enable on your fork (and
+  # make sure the secrets below are set).
+  # schedule:
+  #   - cron: "0 14 * * *"
+
+jobs:
+  hosted-hunt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Claude Code CLI (for OAuth fallback)
+        # jobify.hosted.fanout's stage-2 rubric compile and stage-4 LLM
+        # verdict route through jobify.shared.llm, same as the single-user
+        # scorer — it falls back to the Claude Agent SDK under Max-plan
+        # OAuth when ANTHROPIC_API_KEY is absent or benched by a
+        # billing/credit failure. The SDK spawns the bundled Claude Code
+        # CLI as a subprocess, so it must be on PATH. No-op for the API
+        # path — only invoked when the fallback fires.
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Install package
+        run: pip install -e .
+      - name: Hosted hunt
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Max-plan OAuth fallback (jobify.shared.llm). Used only when
+          # ANTHROPIC_API_KEY is unset or has been benched by a
+          # billing/credit/auth failure. Safe to leave empty if not
+          # configured — the API path stays primary.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # jobify.hosted.embed — profile/posting embeddings. Soft
+          # dependency: EMBEDDINGS_ENABLED defaults true but every call
+          # site degrades cleanly (stage 3 skipped, ladder proceeds
+          # 1 -> 2 -> 4) when this is unset, per docs/SCORING.md.
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          # Discovery (Task 2) unions ALL nine jobify.hunt.sources
+          # fetchers across every hosted user's portals.yml, including
+          # the two paid keyword-search sources — not single-user-only,
+          # so this workflow needs them too.
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          JSEARCH_API_KEY: ${{ secrets.JSEARCH_API_KEY }}
+        run: jobify-hosted-hunt --once

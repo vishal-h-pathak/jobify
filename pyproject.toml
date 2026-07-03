@@ -30,6 +30,10 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "httpx>=0.27.0",
     "pyyaml>=6.0",
+    # Hosted (H4): posting/profile embeddings (jobify.hosted.embed). Soft
+    # dependency in practice — VOYAGE_API_KEY unset / EMBEDDINGS_ENABLED=false
+    # skips every call site before this package is ever imported.
+    "voyageai>=0.3.0",
     # Hunt
     "feedparser>=6.0.11",
     "requests>=2.32.0",
@@ -83,6 +87,13 @@ jobify-submit = "jobify.tailor.pipeline:run_submit_only"
 # Amendment 1). Triggered from the portfolio dashboard via the
 # tailor-manual.yml GHA workflow.
 jobify-tailor-one = "jobify.tailor.manual.cli:run"
+# H4 Task 4: hosted (multitenant) worker console script. One cycle =
+# jobify.hosted.discovery.run_discovery_cycle() (global posting fetch)
+# THEN jobify.hosted.fanout.run_fanout_cycle() (per-user scoring ladder),
+# composed by jobify.hosted.worker:run — mirrors jobify-hunt's single-shot
+# console-script pattern; cron / .github/workflows/hosted-hunt.yml handles
+# recurrence.
+jobify-hosted-hunt = "jobify.hosted.worker:run"
 
 [tool.setuptools]
 # Each listed package needs to be installed so setuptools wires up the
@@ -95,6 +106,7 @@ packages = [
     "jobify",
     "jobify.resume_templates",
     "jobify.shared",
+    "jobify.hosted",
     "jobify.hunt",
     "jobify.tailor",
     "jobify.tailor.tailor",

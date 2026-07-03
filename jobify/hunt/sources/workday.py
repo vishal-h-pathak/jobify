@@ -72,8 +72,16 @@ def _fetch_job_detail(tenant: str, site: str, dc: str, external_path: str) -> di
     return data or {}
 
 
-def _fetch_one(row: dict) -> Iterable[dict]:
-    """Yield jobs for one Workday tenant config row."""
+def _fetch_one(row: dict, apply_title_filter: bool = True) -> Iterable[dict]:
+    """Yield jobs for one Workday tenant config row.
+
+    ``apply_title_filter=False`` skips the process-global-profile title
+    gate entirely — used by the H4 hosted discovery worker
+    (``jobify.hosted.discovery``), which fetches into the SHARED postings
+    pool and must not let one arbitrary profile's title/seniority
+    preferences drop a posting before any other hosted user ever sees it.
+    Per-user title filtering happens downstream, in Task 3's fan-out.
+    """
     tenant = (row.get("tenant") or "").strip()
     site = (row.get("site") or "").strip()
     dc = (row.get("dc") or "wd1").strip()
@@ -110,7 +118,7 @@ def _fetch_one(row: dict) -> Iterable[dict]:
             location = p.get("locationsText") or "Unknown"
             external_path = p.get("externalPath") or ""
 
-            if not passes_title_filter(title):
+            if apply_title_filter and not passes_title_filter(title):
                 skipped_title += 1
                 continue
             if location_filter_enabled() and not is_local_or_remote(location):
@@ -154,8 +162,24 @@ def _fetch_one(row: dict) -> Iterable[dict]:
     )
 
 
-def fetch():
-    """Yield job dicts from every Workday tenant in portals.yml."""
-    for row in workday_tenants():
-        yield from _fetch_one(row)
+def fetch(tenants: list[dict] | None = None, apply_title_filter: bool = True):
+    """Yield job dicts from every Workday tenant in portals.yml.
+
+    ``tenants`` optionally overrides the portals.yml-derived tenant-row
+    list — the H4 hosted discovery worker (``jobify.hosted.discovery``)
+    passes the UNION of every user's tenants here so one process fetch
+    serves everyone, instead of re-deriving the single active profile's
+    list. Omit it (every existing ``jobify-hunt`` call site) and behavior
+    is byte-identical to before.
+
+    ``apply_title_filter`` defaults to True (current behavior — the
+    process-global-profile title gate applies) so every existing
+    single-user call site is byte-identical. The hosted discovery worker
+    passes ``apply_title_filter=False`` since discovery's job is landing
+    postings in the shared pool, not filtering by one profile's title
+    preferences.
+    """
+    rows = tenants if tenants is not None else workday_tenants()
+    for row in rows:
+        yield from _fetch_one(row, apply_title_filter=apply_title_filter)
         sleep_between_requests()

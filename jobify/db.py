@@ -13,6 +13,18 @@ Tables touched:
     - ``star_stories``          — reserved (no helpers here yet; PR-9 will
                                    move tailor's star-story queries in
                                    when those modules consolidate)
+    - ``profiles``               — ``validation_status`` + ``embedding``
+                                   (H4); the 8-file ``doc`` contract itself
+                                   is read via ``jobify.profile_loader``
+    - ``postings``                — GLOBAL job-postings pool (no user_id),
+                                   written once per cycle by H4 Task 2's
+                                   discovery worker, keyed by
+                                   ``jobify.shared.jobid.make_job_id``
+    - ``budget_ledger``          — append-only per-user (or global,
+                                   ``user_id=None``) token/cost events
+                                   (H4 fan-out worker + H2 rubric compiler)
+    - ``budget_caps``            — per-user monthly spend cap (read-only
+                                   here; caps are set out of band)
 
 Behavior contract (preserves PR-6's failure split):
     - ``mark_tailor_failed`` is the canonical tailor-side failure
@@ -203,6 +215,330 @@ def get_seen_ids() -> set[str]:
     """All canonical job ids the hunter has already seen — for cross-source dedup."""
     rows = _get_client().table("jobs").select("id").execute().data or []
     return {r["id"] for r in rows}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  HOSTED — per-user profile validation + budget ledger (H4)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# `profiles.validation_status` (0004_worker.sql) and `budget_ledger`
+# (0002_multitenant.sql) both back the fan-out worker's per-user ladder:
+# a profile that fails materialization validation must not get scored,
+# and every ledger-eligible LLM/embedding call must land a row here so
+# the stage-4 budget check (H4 Task 3) has real spend to compare against
+# `budget_caps`.
+
+def set_profile_validation_status(
+    user_id: str, status: str, errors: tuple[str, ...] | list[str] = ()
+) -> None:
+    """Write the materialization validator's verdict to
+    `profiles.validation_status`. Shape (H3's 0003 owns the canonical
+    definition — JSONB, reconciled at wave-2 merge review):
+    `{"status": "valid" | "invalid", "errors": [...]}`. H3's onboarding
+    writes `"unchecked"`/`"valid"` from its TS pre-check; this (the real
+    Python validator at materialization time) overwrites it. Called by
+    `jobify.profile_loader._validate_materialized` after every
+    (re-)materialization.
+    """
+    _get_client().table("profiles").update(
+        {"validation_status": {"status": status, "errors": list(errors)}}
+    ).eq("user_id", user_id).execute()
+
+
+def list_profile_user_ids() -> list[str]:
+    """Every `user_id` with a `profiles` row — the hosted worker's roster
+    for a discovery/fan-out cycle (H4 Task 2). Global discovery unions
+    every one of these users' `portals.yml` boards before fetching.
+    """
+    rows = _get_client().table("profiles").select("user_id").execute().data or []
+    return [r["user_id"] for r in rows if r.get("user_id")]
+
+
+def insert_budget_ledger_row(
+    user_id: str | None,
+    event: str,
+    *,
+    model: str | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cost_usd: float = 0.0,
+    run_id: str | None = None,
+) -> None:
+    """Append one `budget_ledger` row. Append-only by RLS design (0002) —
+    no update/delete helper exists for this table on purpose.
+
+    `event` is free text by convention, not a CHECK-constrained enum:
+    the hosted plan already names `'rubric_compile'`, `'llm_verdict'`,
+    and `'embedding'` as the values callers use.
+
+    `user_id=None` is valid (H4 Task 2, `0004_worker.sql` drops the column's
+    NOT NULL) for a cost that isn't attributable to any single user — e.g.
+    a shared posting embedding computed once and reused by every user's
+    match. Every other event stays attributed to the specific user whose
+    action incurred the cost.
+    """
+    _get_client().table("budget_ledger").insert(
+        {
+            "user_id": user_id,
+            "event": event,
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": cost_usd,
+            "run_id": run_id,
+        }
+    ).execute()
+
+
+# `budget_caps.monthly_usd_cap`'s own DB DEFAULT (0002_multitenant.sql) —
+# mirrored here so a user with no `budget_caps` row yet still gets a real
+# cap, not zero (which would look like "cap already exceeded").
+DEFAULT_MONTHLY_USD_CAP = 5.00
+
+
+def get_month_to_date_spend(user_id: str) -> float:
+    """Sum of `budget_ledger.cost_usd` for `user_id` since the start of
+    the current UTC calendar month.
+
+    Filters server-side by `created_at >=` the UTC month start (the
+    Python equivalent of `date_trunc('month', now())`) and sums
+    client-side — the Supabase Python client has no `sum()` aggregate,
+    so this matches this module's existing client-side aggregation style
+    (see `get_job_counts_by_status`).
+    """
+    month_start = datetime.now(timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    result = (
+        _get_client().table("budget_ledger")
+        .select("cost_usd")
+        .eq("user_id", user_id)
+        .gte("created_at", month_start.isoformat())
+        .execute()
+    )
+    rows = result.data or []
+    return sum(float(r.get("cost_usd") or 0) for r in rows)
+
+
+def get_budget_cap(user_id: str) -> float:
+    """Return `budget_caps.monthly_usd_cap` for `user_id`.
+
+    Falls back to `DEFAULT_MONTHLY_USD_CAP` when the row is missing
+    (a user with no cap explicitly provisioned yet) — matching the
+    column's own DB DEFAULT rather than inventing a different fallback.
+    """
+    result = (
+        _get_client().table("budget_caps")
+        .select("monthly_usd_cap")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return DEFAULT_MONTHLY_USD_CAP
+    value = rows[0].get("monthly_usd_cap")
+    return float(value) if value is not None else DEFAULT_MONTHLY_USD_CAP
+
+
+def upsert_posting(job: dict) -> None:
+    """Upsert one row into the GLOBAL `postings` pool (H4 Task 2 discovery).
+
+    Keyed by `jobify.shared.jobid.make_job_id`'s deterministic id — the
+    same scheme the single-user `jobs` table uses — so two users watching
+    the same board collapse to ONE row here, never two. On conflict
+    (posting already seen), refreshes `last_seen_at` plus every field
+    worth re-checking on a re-sighting (`title`, `location`, `description`,
+    `application_url`, `ats_kind`, `link_status`) rather than silently
+    dropping them; `first_seen_at` is deliberately left OUT of the payload
+    so its own column DEFAULT (`now()`) only fires on the initial insert
+    and a re-upsert never overwrites it.
+
+    Service-role write via `_get_client()` — matches `upsert_job`'s
+    pattern exactly. `postings` RLS allows SELECT-all to authed users but
+    has no insert/update policy, so an anon-scoped client would silently
+    no-op here.
+    """
+    # NOTE: no `remote` field is populated here (no hunt source emits a
+    # top-level `remote` key on its job dicts either, single-user pipeline
+    # included) — `jobify.hunt.rubric.score_posting`'s `remote is True`
+    # location-gate branch is therefore currently dead in the hosted
+    # pipeline. Pre-existing gap this branch surfaces, not a regression;
+    # left as-is (see docs/SCORING.md's gates section).
+    _get_client().table("postings").upsert(
+        {
+            "id": job["id"],
+            "title": job.get("title"),
+            "company": job.get("company"),
+            "location": job.get("location"),
+            "description": job.get("description"),
+            "application_url": job.get("application_url"),
+            "ats_kind": job.get("ats_kind"),
+            "link_status": job.get("link_status"),
+            "source": job.get("source"),
+            "last_seen_at": _utcnow(),
+        },
+        on_conflict="id",
+    ).execute()
+
+
+def get_posting_embedding(posting_id: str) -> list[float] | None:
+    """Return `postings.embedding` for `posting_id`, or `None` if the row
+    is missing or has no embedding yet. Read by
+    `jobify.hosted.embed.ensure_posting_embedding` to skip re-computing an
+    embedding a prior cycle (or another user's fan-out) already stored —
+    posting embeddings are global and computed exactly once.
+    """
+    result = (
+        _get_client().table("postings")
+        .select("embedding")
+        .eq("id", posting_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return None
+    return rows[0].get("embedding")
+
+
+def set_posting_embedding(posting_id: str, embedding: list[float]) -> None:
+    """Write a computed embedding to `postings.embedding`."""
+    _get_client().table("postings").update(
+        {"embedding": embedding}
+    ).eq("id", posting_id).execute()
+
+
+def get_profile_embedding(user_id: str) -> list[float] | None:
+    """Return `profiles.embedding` for `user_id`, or `None` if the row is
+    missing or has no embedding yet. Read by
+    `jobify.hosted.embed.ensure_profile_embedding` when it isn't forced to
+    recompute.
+    """
+    result = (
+        _get_client().table("profiles")
+        .select("embedding")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return None
+    return rows[0].get("embedding")
+
+
+def set_profile_embedding(user_id: str, embedding: list[float]) -> None:
+    """Write a computed embedding to `profiles.embedding`."""
+    _get_client().table("profiles").update(
+        {"embedding": embedding}
+    ).eq("user_id", user_id).execute()
+
+
+def get_profile_validation_status(user_id: str) -> str | None:
+    """Return `profiles.validation_status` for `user_id`, or `None` if the
+    row is missing OR the column itself is `NULL` (never
+    materialized/validated yet — see
+    `jobify.profile_loader._validate_materialized`'s early return when the
+    `onboarding` package isn't importable).
+
+    Read by `jobify.hosted.fanout` before running ANY stage for a user:
+    an explicit `'invalid'` skips the user entirely this cycle; `None`
+    (never validated) is treated as "proceed" (fail open), matching the
+    contract documented on `jobify.profile_loader.VALIDATION_STATUS_INVALID`.
+    """
+    result = (
+        _get_client().table("profiles")
+        .select("validation_status")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return None
+    value = rows[0].get("validation_status")
+    if isinstance(value, dict):
+        return value.get("status")
+    # Tolerate a legacy bare-string write (pre-reconciliation TEXT shape).
+    return value
+
+
+def get_compiled_rubric(user_id: str) -> dict | None:
+    """Return `profiles.compiled_rubric` for `user_id`, or `None` if the
+    row is missing or the column is `NULL` (never compiled — H4 Task 3's
+    fan-out compiles it on first use and persists it via
+    `set_compiled_rubric`).
+    """
+    result = (
+        _get_client().table("profiles")
+        .select("compiled_rubric")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return None
+    return rows[0].get("compiled_rubric")
+
+
+def set_compiled_rubric(user_id: str, rubric: dict) -> None:
+    """Persist a freshly-compiled rubric (`jobify.hunt.rubric.compile_rubric`)
+    to `profiles.compiled_rubric` so later cycles reuse it instead of
+    re-compiling (one Sonnet-class call per user, ever, unless the rubric
+    is explicitly recompiled)."""
+    _get_client().table("profiles").update(
+        {"compiled_rubric": rubric}
+    ).eq("user_id", user_id).execute()
+
+
+def upsert_match(user_id: str, posting_id: str, **fields: Any) -> None:
+    """Upsert one `matches` row (H4 Task 3 fan-out), on-conflict on the
+    table's actual PK `(user_id, posting_id)` (`0002_multitenant.sql:150`).
+
+    `**fields` are the score/reason columns the caller has for this
+    write (e.g. `rubric_score`, `embed_score`, `llm_score`, `reason`,
+    `reason_source`) — deliberately NEVER `state` / `state_changed_at`.
+    Postgrest's upsert only sets the columns present in the payload on a
+    conflict, so omitting `state` here means: a first insert gets the
+    column's own DB DEFAULT (`'new'`), and a re-score of a posting the
+    user already triaged (`saved` / `dismissed` / `applied`) leaves that
+    triage state completely alone — only the score columns move. Getting
+    a fresh score for a posting the user already dismissed is fine;
+    silently resetting their dismissal back to `'new'` is not.
+    """
+    payload = {"user_id": user_id, "posting_id": posting_id, **fields}
+    _get_client().table("matches").upsert(
+        payload, on_conflict="user_id,posting_id",
+    ).execute()
+
+
+def get_unmatched_postings(user_id: str) -> list[dict]:
+    """Every `postings` row `user_id` has no `matches` row for yet — the
+    fan-out worker's per-user candidate pool for a scoring cycle.
+
+    Client-side anti-join: fetch this user's already-matched posting ids,
+    fetch every posting, filter in Python. The Supabase Python client's
+    query builder has no clean `NOT IN (subquery)` — acceptable at H4's
+    scale (same category of known limit as `list_profile_user_ids`'s
+    unpaginated fetch, H4 Task 2); revisit if either table's row count
+    makes a full-table pull expensive.
+
+    Excludes `link_status='expired'` postings — `jobify.hosted.discovery`
+    still upserts a dead-link posting into the shared pool (for
+    record-keeping/history), but a posting the liveness check already
+    proved dead must never reach a user's `matches` here. Any other
+    `link_status` value, including `None`/missing, is included.
+    """
+    matched_rows = (
+        _get_client().table("matches")
+        .select("posting_id")
+        .eq("user_id", user_id)
+        .execute()
+        .data or []
+    )
+    matched_ids = {r["posting_id"] for r in matched_rows}
+    all_postings = _get_client().table("postings").select("*").execute().data or []
+    return [
+        p for p in all_postings
+        if p.get("id") not in matched_ids and p.get("link_status") != "expired"
+    ]
 
 
 # ══════════════════════════════════════════════════════════════════════════

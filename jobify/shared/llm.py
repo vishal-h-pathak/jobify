@@ -27,7 +27,9 @@ process re-learns the key is dead.
 
 Two places make real model calls — keep them isolated and patchable:
 ``_anthropic_client`` (Messages API client factory) and
-``_oauth_complete`` (Agent SDK adapter). Tests monkeypatch these.
+``_oauth_complete_raw`` (Agent SDK adapter). Tests monkeypatch these.
+``complete()`` and ``complete_with_usage()`` are thin wrappers around the
+shared ``_complete_raw()``, which runs the auth-fallback chain once.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ import logging
 import os
 import re
 import time
+from dataclasses import dataclass
 from typing import Any, Union
 
 import anthropic
@@ -201,10 +204,15 @@ def _run_sync(coro):
         loop.close()
 
 
-def _oauth_complete(*, system_text: str, prompt: str, model: str, token: str) -> str:
-    """One-shot completion through the Claude Agent SDK under subscription
-    OAuth. Lazy-imports the SDK so this module imports cleanly where the
-    package (and its bundled Claude Code CLI) isn't installed."""
+def _oauth_complete_raw(*, system_text: str, prompt: str, model: str, token: str):
+    """Shared implementation behind `_oauth_complete` and
+    `complete_with_usage`'s OAuth path. Runs one OAuth completion and
+    returns `(text, result_msg)` — `result_msg` is the SDK's
+    `ResultMessage` (carries `.usage` for the ledger) or `None` in the
+    no-envelope-at-all branch, which only happens paired with non-empty
+    `text` (the empty/no-text variant raises instead of returning).
+    Lazy-imports the SDK so this module imports cleanly where the package
+    (and its bundled Claude Code CLI) isn't installed."""
     from claude_agent_sdk import (  # noqa: PLC0415 — lazy, optional dep
         AssistantMessage,
         ClaudeAgentOptions,
@@ -222,7 +230,7 @@ def _oauth_complete(*, system_text: str, prompt: str, model: str, token: str) ->
         env=_subprocess_env(token),
     )
 
-    async def _run() -> str:
+    async def _run():
         # Accumulate assistant text from the stream (complete TextBlocks;
         # partial-message deltas aren't enabled, so blocks arrive whole) and
         # keep the final ResultMessage to decide success vs. failure.
@@ -242,7 +250,7 @@ def _oauth_complete(*, system_text: str, prompt: str, model: str, token: str) ->
             # No result envelope at all: return whatever text we saw, else
             # treat the empty completion as a failure.
             if text:
-                return text
+                return text, None
             raise OAuthCompletionError(subtype=None, partial_text="")
 
         subtype = getattr(result_msg, "subtype", None)
@@ -252,7 +260,7 @@ def _oauth_complete(*, system_text: str, prompt: str, model: str, token: str) ->
 
         # subtype == "success" is the happy path — do NOT treat it as an error.
         if subtype == _OAUTH_SUCCESS_SUBTYPE and not is_error:
-            return text or result_text
+            return (text or result_text), result_msg
 
         # Genuine error result (error_max_turns, error_during_execution, …).
         if is_error or (isinstance(subtype, str) and subtype.startswith("error")):
@@ -261,21 +269,56 @@ def _oauth_complete(*, system_text: str, prompt: str, model: str, token: str) ->
             )
 
         # Unknown, non-error subtype: best-effort return.
-        return text or result_text
+        return (text or result_text), result_msg
 
     return _run_sync(_run())
 
 
-# ── Public entry point ──────────────────────────────────────────────────────
+def _oauth_complete(*, system_text: str, prompt: str, model: str, token: str) -> str:
+    """One-shot completion through the Claude Agent SDK under subscription
+    OAuth. Text-only; see `_oauth_complete_raw` for the shared
+    implementation and `complete_with_usage` for the usage-capturing
+    sibling."""
+    text, _result_msg = _oauth_complete_raw(
+        system_text=system_text, prompt=prompt, model=model, token=token,
+    )
+    return text
 
-def complete(*, system: SystemContent, prompt: str, model: str, max_tokens: int) -> str:
-    """Return assistant text. Try the Messages API (pay-as-you-go credits)
-    first; on a billing/credit/auth failure, bench the key and fall back to
-    the Claude Agent SDK under subscription OAuth.
 
-    ``system`` may be the cached-blocks list (Messages API, prompt caching
-    preserved) or a plain string. Raises on transient API errors (the
-    caller's per-job handling catches them) and when no auth is usable.
+# ── Usage shape (H4 ledger) ──────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class CompletionUsage:
+    """Token counts for one `complete_with_usage()` call — the shape the
+    budget ledger (`jobify.db.insert_budget_ledger_row`) needs.
+
+    Real counts on the Messages API path (`resp.usage.input_tokens` /
+    `.output_tokens`). On the OAuth fallback path the Claude Agent SDK's
+    `ResultMessage.usage` dict is used when present (it mirrors the
+    Messages API's usage shape); when it's absent — e.g. the "stream
+    ended with text but no ResultMessage envelope" branch — both counts
+    are genuinely 0, not a guess, and that's noted at the call site
+    rather than silently approximated.
+    """
+
+    input_tokens: int
+    output_tokens: int
+
+
+def _complete_raw(
+    *, system: SystemContent, prompt: str, model: str, max_tokens: int
+) -> tuple[str, CompletionUsage]:
+    """Shared implementation behind `complete()` and `complete_with_usage()`.
+    Try the Messages API (pay-as-you-go credits) first; on a billing/
+    credit/auth failure, bench the key and fall back to the Claude Agent
+    SDK under subscription OAuth. Returns `(text, usage)` — `usage` is
+    real token counts on the Messages API path, the OAuth ResultMessage's
+    usage dict when present, or all-zero counts when genuinely
+    unavailable (see `CompletionUsage`).
+
+    Raises on transient API errors (the caller's per-job handling catches
+    them) and when no auth is usable at all.
     """
     api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
 
@@ -287,7 +330,12 @@ def complete(*, system: SystemContent, prompt: str, model: str, max_tokens: int)
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return _join_text(resp)
+            resp_usage = getattr(resp, "usage", None)
+            usage = CompletionUsage(
+                input_tokens=getattr(resp_usage, "input_tokens", 0) or 0,
+                output_tokens=getattr(resp_usage, "output_tokens", 0) or 0,
+            )
+            return _join_text(resp), usage
         except Exception as exc:  # noqa: BLE001 — classify, then re-raise or fall through
             if not is_api_key_unusable_error(exc):
                 raise
@@ -300,14 +348,62 @@ def complete(*, system: SystemContent, prompt: str, model: str, max_tokens: int)
 
     token = (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
     if token:
-        return _oauth_complete(
+        text, result_msg = _oauth_complete_raw(
             system_text=flatten_system(system),
             prompt=prompt,
             model=model,
             token=token,
         )
+        usage_dict = getattr(result_msg, "usage", None) or {}
+        usage = CompletionUsage(
+            input_tokens=int(usage_dict.get("input_tokens", 0) or 0),
+            output_tokens=int(usage_dict.get("output_tokens", 0) or 0),
+        )
+        return text, usage
 
     raise RuntimeError(
         "no usable Anthropic auth: API key absent/benched and "
         "CLAUDE_CODE_OAUTH_TOKEN unset"
+    )
+
+
+# ── Public entry point ──────────────────────────────────────────────────────
+
+def complete(*, system: SystemContent, prompt: str, model: str, max_tokens: int) -> str:
+    """Return assistant text. Try the Messages API (pay-as-you-go credits)
+    first; on a billing/credit/auth failure, bench the key and fall back to
+    the Claude Agent SDK under subscription OAuth.
+
+    ``system`` may be the cached-blocks list (Messages API, prompt caching
+    preserved) or a plain string. Raises on transient API errors (the
+    caller's per-job handling catches them) and when no auth is usable.
+
+    Text-only; see `_complete_raw` for the shared implementation and
+    `complete_with_usage` for the usage-capturing sibling.
+    """
+    text, _usage = _complete_raw(
+        system=system, prompt=prompt, model=model, max_tokens=max_tokens,
+    )
+    return text
+
+
+# ── Usage-capturing entry point (H4 ledger) ─────────────────────────────────
+
+
+def complete_with_usage(
+    *, system: SystemContent, prompt: str, model: str, max_tokens: int
+) -> tuple[str, CompletionUsage]:
+    """Like `complete()`, but also returns token usage for the budget
+    ledger. Additive alongside `complete()` — that function's signature
+    and behavior are unchanged for its existing callers (resume/cover
+    letter/rubric-compile/scorer all keep calling `complete()` as-is).
+
+    Mirrors `complete()`'s API-then-OAuth fallback chain exactly,
+    including the cool-off/benching behavior on a billing/auth failure,
+    so ledger-writing callers (H4 Task 2/3: embeddings, rubric compile,
+    LLM verdict) don't have to duplicate the auth logic to get usage.
+    See `_complete_raw` for the shared implementation.
+    """
+    return _complete_raw(
+        system=system, prompt=prompt, model=model, max_tokens=max_tokens,
     )
