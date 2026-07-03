@@ -354,6 +354,12 @@ def upsert_posting(job: dict) -> None:
     has no insert/update policy, so an anon-scoped client would silently
     no-op here.
     """
+    # NOTE: no `remote` field is populated here (no hunt source emits a
+    # top-level `remote` key on its job dicts either, single-user pipeline
+    # included) — `jobify.hunt.rubric.score_posting`'s `remote is True`
+    # location-gate branch is therefore currently dead in the hosted
+    # pipeline. Pre-existing gap this branch surfaces, not a regression;
+    # left as-is (see docs/SCORING.md's gates section).
     _get_client().table("postings").upsert(
         {
             "id": job["id"],
@@ -505,6 +511,12 @@ def get_unmatched_postings(user_id: str) -> list[dict]:
     scale (same category of known limit as `list_profile_user_ids`'s
     unpaginated fetch, H4 Task 2); revisit if either table's row count
     makes a full-table pull expensive.
+
+    Excludes `link_status='expired'` postings — `jobify.hosted.discovery`
+    still upserts a dead-link posting into the shared pool (for
+    record-keeping/history), but a posting the liveness check already
+    proved dead must never reach a user's `matches` here. Any other
+    `link_status` value, including `None`/missing, is included.
     """
     matched_rows = (
         _get_client().table("matches")
@@ -515,7 +527,10 @@ def get_unmatched_postings(user_id: str) -> list[dict]:
     )
     matched_ids = {r["posting_id"] for r in matched_rows}
     all_postings = _get_client().table("postings").select("*").execute().data or []
-    return [p for p in all_postings if p.get("id") not in matched_ids]
+    return [
+        p for p in all_postings
+        if p.get("id") not in matched_ids and p.get("link_status") != "expired"
+    ]
 
 
 # ══════════════════════════════════════════════════════════════════════════

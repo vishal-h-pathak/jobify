@@ -432,6 +432,10 @@ def _run_user_ladder(user_id: str, counters: dict[str, int]) -> None:
         counters["matches_written"] += 1
 
     # ── Stage 4: budget-gated LLM verdict for the top-N survivors. ──────
+    # Checked once, before the batch — NOT a hard cap. A user sitting just
+    # under `cap` here can still spend up to HOSTED_STAGE4_TOP_N more
+    # verdicts this cycle before the next cycle's check catches it up. Full
+    # caps enforcement (mid-batch re-checks, notifications) is H6's job.
     if stage2_survivors:
         spend = db.get_month_to_date_spend(user_id)
         cap = db.get_budget_cap(user_id)

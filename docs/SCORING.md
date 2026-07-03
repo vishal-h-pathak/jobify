@@ -11,8 +11,25 @@ approaches zero as more users share the same discovery + embedding work.
 2. Compiled rubric         static, per-user, zero tokens/posting    (this doc — jobify/hunt/rubric.py)
 3. Embedding rerank        cosine(profile embedding, posting embed) (H4)
 4. LLM verdict             Haiku fit+legitimacy, top-N survivors    (existing single-user scorer,
-                                                                      budget-gated hosted-side by H6)
+                                                                      per-cycle MTD-spend-vs-cap stop
+                                                                      shipped H4 Task 3; full caps
+                                                                      enforcement — mid-run re-checks,
+                                                                      notifications — still H6)
 ```
+
+## Global discovery — no per-profile title filter
+
+Discovery (`jobify/hosted/discovery.py`) populates the shared `postings`
+pool WITHOUT any per-profile title filtering: its four portal-based
+fetches (Greenhouse/Lever/Ashby/Workday) are all called with
+`apply_title_filter=False`. Those fetchers otherwise gate every posting
+through `passes_title_filter()`, which resolves through the single-user
+CLI's process-global `_PORTALS_CACHE` for whichever ONE profile happens
+to be active — applying that one profile's title/seniority preferences
+at discovery time would silently drop postings from the SHARED pool
+before any other hosted user ever saw them (fixed in commit `ae2a789`).
+Per-user title filtering happens downstream instead, in stage 1 of each
+user's fan-out ladder (`jobify/hosted/fanout.py`), against the full pool.
 
 ## Stage 2 — the compiled rubric
 
@@ -157,6 +174,16 @@ raising in that state. The ladder still works end-to-end (stage 1 -> 2 ->
 4) with stage 3 skipped — Task 3's fan-out treats a missing embedding
 exactly like "no rerank happened," not an error.
 
+**Profile-embedding staleness:** a user's profile embedding is only
+recomputed when their profile actually changed since the last compute —
+tracked via a small `.embedding_stamp` file next to the per-user
+materialized cache dir, recording the `profiles.updated_at` value the
+embedding currently reflects (fixed in commit `e7573f4`; see
+`jobify/hosted/fanout.py::_embedding_is_stale`/`_mark_embedding_fresh`).
+Posting embeddings need no equivalent mechanism — a posting's text never
+changes after first sight, so `get_posting_embedding` reusing an existing
+vector is always correct.
+
 ## Profile source: directory or DB row
 
 Everything above reads the profile through `jobify.profile_loader`, which
@@ -168,10 +195,21 @@ resolution step ahead of the single-user directory fallback:
    (H1's `0002_multitenant.sql` contract) for that user into a per-user
    cache dir (`JOBIFY_PROFILE_CACHE`, default
    `~/.cache/jobify/profiles/{user_id}/`), validates it in-process via
-   `onboarding.validate_profile.validate_profile_dir` (logs, doesn't
-   raise, on a failed check), and returns the cache dir. Re-materializes
-   only when the row's `updated_at` is newer than what produced the
-   on-disk cache.
+   `onboarding.validate_profile.validate_profile_dir`, and returns the
+   cache dir. Re-materializes only when the row's `updated_at` is newer
+   than what produced the on-disk cache.
+
+   The validation verdict is a hard gate, not just a log line: it's
+   persisted to `profiles.validation_status`
+   (`jobify.profile_loader.VALIDATION_STATUS_VALID` /
+   `VALIDATION_STATUS_INVALID`, `_validate_materialized`), and the fan-out
+   worker (`jobify/hosted/fanout.py::_run_user_ladder`) reads that column
+   before running ANY stage for a user — `'invalid'` skips the user
+   entirely for the cycle (counted in `users_skipped_invalid`), never
+   scoring them against a broken profile. `None` (never validated, e.g.
+   `onboarding` not importable) is treated as "proceed," fail-open. A
+   warning is still logged on a failed check as an operator signal, but
+   the DB write is what downstream code actually reads.
 3. `<repo>/profile/`, then `<repo>/profile.example/` (unchanged).
 
 Every downstream consumer — the rubric compiler, the per-posting scorer,

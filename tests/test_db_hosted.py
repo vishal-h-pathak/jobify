@@ -483,3 +483,26 @@ def test_get_unmatched_postings_empty_when_no_postings(patch_db_client):
     patch_db_client(fake)
 
     assert db.get_unmatched_postings("user-1") == []
+
+
+def test_get_unmatched_postings_excludes_expired_link_status(patch_db_client):
+    """A posting `jobify.hosted.discovery` upserted with
+    `link_status='expired'` (dead-link liveness check) must never reach a
+    user's scoring candidate pool, even though it has no `matches` row.
+    Any other `link_status` — including a missing/None value, which is
+    what most postings carry — stays included.
+    """
+    fake = _FakeClient({
+        "matches": [],
+        "postings": [
+            {"id": "p-1", "title": "Dead link", "link_status": "expired"},
+            {"id": "p-2", "title": "Direct link", "link_status": "direct"},
+            {"id": "p-3", "title": "Unverified aggregator", "link_status": "aggregator_unverified"},
+            {"id": "p-4", "title": "No link_status set"},
+        ],
+    })
+    patch_db_client(fake)
+
+    result = db.get_unmatched_postings("user-1")
+
+    assert [p["id"] for p in result] == ["p-2", "p-3", "p-4"]
