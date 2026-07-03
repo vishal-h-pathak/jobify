@@ -104,6 +104,29 @@ write-locked to service-role) — see the header comment in
 Apply it the same way as `0001` (SQL Editor / `supabase db push` /
 `apply_migration`), after `0001` is already applied.
 
+## 0003 — invite gate + onboarding chat
+
+`0003_hosted_onboarding.sql` is additive on top of `0001_init.sql` +
+`0002_multitenant.sql` — H3 of the hosted-aggregator plan
+(`planning/HOSTED_AGGREGATOR_PLAN.md` §2, `planning/session-prompts/
+12_h3_onboarding_web.md`). It adds:
+
+| Object | Purpose |
+|---|---|
+| `invites` | one row per invite code; service-role creates, an authed user claims an unclaimed code for themselves via a conditional `UPDATE` |
+| `profiles.validation_status` | new column: `{"status": "unchecked" \| "valid" \| "invalid", "errors": [...]}` — the web app's TS validator writes `unchecked`/`valid`; H4's worker overwrites with the authoritative Python validator's verdict at materialization time |
+| `onboarding_sessions` | server-side onboarding-chat state keyed by `user_id` (transcript + extracted structured data), so a dropped connection resumes instead of restarting |
+
+`invites` intentionally has no general SELECT policy — only a user's own
+*claimed* row is visible, so an unclaimed code can't be enumerated by
+reading the table; claiming is the single conditional `UPDATE` in the
+migration's header comment. `onboarding_sessions` follows the same
+own-row select/insert/update shape as `profiles` (no delete — a completed
+session just flips `status`).
+
+Apply it the same way as `0001`/`0002` (SQL Editor / `supabase db push` /
+`apply_migration`), after both are already applied.
+
 ### Running the isolation tests
 
 `tests/test_rls_multitenant.py` (marked `@pytest.mark.integration`)
