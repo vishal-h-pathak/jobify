@@ -13,7 +13,10 @@ import type { Database } from "@/lib/supabase/types";
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
-  const next = searchParams.get("next") ?? "/invite";
+  // Only same-origin relative paths: `?next=@evil.com` would otherwise make
+  // `${origin}${next}` resolve to https://host@evil.com (open redirect).
+  const rawNext = searchParams.get("next") ?? "/invite";
+  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/invite";
 
   if (!code) {
     return NextResponse.redirect(`${origin}/login?error=auth-failed`);

@@ -17,7 +17,7 @@ env/
 # The active user's generated profile (real PII: name, email, location,
 # CV, etc.). Onboarding writes <repo_root>/profile/; the loader prefers it
 # over the shipped neutral baseline profile.example/. NEVER commit it.
-profile/
+/profile/
 
 *.egg-info/
 dist/
