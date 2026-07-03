@@ -27,6 +27,7 @@ from sources import (
     serpapi,
     workday,
 )
+from sources import _portals
 
 GH_URL = "https://boards.greenhouse.io/acmeco/jobs/1"
 LEVER_URL = "https://jobs.lever.co/acmeco/2"
@@ -51,9 +52,9 @@ def _no_op_other_sources(monkeypatch):
     so the union-dedup assertions aren't muddied by unrelated fetch calls
     (and so no test hits the network now that `_iter_union_postings`
     calls all nine sources unconditionally)."""
-    monkeypatch.setattr(lever, "fetch", lambda targets=None: iter(()))
-    monkeypatch.setattr(ashby, "fetch", lambda targets=None: iter(()))
-    monkeypatch.setattr(workday, "fetch", lambda tenants=None: iter(()))
+    monkeypatch.setattr(lever, "fetch", lambda targets=None, apply_title_filter=True: iter(()))
+    monkeypatch.setattr(ashby, "fetch", lambda targets=None, apply_title_filter=True: iter(()))
+    monkeypatch.setattr(workday, "fetch", lambda tenants=None, apply_title_filter=True: iter(()))
     monkeypatch.setattr(hn_whoshiring, "fetch", lambda: iter(()))
     monkeypatch.setattr(eighty_thousand_hours, "fetch", lambda: iter(()))
     monkeypatch.setattr(remoteok, "fetch", lambda: iter(()))
@@ -178,9 +179,11 @@ greenhouse:
     monkeypatch.setattr(db, "list_profile_user_ids", lambda: ["user-a", "user-b"])
 
     fetch_calls: list[list] = []
+    apply_title_filter_seen: list[bool] = []
 
-    def _fake_gh_fetch(targets=None):
+    def _fake_gh_fetch(targets=None, apply_title_filter=True):
         fetch_calls.append(list(targets or []))
+        apply_title_filter_seen.append(apply_title_filter)
         yield _gh_job("acmeco")
 
     monkeypatch.setattr(greenhouse, "fetch", _fake_gh_fetch)
@@ -192,6 +195,9 @@ greenhouse:
 
     assert len(fetch_calls) == 1, "greenhouse.fetch must be called exactly once per cycle"
     assert fetch_calls[0] == [("acmeco", "Acme Co")]
+    assert apply_title_filter_seen == [False], (
+        "discovery must bypass the per-profile title filter for the shared pool"
+    )
     assert len(upserted) == 1
     assert upserted[0]["id"] == "gh-1"
     assert upserted[0]["link_status"] == "direct"
@@ -223,10 +229,10 @@ lever:
 
     monkeypatch.setattr(
         greenhouse, "fetch",
-        lambda targets=None: iter([_gh_job("acmeco", jid="dup-1")]),
+        lambda targets=None, apply_title_filter=True: iter([_gh_job("acmeco", jid="dup-1")]),
     )
 
-    def _lever_dup(targets=None):
+    def _lever_dup(targets=None, apply_title_filter=True):
         job = _gh_job("acmeco", jid="dup-1")  # same canonical id, different source
         job["source"] = "lever"
         job["url"] = LEVER_URL
@@ -267,7 +273,9 @@ greenhouse:
         # direct-ATS short-circuit) runs and can report "dead".
         "url": "https://talent.com/view?id=dead",
     }
-    monkeypatch.setattr(greenhouse, "fetch", lambda targets=None: iter([dead_job]))
+    monkeypatch.setattr(
+        greenhouse, "fetch", lambda targets=None, apply_title_filter=True: iter([dead_job]),
+    )
 
     from jobify.hunt import agent as hunt_agent
 
@@ -290,7 +298,7 @@ greenhouse:
 
 def test_run_discovery_cycle_no_users_is_a_clean_noop(monkeypatch):
     monkeypatch.setattr(db, "list_profile_user_ids", lambda: [])
-    monkeypatch.setattr(greenhouse, "fetch", lambda targets=None: iter(()))
+    monkeypatch.setattr(greenhouse, "fetch", lambda targets=None, apply_title_filter=True: iter(()))
 
     upserted: list[dict] = []
     monkeypatch.setattr(db, "upsert_posting", lambda job: upserted.append(job))
@@ -350,7 +358,7 @@ greenhouse:
     call_counts: dict[str, int] = {}
 
     def _counting_portal_fetch(name, jid):
-        def _fetch(targets=None):
+        def _fetch(targets=None, apply_title_filter=True):
             call_counts[name] = call_counts.get(name, 0) + 1
             yield _fixed_job(jid, name)
         return _fetch
@@ -421,7 +429,7 @@ greenhouse:
 
     monkeypatch.setattr(
         greenhouse, "fetch",
-        lambda targets=None: iter([_gh_job("acmeco", jid="dup-1")]),
+        lambda targets=None, apply_title_filter=True: iter([_gh_job("acmeco", jid="dup-1")]),
     )
 
     def _remoteok_dup():
@@ -436,3 +444,74 @@ greenhouse:
 
     assert summary["fetched"] == 1
     assert len(upserted) == 1
+
+
+# ── title-filter bypass (fix: discovery must not gate on one profile) ────
+
+
+def test_discovery_bypasses_process_global_title_filter(tmp_path, monkeypatch):
+    """A posting whose title WOULD fail the process-global default
+    profile's title filter must still make it into the shared `postings`
+    pool via `run_discovery_cycle` — proving the bypass is real, not just
+    re-labeled.
+
+    Unlike the other tests in this file, `greenhouse.fetch` is NOT
+    monkeypatched wholesale here — only `greenhouse.fetch_json` (the
+    network boundary) is faked, so the real `greenhouse._fetch_one` runs,
+    including its real call into `sources._portals.passes_title_filter`.
+    That function reads the process-global `_PORTALS_CACHE` (whichever
+    ONE profile happens to be process-active) when no explicit
+    `profile_dir` is passed — exactly what `_fetch_one` does. We seed
+    that cache directly so the test doesn't depend on which profile
+    (`profile/` vs `profile.example/`) happens to be active in this
+    environment.
+    """
+    original_cache = _portals._PORTALS_CACHE
+    _portals._PORTALS_CACHE = {
+        "title_filter": {
+            "reject_substrings": ["intern"],
+            "prefer_substrings": [],
+            "seniority_substrings": [],
+        },
+    }
+    try:
+        # Sanity check: prove the process-global filter really WOULD
+        # reject this title before asserting the bypass lets it through
+        # anyway — otherwise the test could pass for the wrong reason.
+        assert _portals.passes_title_filter("Software Engineering Intern") is False
+
+        d = _portals_dir(tmp_path, "user-a", """
+greenhouse:
+  companies:
+    - slug: acmeco
+      name: Acme Co
+""")
+        monkeypatch.setattr(discovery, "materialize_profile_dir", lambda user_id: d)
+        monkeypatch.setattr(db, "list_profile_user_ids", lambda: ["user-a"])
+
+        def _fake_fetch_json(url, **kwargs):
+            return {
+                "jobs": [
+                    {
+                        "title": "Software Engineering Intern",
+                        "location": {"name": "Remote"},
+                        "content": "<p>desc</p>",
+                        "absolute_url": GH_URL,
+                    },
+                ],
+            }
+
+        monkeypatch.setattr(greenhouse, "fetch_json", _fake_fetch_json)
+
+        upserted: list[dict] = []
+        monkeypatch.setattr(db, "upsert_posting", lambda job: upserted.append(dict(job)))
+
+        summary = discovery.run_discovery_cycle()
+
+        assert summary["fetched"] == 1, (
+            "the intern posting must survive discovery's title-filter bypass"
+        )
+        assert len(upserted) == 1
+        assert upserted[0]["title"] == "Software Engineering Intern"
+    finally:
+        _portals._PORTALS_CACHE = original_cache

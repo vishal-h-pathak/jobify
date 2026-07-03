@@ -33,8 +33,16 @@ logger = logging.getLogger("sources.ashby")
 _FALLBACK_COMPANIES: list[tuple[str, str]] = []
 
 
-def _fetch_one(slug: str, display_name: str):
-    """Fetch open roles from one Ashby board."""
+def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
+    """Fetch open roles from one Ashby board.
+
+    ``apply_title_filter=False`` skips the process-global-profile title
+    gate entirely — used by the H4 hosted discovery worker
+    (``jobify.hosted.discovery``), which fetches into the SHARED postings
+    pool and must not let one arbitrary profile's title/seniority
+    preferences drop a posting before any other hosted user ever sees it.
+    Per-user title filtering happens downstream, in Task 3's fan-out.
+    """
     url = f"https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true"
     data = fetch_json(url, log=logger, label=slug)
     if data is None:
@@ -53,7 +61,7 @@ def _fetch_one(slug: str, display_name: str):
         description = strip_tags(job.get("descriptionHtml") or job.get("descriptionPlain") or "")
         link = job.get("jobUrl") or job.get("applyUrl") or ""
 
-        if not passes_title_filter(title):
+        if apply_title_filter and not passes_title_filter(title):
             skipped_title += 1
             continue
         if location_filter_enabled() and not is_local_or_remote(location):
@@ -81,7 +89,7 @@ def _fetch_one(slug: str, display_name: str):
     )
 
 
-def fetch(targets: list[tuple[str, str]] | None = None):
+def fetch(targets: list[tuple[str, str]] | None = None, apply_title_filter: bool = True):
     """Yield job dicts from every tracked Ashby board.
 
     ``targets`` optionally overrides the portals.yml-derived company list
@@ -90,8 +98,15 @@ def fetch(targets: list[tuple[str, str]] | None = None):
     boards here so one process fetch serves everyone, instead of
     re-deriving the single active profile's list. Omit it (every existing
     ``jobify-hunt`` call site) and behavior is byte-identical to before.
+
+    ``apply_title_filter`` defaults to True (current behavior — the
+    process-global-profile title gate applies) so every existing
+    single-user call site is byte-identical. The hosted discovery worker
+    passes ``apply_title_filter=False`` since discovery's job is landing
+    postings in the shared pool, not filtering by one profile's title
+    preferences.
     """
     boards = targets if targets is not None else (companies("ashby") or _FALLBACK_COMPANIES)
     for slug, name in boards:
-        yield from _fetch_one(slug, name)
+        yield from _fetch_one(slug, name, apply_title_filter=apply_title_filter)
         sleep_between_requests()

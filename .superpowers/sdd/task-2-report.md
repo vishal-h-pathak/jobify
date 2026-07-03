@@ -281,3 +281,44 @@ $ pytest -q
 $ ruff check jobify/hosted/discovery.py tests/test_hosted_discovery.py
 All checks passed!
 ```
+
+## Fix note 2 (post-review): discovery was still filtering the shared pool by one arbitrary profile
+
+Review caught a second, more serious gap: `greenhouse.py`/`lever.py`/`ashby.py`/`workday.py`'s
+`_fetch_one()` gated every posting through `passes_title_filter(title)` with NO `profile_dir`
+argument, so it resolved through the process-global `_PORTALS_CACHE` (`sources._portals`) —
+whichever ONE profile happened to be active in the process (env var default, or
+`profile.example`'s demo persona if unset). `jobify.hosted.discovery` called these `fetch()`
+functions with the union `targets`/`tenants` list but never suppressed that title filter, so it
+silently dropped postings that didn't match that one profile's title/seniority preferences
+*before* the posting ever reached `postings` — corrupting the shared pool for every other hosted
+user, contradicting the brief's "discovery's job is just to get postings into the shared pool;
+per-user title filtering happens in Task 3's fan-out."
+
+**Fix**: `_fetch_one()` and `fetch()` on all four portal sources grew an additive
+`apply_title_filter: bool = True` param (default preserves current single-user behavior
+byte-identically — every existing `jobify-hunt` call site is unaffected). `jobify.hosted.discovery`
+now calls `module.fetch(targets, apply_title_filter=False)` for all four portal fetchers, so
+global discovery lands every posting from these sources into the shared pool regardless of title.
+`location_filter_enabled()`/`is_local_or_remote()` were left untouched — that's an env-level,
+not per-profile, policy.
+
+`tests/test_hosted_discovery.py` grew
+`test_discovery_bypasses_process_global_title_filter`, which exercises the REAL
+`greenhouse._fetch_one()` (only `greenhouse.fetch_json`, the network boundary, is faked) with a
+posting titled "Software Engineering Intern" against a process-global `_PORTALS_CACHE` seeded to
+reject "intern" — first asserting `passes_title_filter` really would reject that title, then
+asserting `run_discovery_cycle()` still lands the posting in the upserted pool. All of this
+file's other `fetch`-monkeypatch call sites/lambdas were updated to accept the new
+`apply_title_filter` kwarg so they don't break under the updated call signature.
+
+```
+$ pytest tests/test_hosted_discovery.py tests/test_hosted_embed.py tests/test_db_hosted.py -q
+44 passed in 0.81s
+
+$ pytest -q
+553 passed, 1 skipped, 26 deselected in 24.86s
+
+$ ruff check jobify/hunt/sources/greenhouse.py jobify/hunt/sources/lever.py jobify/hunt/sources/ashby.py jobify/hunt/sources/workday.py jobify/hosted/discovery.py tests/test_hosted_discovery.py
+All checks passed!
+```

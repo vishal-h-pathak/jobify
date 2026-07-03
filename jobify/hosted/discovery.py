@@ -16,7 +16,17 @@ result in ONE fetch of that company, not two. This module:
        `jobify.hunt.sources.{greenhouse,lever,ashby,workday}` fetchers,
        reusing them directly rather than forking (each grew an optional
        `targets`/`tenants` override param in this task, additive and
-       byte-compatible with the single-user `jobify-hunt` call).
+       byte-compatible with the single-user `jobify-hunt` call). Each
+       fetcher is also called with `apply_title_filter=False` — these
+       four sources otherwise gate every posting through
+       `passes_title_filter()`, which resolves through the
+       process-global `_PORTALS_CACHE` for whichever ONE profile happens
+       to be active (`jobify.hunt.sources._portals`). Applying that
+       single profile's title/seniority preferences here would silently
+       drop postings from the SHARED pool before any other hosted user
+       ever saw them. Per-user title filtering is a scoring-stage concern
+       and happens downstream, in Task 3's fan-out (Stage 1), against the
+       full pool.
     4b. Also fetches the five non-portal `jobify.hunt.sources` fetchers
        (`hn_whoshiring`, `eighty_thousand_hours`, `remoteok`, `jsearch`,
        `serpapi`) exactly ONCE per cycle, zero-arg, same as
@@ -173,7 +183,14 @@ def _iter_union_postings(union: dict[str, list]):
     for module, targets in portal_fetchers:
         if not targets:
             continue
-        yield from _dedup_fetch(module, module.fetch(targets), seen_ids)
+        # apply_title_filter=False: discovery's job is landing every
+        # posting into the SHARED pool, not filtering by whichever one
+        # profile happens to be process-global-active. Per-user title
+        # filtering happens downstream in Task 3's fan-out (Stage 1)
+        # against the full pool, not here.
+        yield from _dedup_fetch(
+            module, module.fetch(targets, apply_title_filter=False), seen_ids,
+        )
 
     for module in _FIXED_SOURCES:
         yield from _dedup_fetch(module, module.fetch(), seen_ids)
