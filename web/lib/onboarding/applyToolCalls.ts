@@ -1,0 +1,73 @@
+import type { InterviewToolCall } from "../anthropic/interview";
+import type { ExtractedState, LocationAndCompensation, TargetingTier } from "../profile/buildDoc";
+import type { InterviewStage } from "../anthropic/interview";
+
+export interface ApplyResult {
+  extracted: ExtractedState;
+  stage: InterviewStage;
+  done: boolean;
+}
+
+/**
+ * Merges the tool calls Claude emitted this turn into the session's
+ * accumulated `extracted` state, advancing `stage` as each stage's tool
+ * fires. Tool inputs are Anthropic-schema-validated JSON already, so this
+ * is a straight merge, not re-validation.
+ */
+export function applyToolCalls(
+  toolCalls: InterviewToolCall[],
+  previous: ExtractedState,
+  previousStage: InterviewStage
+): ApplyResult {
+  const extracted: ExtractedState = { ...previous };
+  let stage = previousStage;
+  let done = false;
+
+  for (const call of toolCalls) {
+    switch (call.name) {
+      case "record_resume":
+        extracted.resume = {
+          cv_markdown: String(call.input.cv_markdown ?? ""),
+          key_technical_skills: Array.isArray(call.input.key_technical_skills)
+            ? (call.input.key_technical_skills as string[])
+            : undefined,
+          background_summary:
+            typeof call.input.background_summary === "string" ? call.input.background_summary : undefined,
+        };
+        if (stage === "resume") stage = "identity";
+        break;
+      case "record_identity":
+        extracted.identity = {
+          name: String(call.input.name ?? ""),
+          email: String(call.input.email ?? ""),
+          phone: typeof call.input.phone === "string" ? call.input.phone : undefined,
+          location_base: typeof call.input.location_base === "string" ? call.input.location_base : undefined,
+          linkedin: typeof call.input.linkedin === "string" ? call.input.linkedin : undefined,
+          website: typeof call.input.website === "string" ? call.input.website : undefined,
+          github: typeof call.input.github === "string" ? call.input.github : undefined,
+          location_and_compensation:
+            typeof call.input.location_and_compensation === "object" && call.input.location_and_compensation !== null
+              ? (call.input.location_and_compensation as LocationAndCompensation)
+              : undefined,
+        };
+        if (stage === "identity") stage = "targeting";
+        break;
+      case "record_targeting":
+        extracted.targeting = {
+          tiers: Array.isArray(call.input.tiers) ? (call.input.tiers as TargetingTier[]) : [],
+          dream_companies: Array.isArray(call.input.dream_companies) ? (call.input.dream_companies as string[]) : undefined,
+          hard_disqualifiers: Array.isArray(call.input.hard_disqualifiers) ? (call.input.hard_disqualifiers as string[]) : [],
+          soft_concerns: Array.isArray(call.input.soft_concerns) ? (call.input.soft_concerns as string[]) : [],
+          degree_gate: typeof call.input.degree_gate === "string" ? call.input.degree_gate : undefined,
+          thesis_summary: String(call.input.thesis_summary ?? ""),
+        };
+        break;
+      case "finish_interview":
+        done = true;
+        stage = "done";
+        break;
+    }
+  }
+
+  return { extracted, stage, done };
+}

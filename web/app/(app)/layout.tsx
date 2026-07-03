@@ -1,0 +1,20 @@
+import { redirect } from "next/navigation";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { hasClaimedInvite } from "@/lib/db/invites";
+
+// Auth + invite gate lives here, not in proxy.ts — see
+// lib/supabase/updateSession.ts for why (mirrors the papercuts pattern).
+export const dynamic = "force-dynamic";
+
+export default async function AppLayout({ children }: { children: React.ReactNode }) {
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/login");
+
+  const claimed = await hasClaimedInvite(supabase);
+  if (!claimed) redirect("/invite");
+
+  return <>{children}</>;
+}
