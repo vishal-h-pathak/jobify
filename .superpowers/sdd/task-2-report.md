@@ -234,20 +234,50 @@ $ pytest tests/test_hosted_embed.py -q
 
 ## Concerns
 
-- **Scope of "global discovery"**: I scoped `discovery.py` to only the
-  four portals.yml-configured sources (greenhouse/lever/ashby/workday),
-  reading the brief's steps 1-4 (which only ever mention
-  `companies()`/`workday_tenants()`) as the intended boundary. The other
-  five `jobify.hunt.sources` fetchers (remoteok, serpapi, jsearch,
-  hn_whoshiring, eighty_thousand_hours) run the same fixed keyword search
-  regardless of which user is asking, so there's no "union" for them to
-  do — but if H4's intent was for discovery to *also* run those five once
-  per cycle and land their output in `postings` (not just the portal
-  ones), that's a small, mechanical addition to `_iter_union_postings`
-  (call each with no override, same as `jobify.hunt.agent.iter_all_jobs`
-  already does) that I did not make. Flagging so this can be confirmed
-  before Task 3/4 build on top of `run_discovery_cycle()`'s current
-  (portals-only) scope.
 - Did not add a `jobify-hosted-hunt` console script or a
   `.github/workflows/hosted-hunt.yml` — those are explicitly Task 4's
   job per the session prompt's task list, not this task's brief.
+
+## Fix note (post-review)
+
+The "Scope of 'global discovery'" concern above was confirmed to be a
+real gap, not a deliberate scope boundary: the session-prompt spec says
+"fetch once via the existing `jobify.hunt.sources`" without qualifying
+to the portal-configured ones, and single-user `jobify-hunt` fetches
+from all nine `SOURCES`. Restricting hosted discovery to the four portal
+sources meant hosted users lost the other five sources' postings
+(remoteok, serpapi, jsearch, hn_whoshiring, eighty_thousand_hours)
+relative to what single-user `jobify-hunt` would have found for them.
+
+**Fix**: `_iter_union_postings()` now also calls the five fixed
+zero-arg sources (`hn_whoshiring.fetch()`, `eighty_thousand_hours.fetch()`,
+`remoteok.fetch()`, `jsearch.fetch()`, `serpapi.fetch()`) exactly once
+per discovery cycle, no per-user unioning needed since their output is
+identical regardless of which user asks — mirroring how
+`jobify.hunt.agent.iter_all_jobs` already calls them unconditionally.
+Their output folds into the same cross-source dedup-by-job-id set the
+four portal sources share (factored into a new `_dedup_fetch()` helper
+to avoid duplicating the dedup loop), and upserts via the same
+`jobify.db.upsert_posting()` path. `_union_portal_targets()` and the
+portal-source flow are untouched.
+
+`tests/test_hosted_discovery.py` grew two tests: one asserting all nine
+sources are each called exactly once per cycle (not once per user, with
+two users sharing a Greenhouse board to exercise the union path
+alongside the five fixed calls), and one asserting cross-source dedup
+holds between a fixed source (remoteok) and a portal source
+(greenhouse) sharing a canonical job id. The autouse
+`_no_op_other_sources` fixture was extended to no-op the five fixed
+sources by default so the rest of the existing suite stays network-free
+now that `_iter_union_postings` calls them unconditionally.
+
+```
+$ pytest tests/test_hosted_discovery.py tests/test_hosted_embed.py tests/test_db_hosted.py -q
+43 passed in 0.53s
+
+$ pytest -q
+552 passed, 1 skipped, 26 deselected in 26.76s
+
+$ ruff check jobify/hosted/discovery.py tests/test_hosted_discovery.py
+All checks passed!
+```

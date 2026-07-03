@@ -16,7 +16,17 @@ import pytest
 
 from jobify import db
 from jobify.hosted import discovery
-from sources import ashby, greenhouse, lever, workday
+from sources import (
+    ashby,
+    eighty_thousand_hours,
+    greenhouse,
+    hn_whoshiring,
+    jsearch,
+    lever,
+    remoteok,
+    serpapi,
+    workday,
+)
 
 GH_URL = "https://boards.greenhouse.io/acmeco/jobs/1"
 LEVER_URL = "https://jobs.lever.co/acmeco/2"
@@ -37,11 +47,18 @@ def _gh_job(slug: str, jid: str = "gh-1"):
 @pytest.fixture(autouse=True)
 def _no_op_other_sources(monkeypatch):
     """Only Greenhouse is exercised by default in most tests below; keep
-    Lever/Ashby/Workday silent so the union-dedup assertions aren't
-    muddied by unrelated fetch calls."""
+    Lever/Ashby/Workday and the five fixed keyword-search sources silent
+    so the union-dedup assertions aren't muddied by unrelated fetch calls
+    (and so no test hits the network now that `_iter_union_postings`
+    calls all nine sources unconditionally)."""
     monkeypatch.setattr(lever, "fetch", lambda targets=None: iter(()))
     monkeypatch.setattr(ashby, "fetch", lambda targets=None: iter(()))
     monkeypatch.setattr(workday, "fetch", lambda tenants=None: iter(()))
+    monkeypatch.setattr(hn_whoshiring, "fetch", lambda: iter(()))
+    monkeypatch.setattr(eighty_thousand_hours, "fetch", lambda: iter(()))
+    monkeypatch.setattr(remoteok, "fetch", lambda: iter(()))
+    monkeypatch.setattr(jsearch, "fetch", lambda: iter(()))
+    monkeypatch.setattr(serpapi, "fetch", lambda: iter(()))
 
 
 # ── _union_portal_targets ─────────────────────────────────────────────────
@@ -283,3 +300,139 @@ def test_run_discovery_cycle_no_users_is_a_clean_noop(monkeypatch):
     assert summary["users"] == 0
     assert summary["fetched"] == 0
     assert upserted == []
+
+
+# ── the five fixed keyword-search sources (hn_whoshiring, ────────────────
+# eighty_thousand_hours, remoteok, jsearch, serpapi) ─────────────────────
+
+
+def _fixed_job(jid: str, source: str):
+    """A job dict shaped like the fixed sources' output — a direct-ATS
+    URL (greenhouse host) so link resolution short-circuits with zero
+    HTTP, matching `_gh_job`'s convention above."""
+    return {
+        "id": jid,
+        "source": source,
+        "title": "Some Role",
+        "company": "Acme Co",
+        "location": "Remote",
+        "description": "x" * 200,
+        "url": f"https://boards.greenhouse.io/acmeco/jobs/{jid}",
+    }
+
+
+def test_run_discovery_cycle_fetches_all_nine_sources_exactly_once_not_per_user(
+    tmp_path, monkeypatch,
+):
+    """Two users' profiles both resolve the same Greenhouse board (so the
+    portal side has something to union), and the five fixed sources have
+    no per-user configuration at all. Every one of the nine
+    `jobify.hunt.sources` fetchers must be called exactly ONCE for the
+    whole cycle — never once per user."""
+    dir_a = _portals_dir(tmp_path, "user-a", """
+greenhouse:
+  companies:
+    - slug: acmeco
+      name: Acme Co
+""")
+    dir_b = _portals_dir(tmp_path, "user-b", """
+greenhouse:
+  companies:
+    - slug: acmeco
+      name: Acme Co
+""")
+    monkeypatch.setattr(
+        discovery, "materialize_profile_dir",
+        lambda user_id: {"user-a": dir_a, "user-b": dir_b}[user_id],
+    )
+    monkeypatch.setattr(db, "list_profile_user_ids", lambda: ["user-a", "user-b"])
+
+    call_counts: dict[str, int] = {}
+
+    def _counting_portal_fetch(name, jid):
+        def _fetch(targets=None):
+            call_counts[name] = call_counts.get(name, 0) + 1
+            yield _fixed_job(jid, name)
+        return _fetch
+
+    def _counting_fixed_fetch(name, jid):
+        def _fetch():
+            call_counts[name] = call_counts.get(name, 0) + 1
+            yield _fixed_job(jid, name)
+        return _fetch
+
+    monkeypatch.setattr(greenhouse, "fetch", _counting_portal_fetch("greenhouse", "gh-1"))
+    monkeypatch.setattr(lever, "fetch", _counting_portal_fetch("lever", "lv-1"))
+    monkeypatch.setattr(ashby, "fetch", _counting_portal_fetch("ashby", "as-1"))
+    monkeypatch.setattr(workday, "fetch", _counting_portal_fetch("workday", "wd-1"))
+    monkeypatch.setattr(hn_whoshiring, "fetch", _counting_fixed_fetch("hn_whoshiring", "hn-1"))
+    monkeypatch.setattr(
+        eighty_thousand_hours, "fetch", _counting_fixed_fetch("eighty_thousand_hours", "e8-1"),
+    )
+    monkeypatch.setattr(remoteok, "fetch", _counting_fixed_fetch("remoteok", "ro-1"))
+    monkeypatch.setattr(jsearch, "fetch", _counting_fixed_fetch("jsearch", "js-1"))
+    monkeypatch.setattr(serpapi, "fetch", _counting_fixed_fetch("serpapi", "sp-1"))
+
+    # lever/ashby/workday also see the union'd board via portals.yml above
+    # only for greenhouse; give them a nonempty union target too so their
+    # fetchers actually run (targets=[] is skipped by `_iter_union_postings`).
+    monkeypatch.setattr(
+        discovery, "_union_portal_targets",
+        lambda user_ids: {
+            "greenhouse": [("acmeco", "Acme Co")],
+            "lever": [("acmeco", "Acme Co")],
+            "ashby": [("acmeco", "Acme Co")],
+            "workday": [{"tenant": "acme", "site": "External", "dc": "wd1", "name": "Acme"}],
+        },
+    )
+
+    upserted: list[dict] = []
+    monkeypatch.setattr(db, "upsert_posting", lambda job: upserted.append(dict(job)))
+
+    summary = discovery.run_discovery_cycle()
+
+    assert call_counts == {
+        "greenhouse": 1,
+        "lever": 1,
+        "ashby": 1,
+        "workday": 1,
+        "hn_whoshiring": 1,
+        "eighty_thousand_hours": 1,
+        "remoteok": 1,
+        "jsearch": 1,
+        "serpapi": 1,
+    }
+    assert summary["fetched"] == 9
+    assert len(upserted) == 9
+
+
+def test_run_discovery_cycle_dedups_across_all_nine_sources(tmp_path, monkeypatch):
+    """The same canonical job id surfacing from a fixed source (e.g.
+    remoteok) and a portal source collapses to one upsert, same as the
+    existing cross-source dedup test for the four portal sources."""
+    d = _portals_dir(tmp_path, "user-a", """
+greenhouse:
+  companies:
+    - slug: acmeco
+      name: Acme Co
+""")
+    monkeypatch.setattr(discovery, "materialize_profile_dir", lambda user_id: d)
+    monkeypatch.setattr(db, "list_profile_user_ids", lambda: ["user-a"])
+
+    monkeypatch.setattr(
+        greenhouse, "fetch",
+        lambda targets=None: iter([_gh_job("acmeco", jid="dup-1")]),
+    )
+
+    def _remoteok_dup():
+        yield _fixed_job("dup-1", "remoteok")  # same canonical id as greenhouse's job
+
+    monkeypatch.setattr(remoteok, "fetch", _remoteok_dup)
+
+    upserted: list[dict] = []
+    monkeypatch.setattr(db, "upsert_posting", lambda job: upserted.append(dict(job)))
+
+    summary = discovery.run_discovery_cycle()
+
+    assert summary["fetched"] == 1
+    assert len(upserted) == 1

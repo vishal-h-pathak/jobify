@@ -17,6 +17,15 @@ result in ONE fetch of that company, not two. This module:
        reusing them directly rather than forking (each grew an optional
        `targets`/`tenants` override param in this task, additive and
        byte-compatible with the single-user `jobify-hunt` call).
+    4b. Also fetches the five non-portal `jobify.hunt.sources` fetchers
+       (`hn_whoshiring`, `eighty_thousand_hours`, `remoteok`, `jsearch`,
+       `serpapi`) exactly ONCE per cycle, zero-arg, same as
+       `jobify.hunt.agent.iter_all_jobs` does for the single-user path —
+       they run a fixed keyword search with no per-user configuration to
+       union, so there's nothing to materialize per user, but skipping
+       them here would silently drop those sources' postings for every
+       hosted user relative to what single-user `jobify-hunt` would have
+       found.
     5. Resolves links via `jobify.hunt.agent._resolve_link_and_liveness`
        (reused directly — the four sources above only ever yield direct
        ATS URLs, so this never issues an extra HTTP fetch; see
@@ -31,12 +40,14 @@ Zero LLM tokens spent anywhere in this module. Scoring (rubric / embedding
 rerank / LLM verdict) is entirely Task 3's (`jobify.hosted.fanout`) job —
 this module's only job is getting postings into the shared pool.
 
-Deliberately scoped to the portals.yml-configured ATS sources
-(greenhouse/lever/ashby/workday) — the only sources with a per-user board
-list to union. The other `jobify.hunt.sources` fetchers (remoteok,
-serpapi, jsearch, hn_whoshiring, eighty_thousand_hours) run fixed
-keyword searches with no per-user configuration to union, and are out of
-this task's scope.
+Covers all nine `jobify.hunt.sources` fetchers that the single-user
+`jobify-hunt` pipeline (`jobify.hunt.agent.iter_all_jobs`) runs: the four
+portals.yml-configured ATS sources (greenhouse/lever/ashby/workday) are
+unioned per-user as described above; the five fixed keyword-search
+sources (hn_whoshiring, eighty_thousand_hours, remoteok, jsearch,
+serpapi) have no per-user configuration to union — every user would see
+an identical fetch — so they're simply called once per cycle, same as
+`iter_all_jobs` calls them unconditionally today.
 """
 
 from __future__ import annotations
@@ -51,10 +62,26 @@ from jobify import db
 # never added to that path.
 from jobify.hunt.agent import _resolve_link_and_liveness
 from jobify.profile_loader import materialize_profile_dir
-from sources import ashby, greenhouse, lever, workday
+from sources import (
+    ashby,
+    eighty_thousand_hours,
+    greenhouse,
+    hn_whoshiring,
+    jsearch,
+    lever,
+    remoteok,
+    serpapi,
+    workday,
+)
 from sources._portals import companies, workday_tenants
 
 logger = logging.getLogger("jobify.hosted.discovery")
+
+# Fixed keyword-search sources: no per-user `portals.yml` configuration to
+# union (every user's fetch would be identical), so each is called exactly
+# once per discovery cycle with no override — matching
+# `jobify.hunt.agent.SOURCES`'s free-then-paid ordering for these five.
+_FIXED_SOURCES = (hn_whoshiring, eighty_thousand_hours, remoteok, jsearch, serpapi)
 
 
 def _union_portal_targets(user_ids: list[str]) -> dict[str, list]:
@@ -105,37 +132,51 @@ def _union_portal_targets(user_ids: list[str]) -> dict[str, list]:
     }
 
 
-def _iter_union_postings(union: dict[str, list]):
-    """Yield job dicts from every portal-based source's union target list,
-    cross-source deduped by canonical job id.
+def _dedup_fetch(module, job_iter, seen_ids: set[str]):
+    """Drive one source's fetch iterator, dropping ids already in
+    ``seen_ids`` (cross-source dedup) and logging+swallowing a per-source
+    fetch error rather than aborting the whole cycle — matching
+    `jobify.hunt.agent.iter_all_jobs`'s own per-source try/except."""
+    try:
+        for job in job_iter:
+            if job["id"] in seen_ids:
+                logger.debug(
+                    "discovery: cross-source dedup hit on %s (id=%s)",
+                    module.__name__, job["id"],
+                )
+                continue
+            seen_ids.add(job["id"])
+            yield job
+    except Exception as exc:  # noqa: BLE001 — one source's bug must not abort the cycle
+        logger.error("discovery: [%s] error: %s", module.__name__, exc)
 
-    Mirrors `jobify.hunt.agent.iter_all_jobs`'s cross-source dedup, scoped
-    to the four portals.yml-configured sources. A per-source fetch error
-    is logged and skipped rather than aborting the whole cycle — matching
-    `iter_all_jobs`'s own per-source try/except.
+
+def _iter_union_postings(union: dict[str, list]):
+    """Yield job dicts from every portal-based source's union target list
+    PLUS the five fixed keyword-search sources, cross-source deduped by
+    canonical job id.
+
+    Mirrors `jobify.hunt.agent.iter_all_jobs`'s cross-source dedup, now
+    across the full nine-source set that single-user `jobify-hunt` runs:
+    the four portals.yml-configured sources are called with the per-user
+    union target list; the five fixed sources (`_FIXED_SOURCES`) take no
+    arguments and are called exactly once regardless of how many users
+    exist.
     """
     seen_ids: set[str] = set()
-    fetchers = (
+    portal_fetchers = (
         (greenhouse, union["greenhouse"]),
         (lever, union["lever"]),
         (ashby, union["ashby"]),
         (workday, union["workday"]),
     )
-    for module, targets in fetchers:
+    for module, targets in portal_fetchers:
         if not targets:
             continue
-        try:
-            for job in module.fetch(targets):
-                if job["id"] in seen_ids:
-                    logger.debug(
-                        "discovery: cross-source dedup hit on %s (id=%s)",
-                        module.__name__, job["id"],
-                    )
-                    continue
-                seen_ids.add(job["id"])
-                yield job
-        except Exception as exc:  # noqa: BLE001 — one source's bug must not abort the cycle
-            logger.error("discovery: [%s] error: %s", module.__name__, exc)
+        yield from _dedup_fetch(module, module.fetch(targets), seen_ids)
+
+    for module in _FIXED_SOURCES:
+        yield from _dedup_fetch(module, module.fetch(), seen_ids)
 
 
 def run_discovery_cycle() -> dict:
