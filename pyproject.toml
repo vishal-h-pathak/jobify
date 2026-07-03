@@ -87,6 +87,13 @@ jobify-submit = "jobify.tailor.pipeline:run_submit_only"
 # Amendment 1). Triggered from the portfolio dashboard via the
 # tailor-manual.yml GHA workflow.
 jobify-tailor-one = "jobify.tailor.manual.cli:run"
+# H4 Task 4: hosted (multitenant) worker console script. One cycle =
+# jobify.hosted.discovery.run_discovery_cycle() (global posting fetch)
+# THEN jobify.hosted.fanout.run_fanout_cycle() (per-user scoring ladder),
+# composed by jobify.hosted.worker:run — mirrors jobify-hunt's single-shot
+# console-script pattern; cron / .github/workflows/hosted-hunt.yml handles
+# recurrence.
+jobify-hosted-hunt = "jobify.hosted.worker:run"
 
 [tool.setuptools]
 # Each listed package needs to be installed so setuptools wires up the
