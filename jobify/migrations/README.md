@@ -80,3 +80,45 @@ already-provisioned projects.
 New schema changes go in `0002_*.sql`, `0003_*.sql`, … (ordered). Keep
 each additive and idempotent. The baseline is only re-squashed when the
 incremental count gets unwieldy.
+
+## 0002 — hosted multi-tenant tables
+
+`0002_multitenant.sql` is additive on top of `0001_init.sql` — H1 of the
+hosted-aggregator plan (`planning/HOSTED_AGGREGATOR_PLAN.md` §3). It adds:
+
+| Table | Purpose |
+|---|---|
+| `profiles` | one row per hosted user — the 8-file profile contract as JSONB, plus compiled rubric + embedding |
+| `postings` | **global** job postings pool (no `user_id`) — discovery/embeddings amortize across every user |
+| `matches` | `user_id x posting_id` — ladder scores + its own state machine (`new -> seen -> saved \| dismissed \| applied`, see `jobify/shared/match_state.py`). Separate from `jobs.status` — that contract is untouched. |
+| `budget_ledger` | append-only per-user token/cost events |
+| `budget_caps` | per-user monthly spend cap, service-role-managed |
+| `api_keys` | optional BYO Anthropic key (ciphertext only — app-side encryption is H6) |
+
+`0001`'s tables keep their RLS-enabled-no-policies / service-role-only
+posture. The new tables get real RLS policies (own-row select/insert/update
+via `auth.uid() = user_id`, no delete; `postings` is select-all-authenticated,
+write-locked to service-role) — see the header comment in
+`0002_multitenant.sql` for the exact policy-by-policy rationale.
+
+Apply it the same way as `0001` (SQL Editor / `supabase db push` /
+`apply_migration`), after `0001` is already applied.
+
+### Running the isolation tests
+
+`tests/test_rls_multitenant.py` (marked `@pytest.mark.integration`)
+exercises RLS in both directions against a real Postgres — it needs a
+live Supabase stack, so it skips cleanly (not a failure) when one isn't
+configured:
+
+```bash
+supabase start                       # from a supabase-cli project dir with 0001+0002 applied
+export SUPABASE_URL=http://127.0.0.1:54321
+export SUPABASE_SERVICE_ROLE_KEY=<service_role from `supabase status`>
+export SUPABASE_ANON_KEY=<anon from `supabase status`>
+pytest -m integration tests/test_rls_multitenant.py -v
+```
+
+The match-state contract (`jobify/shared/match_state.py` <-> `match_state.json`
+<-> `matches_state_check`) is pinned by `tests/test_match_state_contract.py`,
+which runs in the default (non-integration) suite — no live DB needed.

@@ -135,6 +135,7 @@ python_functions = ["test_*"]
 addopts = "-m 'not legacy'"
 markers = [
     "legacy: Forensic-only tests for the retired Browserbase + Stagehand path. Excluded by default; run with `pytest -m legacy`.",
+    "integration: Requires a live Supabase stack (local `supabase start` or SUPABASE_* env vars); skips cleanly when absent.",
 ]
 
 [tool.ruff]
