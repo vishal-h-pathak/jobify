@@ -211,6 +211,68 @@ def compile_rubric(*, thesis: str, disqualifiers_text: str, targeting_text: str)
     )
 
 
+def _compile_user_msg(*, thesis: str, disqualifiers_text: str, targeting_text: str) -> str:
+    return (
+        "=== thesis.md ===\n"
+        f"{thesis.strip()}\n\n"
+        "=== disqualifiers.yml ===\n"
+        f"{disqualifiers_text.strip()}\n\n"
+        "=== targeting tiers (profile.yml) ===\n"
+        f"{targeting_text.strip()}\n"
+    )
+
+
+def compile_rubric_with_usage(
+    *, thesis: str, disqualifiers_text: str, targeting_text: str,
+) -> tuple[dict, llm.CompletionUsage]:
+    """Same compilation contract as `compile_rubric` (identical retry/
+    validate loop, identical inputs), but also returns real token usage
+    so a caller can write an accurate `budget_ledger` row (H4 Task 3's
+    fan-out: `event='rubric_compile'`).
+
+    Additive sibling, not a replacement: `compile_rubric` keeps calling
+    `llm.complete` exactly as before (its own tests monkeypatch that
+    call directly) — this function is a separate entry point that calls
+    `llm.complete_with_usage` instead, mirroring the same
+    additive-bypass pattern H4 Task 1 used on `jobify.profile_loader`'s
+    loaders (add a parallel path rather than change an existing one's
+    contract). Usage is summed across the (up to two) attempts, since a
+    retry still spends real tokens the ledger must account for.
+    """
+    user_msg = _compile_user_msg(
+        thesis=thesis, disqualifiers_text=disqualifiers_text, targeting_text=targeting_text,
+    )
+
+    last_error: Optional[str] = None
+    total_input = 0
+    total_output = 0
+    for attempt in range(2):
+        text, usage = llm.complete_with_usage(
+            system=_compiler_system(),
+            prompt=user_msg,
+            model=COMPILER_MODEL,
+            max_tokens=COMPILER_MAX_TOKENS,
+        )
+        total_input += usage.input_tokens
+        total_output += usage.output_tokens
+        try:
+            data = _extract_json_object(text)
+        except (ValueError, json.JSONDecodeError) as exc:
+            last_error = f"invalid JSON: {exc}"
+            continue
+
+        errors = validate_rubric(data)
+        if not errors:
+            return data, llm.CompletionUsage(
+                input_tokens=total_input, output_tokens=total_output,
+            )
+        last_error = "; ".join(errors)
+
+    raise ValueError(
+        f"rubric compiler: invalid rubric after retry ({last_error})"
+    )
+
+
 # ── Scorer ───────────────────────────────────────────────────────────────
 
 # A bare "$165" with no comma grouping or k-suffix is almost never an

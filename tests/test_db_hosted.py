@@ -344,3 +344,142 @@ def test_set_profile_embedding_writes_expected_payload(patch_db_client):
     assert name == "profiles"
     assert q.update_payload == {"embedding": [0.3, 0.4]}
     assert q.eq_calls == [("user_id", "user-1")]
+
+
+# ── get_profile_validation_status (H4 Task 3) ────────────────────────────
+
+
+def test_get_profile_validation_status_returns_stored_value(patch_db_client):
+    fake = _FakeClient({
+        "profiles": [{"user_id": "user-1", "validation_status": "invalid"}],
+    })
+    patch_db_client(fake)
+
+    assert db.get_profile_validation_status("user-1") == "invalid"
+
+
+def test_get_profile_validation_status_none_when_row_missing(patch_db_client):
+    fake = _FakeClient({"profiles": []})
+    patch_db_client(fake)
+
+    assert db.get_profile_validation_status("user-1") is None
+
+
+def test_get_profile_validation_status_none_when_column_null(patch_db_client):
+    fake = _FakeClient({"profiles": [{"user_id": "user-1", "validation_status": None}]})
+    patch_db_client(fake)
+
+    assert db.get_profile_validation_status("user-1") is None
+
+
+# ── get_compiled_rubric / set_compiled_rubric (H4 Task 3) ────────────────
+
+
+def test_get_compiled_rubric_returns_stored_rubric(patch_db_client):
+    rubric = {"rubric_version": 1, "term_groups": []}
+    fake = _FakeClient({"profiles": [{"user_id": "user-1", "compiled_rubric": rubric}]})
+    patch_db_client(fake)
+
+    assert db.get_compiled_rubric("user-1") == rubric
+
+
+def test_get_compiled_rubric_none_when_row_missing(patch_db_client):
+    fake = _FakeClient({"profiles": []})
+    patch_db_client(fake)
+
+    assert db.get_compiled_rubric("user-1") is None
+
+
+def test_set_compiled_rubric_writes_expected_payload(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+    rubric = {"rubric_version": 1, "term_groups": []}
+
+    db.set_compiled_rubric("user-1", rubric)
+
+    name, q = fake.queries[-1]
+    assert name == "profiles"
+    assert q.update_payload == {"compiled_rubric": rubric}
+    assert q.eq_calls == [("user_id", "user-1")]
+
+
+# ── upsert_match (H4 Task 3) ──────────────────────────────────────────────
+
+
+def test_upsert_match_writes_expected_payload_and_on_conflict(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.upsert_match(
+        "user-1", "posting-1",
+        rubric_score=0.8, embed_score=None, reason="matched:core (+1)",
+        reason_source="rubric",
+    )
+
+    name, q = fake.queries[-1]
+    assert name == "matches"
+    assert q.upsert_on_conflict == "user_id,posting_id"
+    assert q.upsert_payload == {
+        "user_id": "user-1",
+        "posting_id": "posting-1",
+        "rubric_score": 0.8,
+        "embed_score": None,
+        "reason": "matched:core (+1)",
+        "reason_source": "rubric",
+    }
+
+
+def test_upsert_match_never_includes_state_columns(patch_db_client):
+    """The core state-preservation contract: `upsert_match` never writes
+    `state` / `state_changed_at` itself, regardless of what fields the
+    caller passes — so a real Postgrest `ON CONFLICT DO UPDATE SET`
+    (which only touches columns present in the payload) leaves an
+    already-triaged row's `state` (`saved` / `dismissed` / `applied`)
+    completely alone on a re-score. Only the column's own DB DEFAULT
+    (`'new'`) can ever set `state`, and only on the first insert."""
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.upsert_match("user-1", "posting-1", llm_score=0.9, reason="x", reason_source="llm")
+
+    _, q = fake.queries[-1]
+    assert "state" not in q.upsert_payload
+    assert "state_changed_at" not in q.upsert_payload
+
+
+# ── get_unmatched_postings (H4 Task 3) ────────────────────────────────────
+
+
+def test_get_unmatched_postings_excludes_already_matched(patch_db_client):
+    fake = _FakeClient({
+        "matches": [{"user_id": "user-1", "posting_id": "p-1"}],
+        "postings": [
+            {"id": "p-1", "title": "Already matched"},
+            {"id": "p-2", "title": "Not yet matched"},
+        ],
+    })
+    patch_db_client(fake)
+
+    result = db.get_unmatched_postings("user-1")
+
+    assert [p["id"] for p in result] == ["p-2"]
+
+
+def test_get_unmatched_postings_filters_matches_by_user(patch_db_client):
+    """Another user's matches rows must not exclude postings for this user."""
+    fake = _FakeClient({
+        "matches": [{"user_id": "user-2", "posting_id": "p-1"}],
+        "postings": [{"id": "p-1", "title": "Only matched for user-2"}],
+    })
+    patch_db_client(fake)
+
+    result = db.get_unmatched_postings("user-1")
+
+    assert [p["id"] for p in result] == ["p-1"]
+
+
+def test_get_unmatched_postings_empty_when_no_postings(patch_db_client):
+    fake = _FakeClient({"matches": [], "postings": []})
+    patch_db_client(fake)
+
+    assert db.get_unmatched_postings("user-1") == []

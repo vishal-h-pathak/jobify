@@ -422,6 +422,102 @@ def set_profile_embedding(user_id: str, embedding: list[float]) -> None:
     ).eq("user_id", user_id).execute()
 
 
+def get_profile_validation_status(user_id: str) -> str | None:
+    """Return `profiles.validation_status` for `user_id`, or `None` if the
+    row is missing OR the column itself is `NULL` (never
+    materialized/validated yet — see
+    `jobify.profile_loader._validate_materialized`'s early return when the
+    `onboarding` package isn't importable).
+
+    Read by `jobify.hosted.fanout` before running ANY stage for a user:
+    an explicit `'invalid'` skips the user entirely this cycle; `None`
+    (never validated) is treated as "proceed" (fail open), matching the
+    contract documented on `jobify.profile_loader.VALIDATION_STATUS_INVALID`.
+    """
+    result = (
+        _get_client().table("profiles")
+        .select("validation_status")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return None
+    return rows[0].get("validation_status")
+
+
+def get_compiled_rubric(user_id: str) -> dict | None:
+    """Return `profiles.compiled_rubric` for `user_id`, or `None` if the
+    row is missing or the column is `NULL` (never compiled — H4 Task 3's
+    fan-out compiles it on first use and persists it via
+    `set_compiled_rubric`).
+    """
+    result = (
+        _get_client().table("profiles")
+        .select("compiled_rubric")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return None
+    return rows[0].get("compiled_rubric")
+
+
+def set_compiled_rubric(user_id: str, rubric: dict) -> None:
+    """Persist a freshly-compiled rubric (`jobify.hunt.rubric.compile_rubric`)
+    to `profiles.compiled_rubric` so later cycles reuse it instead of
+    re-compiling (one Sonnet-class call per user, ever, unless the rubric
+    is explicitly recompiled)."""
+    _get_client().table("profiles").update(
+        {"compiled_rubric": rubric}
+    ).eq("user_id", user_id).execute()
+
+
+def upsert_match(user_id: str, posting_id: str, **fields: Any) -> None:
+    """Upsert one `matches` row (H4 Task 3 fan-out), on-conflict on the
+    table's actual PK `(user_id, posting_id)` (`0002_multitenant.sql:150`).
+
+    `**fields` are the score/reason columns the caller has for this
+    write (e.g. `rubric_score`, `embed_score`, `llm_score`, `reason`,
+    `reason_source`) — deliberately NEVER `state` / `state_changed_at`.
+    Postgrest's upsert only sets the columns present in the payload on a
+    conflict, so omitting `state` here means: a first insert gets the
+    column's own DB DEFAULT (`'new'`), and a re-score of a posting the
+    user already triaged (`saved` / `dismissed` / `applied`) leaves that
+    triage state completely alone — only the score columns move. Getting
+    a fresh score for a posting the user already dismissed is fine;
+    silently resetting their dismissal back to `'new'` is not.
+    """
+    payload = {"user_id": user_id, "posting_id": posting_id, **fields}
+    _get_client().table("matches").upsert(
+        payload, on_conflict="user_id,posting_id",
+    ).execute()
+
+
+def get_unmatched_postings(user_id: str) -> list[dict]:
+    """Every `postings` row `user_id` has no `matches` row for yet — the
+    fan-out worker's per-user candidate pool for a scoring cycle.
+
+    Client-side anti-join: fetch this user's already-matched posting ids,
+    fetch every posting, filter in Python. The Supabase Python client's
+    query builder has no clean `NOT IN (subquery)` — acceptable at H4's
+    scale (same category of known limit as `list_profile_user_ids`'s
+    unpaginated fetch, H4 Task 2); revisit if either table's row count
+    makes a full-table pull expensive.
+    """
+    matched_rows = (
+        _get_client().table("matches")
+        .select("posting_id")
+        .eq("user_id", user_id)
+        .execute()
+        .data or []
+    )
+    matched_ids = {r["posting_id"] for r in matched_rows}
+    all_postings = _get_client().table("postings").select("*").execute().data or []
+    return [p for p in all_postings if p.get("id") not in matched_ids]
+
+
 # ══════════════════════════════════════════════════════════════════════════
 #  TAILOR — status lifecycle for the M-2/M-6 application flow
 #  (was jobify/tailor/db.py)

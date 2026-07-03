@@ -265,6 +265,76 @@ def test_compile_rubric_raises_after_two_invalid_attempts(monkeypatch):
         rubric.compile_rubric(thesis="T", disqualifiers_text="D", targeting_text="G")
 
 
+def test_compile_rubric_with_usage_returns_rubric_and_real_token_counts(monkeypatch, alex_rubric):
+    """H4 Task 3's additive sibling: same compile contract, but returns
+    real usage for the caller's budget_ledger row instead of routing
+    through the plain `complete()` (which has no usage to report)."""
+    captured = {}
+
+    def fake_complete_with_usage(*, system, prompt, model, max_tokens):
+        captured.update(system=system, prompt=prompt, model=model, max_tokens=max_tokens)
+        return json.dumps(alex_rubric), rubric.llm.CompletionUsage(
+            input_tokens=123, output_tokens=45,
+        )
+
+    monkeypatch.setattr(rubric.llm, "complete_with_usage", fake_complete_with_usage)
+
+    result, usage = rubric.compile_rubric_with_usage(
+        thesis="THESIS TEXT", disqualifiers_text="DISQ TEXT", targeting_text="TIERS TEXT",
+    )
+
+    assert result == alex_rubric
+    assert usage.input_tokens == 123
+    assert usage.output_tokens == 45
+    assert captured["model"] == rubric.COMPILER_MODEL
+    assert "THESIS TEXT" in captured["prompt"]
+
+
+def test_compile_rubric_with_usage_sums_tokens_across_retry(monkeypatch, alex_rubric):
+    responses = iter([
+        ('{"rubric_version": 1}', rubric.llm.CompletionUsage(input_tokens=100, output_tokens=10)),
+        (json.dumps(alex_rubric), rubric.llm.CompletionUsage(input_tokens=100, output_tokens=20)),
+    ])
+
+    def fake_complete_with_usage(**_kwargs):
+        return next(responses)
+
+    monkeypatch.setattr(rubric.llm, "complete_with_usage", fake_complete_with_usage)
+
+    result, usage = rubric.compile_rubric_with_usage(
+        thesis="T", disqualifiers_text="D", targeting_text="G",
+    )
+
+    assert result == alex_rubric
+    assert usage.input_tokens == 200  # both attempts cost real tokens
+    assert usage.output_tokens == 30
+
+
+def test_compile_rubric_with_usage_raises_after_two_invalid_attempts(monkeypatch):
+    def fake_complete_with_usage(**_kwargs):
+        return "not json at all", rubric.llm.CompletionUsage(input_tokens=10, output_tokens=5)
+
+    monkeypatch.setattr(rubric.llm, "complete_with_usage", fake_complete_with_usage)
+
+    with pytest.raises(ValueError, match="invalid rubric after retry"):
+        rubric.compile_rubric_with_usage(thesis="T", disqualifiers_text="D", targeting_text="G")
+
+
+def test_compile_rubric_still_uses_plain_complete_unaffected_by_new_sibling(monkeypatch, alex_rubric):
+    """`compile_rubric` itself is untouched: it must keep calling
+    `llm.complete` (not `complete_with_usage`), so existing callers/tests
+    that only monkeypatch `complete` keep working."""
+    def _boom_with_usage(**_kwargs):
+        raise AssertionError("compile_rubric must not call complete_with_usage")
+
+    monkeypatch.setattr(rubric.llm, "complete_with_usage", _boom_with_usage)
+    monkeypatch.setattr(rubric.llm, "complete", lambda **_kwargs: json.dumps(alex_rubric))
+
+    result = rubric.compile_rubric(thesis="T", disqualifiers_text="D", targeting_text="G")
+
+    assert result == alex_rubric
+
+
 def test_validate_rubric_reports_bad_regex():
     bad = {
         "rubric_version": 1,

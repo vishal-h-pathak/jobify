@@ -120,6 +120,15 @@ VOYAGE_API_KEY: Final[str]     = os.environ.get("VOYAGE_API_KEY", "")
 EMBEDDINGS_ENABLED: Final[bool] = _bool("EMBEDDINGS_ENABLED", "true")
 
 
+# ── Hosted worker: per-user fan-out ladder (H4 Task 3, jobify.hosted.fanout) ─
+# Stage 4 (LLM verdict) only runs for the top-N postings per user per cycle
+# by stage-2/3 composite ranking — everything below N is left at its
+# rubric(+embed) score. 15 is a starting point (docs/SCORING.md's ladder),
+# env-tunable without a code change as the fleet's cost/quality tradeoff
+# gets tuned.
+HOSTED_STAGE4_TOP_N: Final[int] = int(os.environ.get("HOSTED_STAGE4_TOP_N", "15"))
+
+
 # ── Claude model selection (PR-8: per-subtree to preserve LLM parity) ─────
 # Tailor and submitter use Sonnet for different tasks (resume / cover-letter
 # authorship vs. post-submit confirm-page analysis). PR-8 refused to unify
