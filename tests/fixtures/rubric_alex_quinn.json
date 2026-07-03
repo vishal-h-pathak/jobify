@@ -1,0 +1,42 @@
+{
+  "rubric_version": 1,
+  "term_groups": [
+    {
+      "group": "platform_infra_ownership",
+      "weight": 5.0,
+      "terms": ["platform engineer", "infrastructure", "developer platform", "own a service", "end-to-end", "distributed systems"]
+    },
+    {
+      "group": "scale_signals",
+      "weight": 3.0,
+      "terms": ["high-throughput", "multi-region", "kubernetes", "kafka", "slo"]
+    },
+    {
+      "group": "ml_data_platform",
+      "weight": 3.5,
+      "terms": ["feature store", "ml platform", "data platform", "model serving"]
+    },
+    {
+      "group": "generalist_mission",
+      "weight": 1.5,
+      "terms": ["full-stack", "mission-driven", "generalist"]
+    }
+  ],
+  "disqualifiers": [
+    {"pattern": "(?i)\\bcrypto\\b|\\bweb3\\b", "reason": "Crypto / Web3 / trading products — not a domain of genuine interest"},
+    {"pattern": "(?i)\\bdefense contractor\\b|\\bweapons\\b", "reason": "Defense / weapons work"}
+  ],
+  "gates": {
+    "location": {
+      "remote_acceptable": true,
+      "base_location_substring": "denver"
+    },
+    "comp_floor_usd": 165000,
+    "degree_gate": true
+  },
+  "tier_hints": [
+    {"pattern": "(?i)platform|infrastructure|distributed systems", "tier": 1},
+    {"pattern": "(?i)ml platform|data platform|machine learning infrastructure", "tier": 2},
+    {"pattern": "(?i)senior|staff", "tier": 3}
+  ]
+}
