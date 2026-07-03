@@ -173,6 +173,115 @@ def _check_nonempty(text: str, fname: str, rep: Report, *, required: bool) -> bo
     return False
 
 
+def validate_profile_dir(target: Path) -> Report:
+    """Run every profile check against `target` and return the `Report`.
+
+    Factored out of `main()` (H2) so callers that already have a directory
+    on disk — e.g. `jobify.profile_loader`'s DB-backed materialization —
+    can validate in-process without shelling out to this script. Points
+    `JOBIFY_PROFILE_DIR` at `target` and clears `profile_loader`'s
+    `lru_cache` for the duration of the checks (the loaders have no
+    directory-parameterized entry point), then restores the prior env var
+    and cache state on the way out — safe to call from inside another
+    `profile_loader.profile_dir()` resolution.
+    """
+    rep = Report()
+
+    if not target.is_dir():
+        rep.error(f"{target}: not a directory")
+        return rep
+
+    try:
+        from jobify import profile_loader
+    except Exception as exc:  # pragma: no cover - import wiring
+        rep.error(f"could not import jobify.profile_loader: {exc!r}")
+        return rep
+
+    prev_env = os.environ.get("JOBIFY_PROFILE_DIR")
+    os.environ["JOBIFY_PROFILE_DIR"] = str(target)
+    profile_loader._clear_cache_for_tests()
+    try:
+        resolved = profile_loader.profile_dir()
+        if resolved != target:
+            rep.warn(f"loader resolved {resolved}, expected {target}")
+
+        # ── profile.yml (hard-required structure) ───────────────────────
+        profile = profile_loader.load_profile()
+        if not profile:
+            rep.error("profile.yml: missing or not a mapping (REQUIRED file)")
+        else:
+            schema = _load_schema("profile.schema.json")
+            if schema:
+                _validate_against_schema(profile, schema, "profile.yml", rep)
+            # extra targeted checks the schema can't express cleanly
+            defaults = profile_loader.load_application_defaults()
+            if defaults:
+                piv = defaults.get("previous_interview_with_company")
+                if piv is not None and not isinstance(piv, dict):
+                    rep.error(
+                        "profile.yml: application_defaults.previous_interview_with_company "
+                        "must be a map of company-slug -> bool (may be {})"
+                    )
+
+        # ── disqualifiers.yml ────────────────────────────────────────────
+        disq = profile_loader.load_disqualifiers()
+        schema = _load_schema("disqualifiers.schema.json")
+        if not disq:
+            rep.warn("disqualifiers.yml: missing/empty (scorer can't floor bad roles)")
+        elif schema:
+            _validate_against_schema(disq, schema, "disqualifiers.yml", rep)
+
+        # ── portals.yml (hunt needs it) ──────────────────────────────────
+        portals = profile_loader.load_portals()
+        schema = _load_schema("portals.schema.json")
+        if not portals:
+            rep.warn("portals.yml: missing/empty (jobify-hunt has no boards to poll)")
+        elif schema:
+            _validate_against_schema(portals, schema, "portals.yml", rep)
+
+        # ── prose files ───────────────────────────────────────────────────
+        thesis = profile_loader.load_thesis()
+        if _check_nonempty(thesis, "thesis.md", rep, required=False):
+            if not re.search(r"(?im)^#\s+\S", thesis):
+                rep.warn("thesis.md: no top-level '# ' title (scorer banner reads odd)")
+            rep.ok("thesis.md: present")
+
+        voice = profile_loader.load_voice_profile()
+        if _check_nonempty(voice.get("raw", ""), "voice-profile.md", rep, required=False):
+            sections = voice.get("sections") or {}
+            if not sections:
+                rep.error(
+                    "voice-profile.md: no '## ' sections — loader yields an empty "
+                    "sections dict and the tailor loses all voice guidance"
+                )
+            else:
+                rep.ok(f"voice-profile.md: {len(sections)} section(s) parsed")
+
+        digest = profile_loader.load_article_digest()
+        if _check_nonempty(digest, "article-digest.md", rep, required=False):
+            if not re.search(r"(?i)do not (have|invent)", digest):
+                rep.warn(
+                    "article-digest.md: no 'do not invent' guardrail section — the "
+                    "tailor's anti-fabrication fence is weaker without it"
+                )
+            rep.ok("article-digest.md: present")
+
+        cv = profile_loader.load_cv()
+        if _check_nonempty(cv, "cv.md", rep, required=False):
+            rep.ok("cv.md: present")
+
+        # learned-insights.md is fully optional and ships ~empty; never warn.
+        _ = profile_loader.load_learned_insights()
+    finally:
+        if prev_env is None:
+            os.environ.pop("JOBIFY_PROFILE_DIR", None)
+        else:
+            os.environ["JOBIFY_PROFILE_DIR"] = prev_env
+        profile_loader._clear_cache_for_tests()
+
+    return rep
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -187,97 +296,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     target = Path(args.profile_dir).expanduser().resolve()
-    rep = Report()
-
-    if not target.is_dir():
-        rep.error(f"{target}: not a directory")
-        print(rep.render_json() if args.json else rep.render_text())
-        return 1
-
-    # Force the loader to resolve OUR target dir, and clear its lru_cache so a
-    # prior import in the same process doesn't pin a stale path (the test suite
-    # validates several dirs in one process).
-    os.environ["JOBIFY_PROFILE_DIR"] = str(target)
-    try:
-        from jobify import profile_loader
-    except Exception as exc:  # pragma: no cover - import wiring
-        rep.error(f"could not import jobify.profile_loader: {exc!r}")
-        print(rep.render_json() if args.json else rep.render_text())
-        return 1
-    profile_loader._clear_cache_for_tests()
-
-    resolved = profile_loader.profile_dir()
-    if resolved != target:
-        rep.warn(f"loader resolved {resolved}, expected {target}")
-
-    # ── profile.yml (hard-required structure) ───────────────────────────────
-    profile = profile_loader.load_profile()
-    if not profile:
-        rep.error("profile.yml: missing or not a mapping (REQUIRED file)")
-    else:
-        schema = _load_schema("profile.schema.json")
-        if schema:
-            _validate_against_schema(profile, schema, "profile.yml", rep)
-        # extra targeted checks the schema can't express cleanly
-        defaults = profile_loader.load_application_defaults()
-        if defaults:
-            piv = defaults.get("previous_interview_with_company")
-            if piv is not None and not isinstance(piv, dict):
-                rep.error(
-                    "profile.yml: application_defaults.previous_interview_with_company "
-                    "must be a map of company-slug -> bool (may be {})"
-                )
-
-    # ── disqualifiers.yml ───────────────────────────────────────────────────
-    disq = profile_loader.load_disqualifiers()
-    schema = _load_schema("disqualifiers.schema.json")
-    if not disq:
-        rep.warn("disqualifiers.yml: missing/empty (scorer can't floor bad roles)")
-    elif schema:
-        _validate_against_schema(disq, schema, "disqualifiers.yml", rep)
-
-    # ── portals.yml (hunt needs it) ─────────────────────────────────────────
-    portals = profile_loader.load_portals()
-    schema = _load_schema("portals.schema.json")
-    if not portals:
-        rep.warn("portals.yml: missing/empty (jobify-hunt has no boards to poll)")
-    elif schema:
-        _validate_against_schema(portals, schema, "portals.yml", rep)
-
-    # ── prose files ─────────────────────────────────────────────────────────
-    thesis = profile_loader.load_thesis()
-    if _check_nonempty(thesis, "thesis.md", rep, required=False):
-        if not re.search(r"(?im)^#\s+\S", thesis):
-            rep.warn("thesis.md: no top-level '# ' title (scorer banner reads odd)")
-        rep.ok("thesis.md: present")
-
-    voice = profile_loader.load_voice_profile()
-    if _check_nonempty(voice.get("raw", ""), "voice-profile.md", rep, required=False):
-        sections = voice.get("sections") or {}
-        if not sections:
-            rep.error(
-                "voice-profile.md: no '## ' sections — loader yields an empty "
-                "sections dict and the tailor loses all voice guidance"
-            )
-        else:
-            rep.ok(f"voice-profile.md: {len(sections)} section(s) parsed")
-
-    digest = profile_loader.load_article_digest()
-    if _check_nonempty(digest, "article-digest.md", rep, required=False):
-        if not re.search(r"(?i)do not (have|invent)", digest):
-            rep.warn(
-                "article-digest.md: no 'do not invent' guardrail section — the "
-                "tailor's anti-fabrication fence is weaker without it"
-            )
-        rep.ok("article-digest.md: present")
-
-    cv = profile_loader.load_cv()
-    if _check_nonempty(cv, "cv.md", rep, required=False):
-        rep.ok("cv.md: present")
-
-    # learned-insights.md is fully optional and ships ~empty; never warn.
-    _ = profile_loader.load_learned_insights()
-
+    rep = validate_profile_dir(target)
     print(rep.render_json() if args.json else rep.render_text())
     return 0 if rep.passed else 1
 

@@ -11,9 +11,14 @@ outside this module should read a persona file by a hard-coded path.
 Resolution order for the profile directory:
   1. ``JOBIFY_PROFILE_DIR`` environment variable, if set and non-empty
      (a real user's generated profile, or a test fixture).
-  2. ``<repo_root>/profile/`` if that directory exists (the active user's
+  2. ``JOBIFY_PROFILE_USER_ID`` environment variable, if set — the hosted
+     path (H2). Materializes the ``profiles.doc`` JSONB row for that user
+     out of Supabase into a per-user cache directory and returns it; the
+     dir-based loaders below do everything else unmodified. See
+     ``_materialize_from_db`` for the cache/re-materialize contract.
+  3. ``<repo_root>/profile/`` if that directory exists (the active user's
      profile — onboarding writes here).
-  3. ``<repo_root>/profile.example/`` — the shipped neutral example, so a
+  4. ``<repo_root>/profile.example/`` — the shipped neutral example, so a
      fresh clone with no generated profile still loads *something* valid.
 
 The repo root is found by walking up from this file until ``pyproject.toml``.
@@ -25,13 +30,37 @@ contract should validate the result.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
 import yaml
+
+logger = logging.getLogger("jobify.profile_loader")
+
+# The eight user-layer files, matching the `profiles.doc` JSONB contract
+# (H1's `0002_multitenant.sql`): keys = these filenames, values = file
+# contents as text. Order here has no meaning beyond enumerating what to
+# materialize.
+DOC_FILENAMES = (
+    "profile.yml",
+    "thesis.md",
+    "voice-profile.md",
+    "article-digest.md",
+    "learned-insights.md",
+    "cv.md",
+    "disqualifiers.yml",
+    "portals.yml",
+)
+
+# Sentinel file written into a materialized cache dir recording the
+# `profiles.updated_at` value that produced it, so re-materialization is
+# skipped unless the DB row is actually newer.
+_STAMP_FILENAME = ".materialized_updated_at"
 
 
 def _walk_up_for_pyproject(start: Path) -> Optional[Path]:
@@ -42,11 +71,126 @@ def _walk_up_for_pyproject(start: Path) -> Optional[Path]:
     return None
 
 
+def _profile_cache_root() -> Path:
+    """Root directory under which per-user materialized profiles live.
+
+    ``JOBIFY_PROFILE_CACHE`` overrides (tests, alternate deployments);
+    otherwise ``~/.cache/jobify/profiles/``.
+    """
+    override = os.environ.get("JOBIFY_PROFILE_CACHE", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return Path.home() / ".cache" / "jobify" / "profiles"
+
+
+def _parse_timestamp(value: str) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _cache_is_stale(stamp_path: Path, updated_at: str) -> bool:
+    """True when the cached materialization must be refreshed.
+
+    Cheap path: identical raw ``updated_at`` string means the row hasn't
+    changed since the last materialization — skip. Otherwise parse both
+    timestamps and re-materialize only when the DB row is strictly newer;
+    if either timestamp fails to parse, fail safe and re-materialize.
+    """
+    if not stamp_path.is_file():
+        return True
+    cached_raw = stamp_path.read_text(encoding="utf-8").strip()
+    if cached_raw == str(updated_at).strip():
+        return False
+    cached_ts = _parse_timestamp(cached_raw)
+    new_ts = _parse_timestamp(updated_at)
+    if cached_ts is not None and new_ts is not None:
+        return new_ts > cached_ts
+    return True
+
+
+def _fetch_profile_row(user_id: str) -> dict:
+    """Fetch the ``profiles`` row for ``user_id`` via the canonical data
+    layer (``jobify.db``). Lazy import: keeps this module importable (and
+    the non-DB resolution paths usable) without Supabase credentials set,
+    matching ``jobify.db``'s own lazy-client pattern.
+    """
+    from jobify import db as _db  # noqa: PLC0415 — lazy, avoids import-time creds
+
+    result = (
+        _db.client.table("profiles")
+        .select("*")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    rows = getattr(result, "data", None) or []
+    if not rows:
+        raise RuntimeError(
+            f"profile_loader: no profiles row found for user_id={user_id!r}"
+        )
+    return rows[0]
+
+
+def _validate_materialized(cache_dir: Path, user_id: str) -> None:
+    """Best-effort validation of a freshly materialized cache dir.
+
+    Reuses ``onboarding.validate_profile``'s checks in-process (no
+    subprocess). Validation failures are logged, not raised — the
+    downstream dir-based loaders already degrade gracefully on missing or
+    malformed files, so a slightly incomplete DB profile shouldn't take
+    the whole pipeline down; the log line is the operator's signal to fix
+    the row.
+    """
+    try:
+        from onboarding.validate_profile import validate_profile_dir
+    except ImportError:  # pragma: no cover - onboarding not on the path
+        return
+    report = validate_profile_dir(cache_dir)
+    if not report.passed:
+        logger.warning(
+            "materialized profile for user_id=%s failed validation: %s",
+            user_id,
+            "; ".join(report.errors),
+        )
+
+
+def _materialize_from_db(user_id: str) -> Path:
+    """Materialize ``profiles.doc`` for ``user_id`` into a cache dir and
+    return it. Re-fetches only when the cache is missing or stale (see
+    ``_cache_is_stale``); otherwise reuses the existing files on disk.
+    """
+    cache_dir = _profile_cache_root() / user_id
+    stamp_path = cache_dir / _STAMP_FILENAME
+
+    row = _fetch_profile_row(user_id)
+    updated_at = str(row.get("updated_at") or "")
+
+    if _cache_is_stale(stamp_path, updated_at):
+        doc = row.get("doc") or {}
+        if not isinstance(doc, dict):
+            raise RuntimeError(
+                f"profile_loader: profiles.doc for user_id={user_id!r} is not "
+                "a JSON object"
+            )
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        for name in DOC_FILENAMES:
+            content = doc.get(name, "")
+            (cache_dir / name).write_text(
+                content if isinstance(content, str) else "", encoding="utf-8"
+            )
+        stamp_path.write_text(updated_at, encoding="utf-8")
+        _validate_materialized(cache_dir, user_id)
+
+    return cache_dir
+
+
 @lru_cache(maxsize=1)
 def profile_dir() -> Path:
     """Resolve the user-layer profile directory.
 
-    Honors ``JOBIFY_PROFILE_DIR`` first. Otherwise walks up from this module
+    Honors ``JOBIFY_PROFILE_DIR`` first, then ``JOBIFY_PROFILE_USER_ID``
+    (materializing from Supabase). Otherwise walks up from this module
     until ``pyproject.toml`` is found and prefers ``<repo_root>/profile`` when
     it exists (the active user's generated profile), falling back to
     ``<repo_root>/profile.example`` so a fresh clone loads the neutral example.
@@ -54,6 +198,10 @@ def profile_dir() -> Path:
     env_override = os.environ.get("JOBIFY_PROFILE_DIR", "").strip()
     if env_override:
         return Path(env_override).expanduser().resolve()
+
+    user_id = os.environ.get("JOBIFY_PROFILE_USER_ID", "").strip()
+    if user_id:
+        return _materialize_from_db(user_id)
 
     repo_root = _walk_up_for_pyproject(Path(__file__))
     if repo_root is None:
