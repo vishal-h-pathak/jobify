@@ -236,3 +236,94 @@ in a separate worktree).
 2. I created a `.venv` in this worktree (gitignored) to run the test
    suite — not committed, but future sessions on this branch will need
    to either reuse it or set up their own.
+
+---
+
+# Code-review fix: dedupe Messages-API auth-fallback chain (`jobify/shared/llm.py`)
+
+## Finding addressed
+
+The Messages-API auth-fallback chain (cool-off check, `try/except` +
+`is_api_key_unusable_error` + `mark_api_key_unusable()` + `logger.warning`,
+OAuth-token fallback check, final `RuntimeError`) was duplicated
+near-verbatim between `complete()` and `complete_with_usage()`, unlike the
+already-factored `_oauth_complete_raw`/`_oauth_complete` pattern elsewhere
+in the file.
+
+## Fix
+
+- Added `_complete_raw(*, system, prompt, model, max_tokens) -> tuple[str, CompletionUsage]`
+  that owns the entire auth-fallback chain (Messages API try/except/bench,
+  OAuth fallback via `_oauth_complete_raw`, final `RuntimeError`) and
+  always computes a `CompletionUsage` (real counts on the API path;
+  extracted from `ResultMessage.usage` on the OAuth path; all-zero when
+  genuinely unavailable).
+- `complete()` is now a thin wrapper: calls `_complete_raw(...)` and
+  returns just the text — signature, return type, and behavior unchanged
+  for its existing callers.
+- `complete_with_usage()` is now a thin wrapper: returns `_complete_raw(...)`
+  directly — signature and behavior (added in the prior commit) unchanged.
+- Moved the `CompletionUsage` dataclass above `_complete_raw` (it's
+  referenced at call time, not def time, so no forward-reference issue;
+  moved for readability since it's now the shared return shape for both
+  callers, not just `complete_with_usage`'s).
+- Updated the module docstring's "two places make real model calls" note:
+  it named `_oauth_complete` as the patchable OAuth call site; the merged
+  chain now calls `_oauth_complete_raw` directly (needed for `ResultMessage`
+  usage extraction on both the text-only and usage-capturing side), so the
+  docstring now names `_oauth_complete_raw` and notes `complete()`/
+  `complete_with_usage()` are thin wrappers around `_complete_raw()`.
+
+### Test file adjustment (required, not optional)
+
+`tests/test_shared_llm.py` had two tests that monkeypatched `_oauth_complete`
+(the thin, text-only OAuth wrapper) to intercept `complete()`'s OAuth
+fallback: `test_billing_error_benches_key_and_falls_through_to_oauth` and
+`test_missing_key_uses_oauth_directly`. Since the merged `_complete_raw`
+now calls `_oauth_complete_raw` directly (it needs the `ResultMessage` for
+usage extraction, which the thin `_oauth_complete` wrapper discards),
+patching `_oauth_complete` no longer intercepts anything — the unpatched
+real `_oauth_complete_raw` would run and attempt to lazy-import
+`claude_agent_sdk`. Retargeted both monkeypatches to `_oauth_complete_raw`
+and updated their fakes' return shape from a bare string to
+`(text, None)`, matching `_oauth_complete_raw`'s actual contract. This is
+the expected consequence of the refactor's call-graph change, not a
+loosening of coverage — same assertions, same call-count checks, just
+patched at the correct seam. `complete()`'s two other OAuth-adjacent tests
+(`test_api_path_returns_joined_text_without_touching_oauth`,
+`test_rate_limit_error_propagates_and_does_not_bench`) patch `_oauth_complete`
+only as a "must not be called" guard and needed no change since OAuth is
+never reached in either case.
+
+Also fixed the stale `onboarding/validate_profile.py` module docstring
+(lines 11-13): it said the checks work "by pointing `JOBIFY_PROFILE_DIR`
+at the target dir"; `validate_profile_dir` was refactored in the prior
+commit to pass the target dir directly to dir-parameterized loaders and no
+longer touches `JOBIFY_PROFILE_DIR` at all. Reworded to match, mirroring
+`validate_profile_dir`'s own (already-accurate) docstring.
+
+## Verification
+
+```
+.venv/bin/python -m ruff check jobify/shared/llm.py onboarding/validate_profile.py
+# All checks passed!
+
+.venv/bin/python -m pytest -q tests/test_shared_llm.py
+# 31 passed in 0.72s
+
+.venv/bin/python -m pytest -q
+# 517 passed, 1 skipped, 26 deselected in 29.46s
+```
+
+Pass count is unchanged from the baseline noted in the original report
+(517 passed, 1 skipped, 26 deselected) — confirmed identical, no drift.
+
+## Files changed
+
+- `jobify/shared/llm.py` — extracted `_complete_raw`; `complete()` and
+  `complete_with_usage()` are now thin wrappers; module docstring updated.
+- `onboarding/validate_profile.py` — module docstring corrected (no
+  functional change).
+- `tests/test_shared_llm.py` — retargeted two OAuth-fallback monkeypatches
+  from `_oauth_complete` to `_oauth_complete_raw` to match the new call
+  graph (required for the tests to keep passing; not a coverage change).

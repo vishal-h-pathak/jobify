@@ -9,9 +9,11 @@ golden-example test (``tests/test_onboarding_example.py``) runs in CI.
 What it checks
 --------------
 1. The directory loads through ``jobify.profile_loader`` (the *only* import
-   surface the rest of the pipeline uses) — i.e. it points ``JOBIFY_PROFILE_DIR``
-   at the target dir and exercises every public loader. A file that parses here
-   is a file hunt/tailor/submit will read identically.
+   surface the rest of the pipeline uses) — i.e. it passes the target dir
+   directly to ``profile_loader``'s dir-parameterized loaders (never touching
+   ``JOBIFY_PROFILE_DIR`` or the loader's ``lru_cache``) and exercises every
+   public loader. A file that parses here is a file hunt/tailor/submit will
+   read identically.
 2. The two YAML files with machine schemas (``profile.yml``, ``disqualifiers.yml``,
    ``portals.yml``) validate against ``onboarding/schema/*.schema.json``. If the
    optional ``jsonschema`` package is installed the full Draft 2020-12 check

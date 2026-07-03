@@ -27,7 +27,9 @@ process re-learns the key is dead.
 
 Two places make real model calls — keep them isolated and patchable:
 ``_anthropic_client`` (Messages API client factory) and
-``_oauth_complete`` (Agent SDK adapter). Tests monkeypatch these.
+``_oauth_complete_raw`` (Agent SDK adapter). Tests monkeypatch these.
+``complete()`` and ``complete_with_usage()`` are thin wrappers around the
+shared ``_complete_raw()``, which runs the auth-fallback chain once.
 """
 
 from __future__ import annotations
@@ -283,54 +285,7 @@ def _oauth_complete(*, system_text: str, prompt: str, model: str, token: str) ->
     return text
 
 
-# ── Public entry point ──────────────────────────────────────────────────────
-
-def complete(*, system: SystemContent, prompt: str, model: str, max_tokens: int) -> str:
-    """Return assistant text. Try the Messages API (pay-as-you-go credits)
-    first; on a billing/credit/auth failure, bench the key and fall back to
-    the Claude Agent SDK under subscription OAuth.
-
-    ``system`` may be the cached-blocks list (Messages API, prompt caching
-    preserved) or a plain string. Raises on transient API errors (the
-    caller's per-job handling catches them) and when no auth is usable.
-    """
-    api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
-
-    if api_key and not _api_key_in_cool_off():
-        try:
-            resp = _anthropic_client(api_key).messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return _join_text(resp)
-        except Exception as exc:  # noqa: BLE001 — classify, then re-raise or fall through
-            if not is_api_key_unusable_error(exc):
-                raise
-            mark_api_key_unusable()
-            logger.warning(
-                "ANTHROPIC_API_KEY unusable (%s); benching for %d min and "
-                "falling back to subscription OAuth",
-                exc, _COOL_OFF_SECONDS // 60,
-            )
-
-    token = (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
-    if token:
-        return _oauth_complete(
-            system_text=flatten_system(system),
-            prompt=prompt,
-            model=model,
-            token=token,
-        )
-
-    raise RuntimeError(
-        "no usable Anthropic auth: API key absent/benched and "
-        "CLAUDE_CODE_OAUTH_TOKEN unset"
-    )
-
-
-# ── Usage-capturing entry point (H4 ledger) ─────────────────────────────────
+# ── Usage shape (H4 ledger) ──────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
@@ -351,18 +306,19 @@ class CompletionUsage:
     output_tokens: int
 
 
-def complete_with_usage(
+def _complete_raw(
     *, system: SystemContent, prompt: str, model: str, max_tokens: int
 ) -> tuple[str, CompletionUsage]:
-    """Like `complete()`, but also returns token usage for the budget
-    ledger. Additive alongside `complete()` — that function's signature
-    and behavior are unchanged for its existing callers (resume/cover
-    letter/rubric-compile/scorer all keep calling `complete()` as-is).
+    """Shared implementation behind `complete()` and `complete_with_usage()`.
+    Try the Messages API (pay-as-you-go credits) first; on a billing/
+    credit/auth failure, bench the key and fall back to the Claude Agent
+    SDK under subscription OAuth. Returns `(text, usage)` — `usage` is
+    real token counts on the Messages API path, the OAuth ResultMessage's
+    usage dict when present, or all-zero counts when genuinely
+    unavailable (see `CompletionUsage`).
 
-    Mirrors `complete()`'s API-then-OAuth fallback chain exactly,
-    including the cool-off/benching behavior on a billing/auth failure,
-    so ledger-writing callers (H4 Task 2/3: embeddings, rubric compile,
-    LLM verdict) don't have to duplicate the auth logic to get usage.
+    Raises on transient API errors (the caller's per-job handling catches
+    them) and when no auth is usable at all.
     """
     api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
 
@@ -408,4 +364,46 @@ def complete_with_usage(
     raise RuntimeError(
         "no usable Anthropic auth: API key absent/benched and "
         "CLAUDE_CODE_OAUTH_TOKEN unset"
+    )
+
+
+# ── Public entry point ──────────────────────────────────────────────────────
+
+def complete(*, system: SystemContent, prompt: str, model: str, max_tokens: int) -> str:
+    """Return assistant text. Try the Messages API (pay-as-you-go credits)
+    first; on a billing/credit/auth failure, bench the key and fall back to
+    the Claude Agent SDK under subscription OAuth.
+
+    ``system`` may be the cached-blocks list (Messages API, prompt caching
+    preserved) or a plain string. Raises on transient API errors (the
+    caller's per-job handling catches them) and when no auth is usable.
+
+    Text-only; see `_complete_raw` for the shared implementation and
+    `complete_with_usage` for the usage-capturing sibling.
+    """
+    text, _usage = _complete_raw(
+        system=system, prompt=prompt, model=model, max_tokens=max_tokens,
+    )
+    return text
+
+
+# ── Usage-capturing entry point (H4 ledger) ─────────────────────────────────
+
+
+def complete_with_usage(
+    *, system: SystemContent, prompt: str, model: str, max_tokens: int
+) -> tuple[str, CompletionUsage]:
+    """Like `complete()`, but also returns token usage for the budget
+    ledger. Additive alongside `complete()` — that function's signature
+    and behavior are unchanged for its existing callers (resume/cover
+    letter/rubric-compile/scorer all keep calling `complete()` as-is).
+
+    Mirrors `complete()`'s API-then-OAuth fallback chain exactly,
+    including the cool-off/benching behavior on a billing/auth failure,
+    so ledger-writing callers (H4 Task 2/3: embeddings, rubric compile,
+    LLM verdict) don't have to duplicate the auth logic to get usage.
+    See `_complete_raw` for the shared implementation.
+    """
+    return _complete_raw(
+        system=system, prompt=prompt, model=model, max_tokens=max_tokens,
     )

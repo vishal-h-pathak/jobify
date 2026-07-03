@@ -147,9 +147,12 @@ def test_billing_error_benches_key_and_falls_through_to_oauth(monkeypatch):
     def _fake_oauth(*, system_text, prompt, model, token):
         oauth_calls.append({"system_text": system_text, "prompt": prompt,
                             "model": model, "token": token})
-        return "from subscription"
+        return "from subscription", None
 
-    monkeypatch.setattr(llm, "_oauth_complete", _fake_oauth)
+    # `complete()` now goes through the shared `_complete_raw`, which calls
+    # the raw OAuth helper directly (it needs the ResultMessage for usage
+    # extraction on the `complete_with_usage` side of the same helper).
+    monkeypatch.setattr(llm, "_oauth_complete_raw", _fake_oauth)
 
     out = llm.complete(
         system=[{"type": "text", "text": "SYS"}],
@@ -219,8 +222,8 @@ def test_missing_key_uses_oauth_directly(monkeypatch):
 
     monkeypatch.setattr(llm, "_anthropic_client", _no_client)
     monkeypatch.setattr(
-        llm, "_oauth_complete",
-        lambda **kwargs: "subscription only",
+        llm, "_oauth_complete_raw",
+        lambda **kwargs: ("subscription only", None),
     )
 
     out = llm.complete(system="SYS", prompt="hi",
