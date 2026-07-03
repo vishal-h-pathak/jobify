@@ -15,14 +15,19 @@
 -- instead of only logging a warning: an invalid profile must never be
 -- silently scored against a friend's postings.
 --
--- validation_status is a simple TEXT convention, not a CHECK-constrained
--- enum (matching budget_ledger.event's precedent in 0002): 'valid' or
--- 'invalid', written by `jobify.profile_loader._validate_materialized`
--- via `jobify.db.set_profile_validation_status`. NULL means "never
+-- validation_status is JSONB — `{"status": "unchecked"|"valid"|"invalid",
+-- "errors": [...]}` — reconciled at wave-2 merge review with H3's
+-- 0003_hosted_onboarding.sql, which adds the SAME column for the
+-- onboarding flow's TS pre-check (H3 writes 'unchecked'/'valid'; the real
+-- Python validator here overwrites with its verdict + error strings the
+-- feed UI can show). Both migrations use ADD COLUMN IF NOT EXISTS with an
+-- identical type, so 0003/0004 apply cleanly in either order. Written by
+-- `jobify.profile_loader._validate_materialized` via
+-- `jobify.db.set_profile_validation_status`. NULL means "never
 -- materialized/validated yet" (e.g. a profile written directly by
 -- onboarding that the worker hasn't picked up for a scoring run).
 
-ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS validation_status TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS validation_status JSONB;
 
 
 -- ══════════════════════════════════════════════════════════════════════════

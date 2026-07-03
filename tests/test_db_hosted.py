@@ -96,11 +96,13 @@ def test_set_profile_validation_status_writes_expected_payload(patch_db_client):
     fake = _FakeClient()
     patch_db_client(fake)
 
-    db.set_profile_validation_status("user-1", "invalid")
+    db.set_profile_validation_status("user-1", "invalid", errors=["profile.yml: empty"])
 
     name, q = fake.queries[-1]
     assert name == "profiles"
-    assert q.update_payload == {"validation_status": "invalid"}
+    assert q.update_payload == {
+        "validation_status": {"status": "invalid", "errors": ["profile.yml: empty"]}
+    }
     assert q.eq_calls == [("user_id", "user-1")]
 
 
@@ -350,6 +352,20 @@ def test_set_profile_embedding_writes_expected_payload(patch_db_client):
 
 
 def test_get_profile_validation_status_returns_stored_value(patch_db_client):
+    fake = _FakeClient({
+        "profiles": [{
+            "user_id": "user-1",
+            "validation_status": {"status": "invalid", "errors": ["thesis.md: empty"]},
+        }],
+    })
+    patch_db_client(fake)
+
+    assert db.get_profile_validation_status("user-1") == "invalid"
+
+
+def test_get_profile_validation_status_tolerates_legacy_bare_string(patch_db_client):
+    """Pre-reconciliation rows (or H3's TS pre-check writing a bare value)
+    must not crash the fan-out gate — a bare string passes through."""
     fake = _FakeClient({
         "profiles": [{"user_id": "user-1", "validation_status": "invalid"}],
     })

@@ -232,9 +232,12 @@ def test_materialized_profile_validation_failure_is_logged_not_raised(
 
     assert cache_dir.is_dir()
     assert any("failed validation" in rec.message for rec in caplog.records)
-    assert fake.updates == [
-        {"col": "user_id", "val": _USER_ID, "payload": {"validation_status": "invalid"}}
-    ]
+    assert len(fake.updates) == 1
+    update = fake.updates[0]
+    assert (update["col"], update["val"]) == ("user_id", _USER_ID)
+    written = update["payload"]["validation_status"]
+    assert written["status"] == "invalid"
+    assert written["errors"]  # the validator's error strings ride along (JSONB shape)
 
 
 def test_materialized_profile_validation_success_writes_valid_status(patch_db_client):
@@ -255,7 +258,11 @@ def test_materialized_profile_validation_success_writes_valid_status(patch_db_cl
     profile_loader.materialize_profile_dir(_USER_ID)
 
     assert fake.updates == [
-        {"col": "user_id", "val": _USER_ID, "payload": {"validation_status": "valid"}}
+        {
+            "col": "user_id",
+            "val": _USER_ID,
+            "payload": {"validation_status": {"status": "valid", "errors": []}},
+        }
     ]
 
 

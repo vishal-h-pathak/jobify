@@ -187,7 +187,10 @@ def _validate_materialized(cache_dir: Path, user_id: str) -> None:
     try:
         from jobify import db as _db  # noqa: PLC0415 — lazy, matches _fetch_profile_row
 
-        _db.set_profile_validation_status(user_id, status)
+        _db.set_profile_validation_status(
+            user_id, status,
+            errors=tuple(report.errors) if not report.passed else (),
+        )
     except Exception as exc:  # noqa: BLE001 — must not crash materialization
         logger.warning(
             "failed to write validation_status=%s for user_id=%s: %s",

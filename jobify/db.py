@@ -228,16 +228,20 @@ def get_seen_ids() -> set[str]:
 # the stage-4 budget check (H4 Task 3) has real spend to compare against
 # `budget_caps`.
 
-def set_profile_validation_status(user_id: str, status: str) -> None:
+def set_profile_validation_status(
+    user_id: str, status: str, errors: tuple[str, ...] | list[str] = ()
+) -> None:
     """Write the materialization validator's verdict to
-    `profiles.validation_status`. Convention (see 0004_worker.sql): free
-    TEXT, `'valid'` or `'invalid'` — no CHECK constraint, same style as
-    `budget_ledger.event`. Called by
+    `profiles.validation_status`. Shape (H3's 0003 owns the canonical
+    definition — JSONB, reconciled at wave-2 merge review):
+    `{"status": "valid" | "invalid", "errors": [...]}`. H3's onboarding
+    writes `"unchecked"`/`"valid"` from its TS pre-check; this (the real
+    Python validator at materialization time) overwrites it. Called by
     `jobify.profile_loader._validate_materialized` after every
     (re-)materialization.
     """
     _get_client().table("profiles").update(
-        {"validation_status": status}
+        {"validation_status": {"status": status, "errors": list(errors)}}
     ).eq("user_id", user_id).execute()
 
 
@@ -449,7 +453,11 @@ def get_profile_validation_status(user_id: str) -> str | None:
     rows = result.data or []
     if not rows:
         return None
-    return rows[0].get("validation_status")
+    value = rows[0].get("validation_status")
+    if isinstance(value, dict):
+        return value.get("status")
+    # Tolerate a legacy bare-string write (pre-reconciliation TEXT shape).
+    return value
 
 
 def get_compiled_rubric(user_id: str) -> dict | None:
