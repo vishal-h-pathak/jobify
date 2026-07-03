@@ -13,6 +13,13 @@ Tables touched:
     - ``star_stories``          — reserved (no helpers here yet; PR-9 will
                                    move tailor's star-story queries in
                                    when those modules consolidate)
+    - ``profiles``               — ``validation_status`` only (H4); the
+                                   8-file ``doc`` contract itself is read
+                                   via ``jobify.profile_loader``
+    - ``budget_ledger``          — append-only per-user token/cost events
+                                   (H4 fan-out worker + H2 rubric compiler)
+    - ``budget_caps``            — per-user monthly spend cap (read-only
+                                   here; caps are set out of band)
 
 Behavior contract (preserves PR-6's failure split):
     - ``mark_tailor_failed`` is the canonical tailor-side failure
@@ -203,6 +210,110 @@ def get_seen_ids() -> set[str]:
     """All canonical job ids the hunter has already seen — for cross-source dedup."""
     rows = _get_client().table("jobs").select("id").execute().data or []
     return {r["id"] for r in rows}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  HOSTED — per-user profile validation + budget ledger (H4)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# `profiles.validation_status` (0004_worker.sql) and `budget_ledger`
+# (0002_multitenant.sql) both back the fan-out worker's per-user ladder:
+# a profile that fails materialization validation must not get scored,
+# and every ledger-eligible LLM/embedding call must land a row here so
+# the stage-4 budget check (H4 Task 3) has real spend to compare against
+# `budget_caps`.
+
+def set_profile_validation_status(user_id: str, status: str) -> None:
+    """Write the materialization validator's verdict to
+    `profiles.validation_status`. Convention (see 0004_worker.sql): free
+    TEXT, `'valid'` or `'invalid'` — no CHECK constraint, same style as
+    `budget_ledger.event`. Called by
+    `jobify.profile_loader._validate_materialized` after every
+    (re-)materialization.
+    """
+    _get_client().table("profiles").update(
+        {"validation_status": status}
+    ).eq("user_id", user_id).execute()
+
+
+def insert_budget_ledger_row(
+    user_id: str,
+    event: str,
+    *,
+    model: str | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cost_usd: float = 0.0,
+    run_id: str | None = None,
+) -> None:
+    """Append one `budget_ledger` row. Append-only by RLS design (0002) —
+    no update/delete helper exists for this table on purpose.
+
+    `event` is free text by convention, not a CHECK-constrained enum:
+    the hosted plan already names `'rubric_compile'`, `'llm_verdict'`,
+    and `'embedding'` as the values callers use.
+    """
+    _get_client().table("budget_ledger").insert(
+        {
+            "user_id": user_id,
+            "event": event,
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": cost_usd,
+            "run_id": run_id,
+        }
+    ).execute()
+
+
+# `budget_caps.monthly_usd_cap`'s own DB DEFAULT (0002_multitenant.sql) —
+# mirrored here so a user with no `budget_caps` row yet still gets a real
+# cap, not zero (which would look like "cap already exceeded").
+DEFAULT_MONTHLY_USD_CAP = 5.00
+
+
+def get_month_to_date_spend(user_id: str) -> float:
+    """Sum of `budget_ledger.cost_usd` for `user_id` since the start of
+    the current UTC calendar month.
+
+    Filters server-side by `created_at >=` the UTC month start (the
+    Python equivalent of `date_trunc('month', now())`) and sums
+    client-side — the Supabase Python client has no `sum()` aggregate,
+    so this matches this module's existing client-side aggregation style
+    (see `get_job_counts_by_status`).
+    """
+    month_start = datetime.now(timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    result = (
+        _get_client().table("budget_ledger")
+        .select("cost_usd")
+        .eq("user_id", user_id)
+        .gte("created_at", month_start.isoformat())
+        .execute()
+    )
+    rows = result.data or []
+    return sum(float(r.get("cost_usd") or 0) for r in rows)
+
+
+def get_budget_cap(user_id: str) -> float:
+    """Return `budget_caps.monthly_usd_cap` for `user_id`.
+
+    Falls back to `DEFAULT_MONTHLY_USD_CAP` when the row is missing
+    (a user with no cap explicitly provisioned yet) — matching the
+    column's own DB DEFAULT rather than inventing a different fallback.
+    """
+    result = (
+        _get_client().table("budget_caps")
+        .select("monthly_usd_cap")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return DEFAULT_MONTHLY_USD_CAP
+    value = rows[0].get("monthly_usd_cap")
+    return float(value) if value is not None else DEFAULT_MONTHLY_USD_CAP
 
 
 # ══════════════════════════════════════════════════════════════════════════

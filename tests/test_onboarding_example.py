@@ -19,6 +19,7 @@ Two angles, mirroring how the pipeline and the onboarding skill each consume it:
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -97,6 +98,37 @@ def test_anti_fabrication_fence_present(_point_loader_at_example):
     """article-digest.md must carry the do-not-invent guardrail."""
     digest = _point_loader_at_example.load_article_digest().lower()
     assert "do not invent" in digest or "do not have" in digest
+
+
+def test_validate_profile_dir_does_not_touch_process_globals(monkeypatch, tmp_path):
+    """H4: `validate_profile_dir()` is called once per user, in a loop, by
+    the hosted fan-out worker's materialization step
+    (`jobify.profile_loader._validate_materialized`). It must read the
+    target directory through `profile_loader`'s dir-parameterized loaders
+    only — never mutate `JOBIFY_PROFILE_DIR` or invalidate/populate
+    `profile_dir()`'s process-global `lru_cache`, or two users validated
+    back-to-back in one process could clobber each other."""
+    from jobify import profile_loader
+    from onboarding.validate_profile import validate_profile_dir
+
+    # Prime the global cache with an unrelated dir, exactly like a
+    # `jobify-hunt` single-user process would have already done.
+    unrelated_dir = tmp_path / "unrelated"
+    unrelated_dir.mkdir()
+    monkeypatch.setenv("JOBIFY_PROFILE_DIR", str(unrelated_dir))
+    profile_loader._clear_cache_for_tests()
+    try:
+        assert profile_loader.profile_dir() == unrelated_dir.resolve()
+
+        env_before = dict(os.environ)
+        rep = validate_profile_dir(_EXAMPLE_DIR)
+        assert rep.passed
+
+        # Untouched: same env vars, same resolved global dir.
+        assert dict(os.environ) == env_before
+        assert profile_loader.profile_dir() == unrelated_dir.resolve()
+    finally:
+        profile_loader._clear_cache_for_tests()
 
 
 def test_validator_passes_on_example():

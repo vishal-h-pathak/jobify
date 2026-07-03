@@ -282,10 +282,11 @@ def _install_fake_sdk(monkeypatch):
             self.content = content
 
     class ResultMessage:
-        def __init__(self, subtype, is_error=False, result=None):
+        def __init__(self, subtype, is_error=False, result=None, usage=None):
             self.subtype = subtype
             self.is_error = is_error
             self.result = result
+            self.usage = usage
 
     class ClaudeAgentOptions:
         def __init__(self, **kwargs):
@@ -382,3 +383,178 @@ def test_oauth_uses_max_turns_headroom(monkeypatch):
     assert opts["setting_sources"] == []
     assert opts["env"]["ANTHROPIC_API_KEY"] == ""
     assert opts["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-tok"
+
+
+# ── complete_with_usage (H4 ledger) ──────────────────────────────────────────
+#
+# Additive alongside `complete()` — same auth-fallback chain, but also
+# returns token counts for `jobify.db.insert_budget_ledger_row`.
+
+class _FakeUsage:
+    def __init__(self, input_tokens: int, output_tokens: int):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
+class _RecordingClientWithUsage:
+    """Like `_RecordingClient`, but the canned response carries `.usage`."""
+
+    def __init__(self, text: str, input_tokens: int, output_tokens: int):
+        self.sent: list[dict] = []
+        outer = self
+
+        class _Messages:
+            def create(self, **kwargs):
+                outer.sent.append(kwargs)
+                resp = _FakeResp(text)
+                resp.usage = _FakeUsage(input_tokens, output_tokens)
+                return resp
+
+        self.messages = _Messages()
+
+
+def test_complete_with_usage_api_path_returns_real_token_counts(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-live")
+    client = _RecordingClientWithUsage("hello from credits", input_tokens=123, output_tokens=45)
+    monkeypatch.setattr(llm, "_anthropic_client", lambda *a, **k: client)
+
+    text, usage = llm.complete_with_usage(
+        system="SYS", prompt="hi",
+        model="claude-sonnet-4-20250514", max_tokens=100,
+    )
+
+    assert text == "hello from credits"
+    assert usage == llm.CompletionUsage(input_tokens=123, output_tokens=45)
+
+
+def test_complete_with_usage_api_response_without_usage_attr_is_zero(monkeypatch):
+    """A response object with no `.usage` at all (e.g. an unusual fake in
+    some other test's monkeypatch) must not raise — genuinely-unavailable
+    usage is zero, not a crash."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-live")
+    client = _RecordingClient("hello from credits")  # no .usage attribute
+    monkeypatch.setattr(llm, "_anthropic_client", lambda *a, **k: client)
+
+    text, usage = llm.complete_with_usage(
+        system="SYS", prompt="hi",
+        model="claude-sonnet-4-20250514", max_tokens=100,
+    )
+
+    assert text == "hello from credits"
+    assert usage == llm.CompletionUsage(input_tokens=0, output_tokens=0)
+
+
+def test_complete_with_usage_falls_back_to_oauth_on_billing_error(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dead")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-tok")
+
+    billing = _StatusError(400, "Your credit balance is too low to proceed")
+    monkeypatch.setattr(
+        llm, "_anthropic_client",
+        lambda *a, **k: _RaisingClient(billing, []),
+    )
+    monkeypatch.setattr(
+        llm, "_oauth_complete_raw",
+        lambda **kwargs: ("from subscription", None),
+    )
+
+    text, usage = llm.complete_with_usage(
+        system="SYS", prompt="hi",
+        model="claude-sonnet-4-20250514", max_tokens=100,
+    )
+
+    assert text == "from subscription"
+    # No ResultMessage at all (the OAuth stream ended without one) — usage
+    # is genuinely unavailable, not guessed.
+    assert usage == llm.CompletionUsage(input_tokens=0, output_tokens=0)
+
+
+def test_complete_with_usage_oauth_reads_result_message_usage_dict(monkeypatch):
+    """When the Agent SDK's ResultMessage carries a `.usage` dict (mirrors
+    the Messages API's usage shape), the OAuth path extracts real counts
+    from it instead of reporting zeros."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-tok")
+
+    fake_result_msg = types.SimpleNamespace(
+        usage={"input_tokens": 77, "output_tokens": 12}
+    )
+    monkeypatch.setattr(
+        llm, "_oauth_complete_raw",
+        lambda **kwargs: ("subscription text", fake_result_msg),
+    )
+
+    text, usage = llm.complete_with_usage(
+        system="SYS", prompt="hi",
+        model="claude-sonnet-4-20250514", max_tokens=100,
+    )
+
+    assert text == "subscription text"
+    assert usage == llm.CompletionUsage(input_tokens=77, output_tokens=12)
+
+
+def test_complete_with_usage_oauth_no_result_message_is_zero_usage(monkeypatch):
+    """The oauth stream-ended-with-text-but-no-envelope branch has no
+    ResultMessage to read usage from — zeros, documented, not guessed."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-tok")
+
+    monkeypatch.setattr(
+        llm, "_oauth_complete_raw",
+        lambda **kwargs: ("partial text, no envelope", None),
+    )
+
+    text, usage = llm.complete_with_usage(
+        system="SYS", prompt="hi",
+        model="claude-sonnet-4-20250514", max_tokens=100,
+    )
+
+    assert text == "partial text, no envelope"
+    assert usage == llm.CompletionUsage(input_tokens=0, output_tokens=0)
+
+
+def test_complete_with_usage_real_oauth_path_against_fake_sdk(monkeypatch):
+    """End-to-end against the fake `claude_agent_sdk` module (not just a
+    monkeypatched `_oauth_complete_raw`): a real ResultMessage with a
+    `.usage` dict flows all the way through."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-tok")
+
+    mod = _install_fake_sdk(monkeypatch)
+    mod._state["messages"] = [
+        mod.AssistantMessage([mod.TextBlock("real oauth text")]),
+        mod.ResultMessage(
+            subtype="success", is_error=False, result="unused",
+            usage={"input_tokens": 5, "output_tokens": 9},
+        ),
+    ]
+
+    text, usage = llm.complete_with_usage(
+        system="SYS", prompt="hi",
+        model="claude-sonnet-4-20250514", max_tokens=100,
+    )
+
+    assert text == "real oauth text"
+    assert usage == llm.CompletionUsage(input_tokens=5, output_tokens=9)
+
+
+def test_complete_with_usage_no_auth_configured_raises(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+    with pytest.raises(RuntimeError, match="no usable Anthropic auth"):
+        llm.complete_with_usage(system="SYS", prompt="hi",
+                                 model="claude-sonnet-4-20250514", max_tokens=100)
+
+
+def test_complete_unchanged_signature_and_behavior_alongside_complete_with_usage(monkeypatch):
+    """Additive means additive: `complete()` still returns a bare string,
+    unaffected by `complete_with_usage` existing."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-live")
+    client = _RecordingClientWithUsage("plain text only", input_tokens=1, output_tokens=1)
+    monkeypatch.setattr(llm, "_anthropic_client", lambda *a, **k: client)
+
+    out = llm.complete(system="SYS", prompt="hi",
+                        model="claude-sonnet-4-20250514", max_tokens=100)
+    assert out == "plain text only"
+    assert isinstance(out, str)

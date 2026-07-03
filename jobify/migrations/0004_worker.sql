@@ -1,0 +1,25 @@
+-- 0004_worker.sql — hosted fan-out worker support (H4).
+--
+-- Additive on top of 0001_init.sql + 0002_multitenant.sql. Apply to a
+-- project that already has both (SQL Editor, `supabase db push`, or the
+-- MCP `apply_migration` tool). `ADD COLUMN IF NOT EXISTS` is idempotent,
+-- so re-running is safe, and additive-nullable is safe on a `profiles`
+-- table that already has rows in prod.
+--
+-- Context (planning/HOSTED_AGGREGATOR_PLAN.md §4, H4 session prompt): the
+-- hosted worker materializes each user's profile out of `profiles.doc`
+-- into a per-process cache dir before scoring against it
+-- (`jobify.profile_loader.materialize_profile_dir`). That materialization
+-- runs the same validator the onboarding flow uses
+-- (`onboarding/validate_profile.py`) and now GATES scoring on the result
+-- instead of only logging a warning: an invalid profile must never be
+-- silently scored against a friend's postings.
+--
+-- validation_status is a simple TEXT convention, not a CHECK-constrained
+-- enum (matching budget_ledger.event's precedent in 0002): 'valid' or
+-- 'invalid', written by `jobify.profile_loader._validate_materialized`
+-- via `jobify.db.set_profile_validation_status`. NULL means "never
+-- materialized/validated yet" (e.g. a profile written directly by
+-- onboarding that the worker hasn't picked up for a scoring run).
+
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS validation_status TEXT;

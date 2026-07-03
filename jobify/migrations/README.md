@@ -122,3 +122,20 @@ pytest -m integration tests/test_rls_multitenant.py -v
 The match-state contract (`jobify/shared/match_state.py` <-> `match_state.json`
 <-> `matches_state_check`) is pinned by `tests/test_match_state_contract.py`,
 which runs in the default (non-integration) suite — no live DB needed.
+
+## 0004 — hosted worker fan-out support
+
+`0004_worker.sql` is additive on top of `0001` + `0002` — H4 of the hosted
+plan. It adds one column:
+
+| Column | Purpose |
+|---|---|
+| `profiles.validation_status` | free-text `'valid'` / `'invalid'` (or `NULL` if never checked), written each time `jobify.profile_loader.materialize_profile_dir(user_id)` re-materializes a user's profile from `profiles.doc` and runs `onboarding/validate_profile.py`'s checks against it. The fan-out worker skips scoring for any user whose latest verdict is `'invalid'` rather than silently running their rubric against a broken profile. |
+
+**Note:** the concurrent H3 session prompt (`planning/session-prompts/12_h3_onboarding_web.md`,
+task 2) also describes a `profiles.validation_status` column, as `jsonb`,
+in its own `0003_hosted_onboarding.sql`. That's a genuine naming
+collision between the two parallel sessions this migration wasn't written
+to reconcile — flagged for the controller to resolve at merge time
+(rename one, fold into the other, or pick one column shape) rather than
+decided unilaterally here.
