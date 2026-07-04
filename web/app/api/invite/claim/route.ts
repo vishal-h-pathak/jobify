@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "missing code" }, { status: 400 });
   }
 
-  const claimed = await claimInvite(supabase, code, user.id);
+  const claimed = await claimInvite(supabase, code);
   if (!claimed) {
     return NextResponse.json({ error: "invalid or already-used invite code" }, { status: 409 });
   }

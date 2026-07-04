@@ -106,7 +106,13 @@ export interface Database {
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      // migration 0005 — SECURITY DEFINER invite claim (see lib/db/invites.ts)
+      claim_invite: {
+        Args: { invite_code: string };
+        Returns: boolean;
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };
