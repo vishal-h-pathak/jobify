@@ -82,6 +82,22 @@ def _no_llm_by_default(monkeypatch):
     monkeypatch.setattr(llm, "complete_with_usage", _boom)
 
 
+@pytest.fixture(autouse=True)
+def _no_global_cap_by_default(monkeypatch):
+    """Most tests aren't about the H6 global pool cap — keep reported
+    global spend at $0 so `fanout._global_cap_exceeded()` is always False
+    unless a test explicitly raises it. Individual global-cap tests
+    override this directly."""
+    monkeypatch.setattr(db, "get_global_month_to_date_spend", lambda: 0.0)
+
+
+@pytest.fixture(autouse=True)
+def _no_byo_key_by_default(monkeypatch):
+    """Most tests aren't about H6 BYO keys — no user has an `api_keys`
+    row unless a test explicitly fakes one."""
+    monkeypatch.setattr(db, "get_api_key_ciphertext", lambda uid: None)
+
+
 def _fixed_verdict_llm(monkeypatch, score: float = 0.7, reason: str = "good fit"):
     """Every stage-4 call (any model) returns the same canned verdict."""
     calls: list[dict] = []
@@ -636,8 +652,221 @@ def test_run_fanout_cycle_defaults_to_every_profile_user(monkeypatch):
         "users_processed": 0,
         "users_skipped_invalid": 0,
         "users_errored": 0,
+        "users_global_capped": 0,
         "postings_scored": 0,
         "matches_written": 0,
         "stage4_calls": 0,
         "users_budget_stopped": 0,
     }
+
+
+# ── H6 cost rails: hard per-user cap, global pool cap, BYO keys ──────────
+
+
+def _setup_single_user_ladder(
+    tmp_path, monkeypatch, *, n_postings: int, cap: float,
+    global_spend: float = 0.0,
+):
+    """Shared scaffolding for the mid-batch-recheck tests: one user, an
+    already-compiled rubric (so stage 2 never spends), N postings that
+    all survive stage 1/2 unscored (real rubric scoring isn't the point
+    here), no embeddings."""
+    profile_dir = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: profile_dir)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: cap)
+    monkeypatch.setattr(db, "get_global_month_to_date_spend", lambda: global_spend)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: None)
+    postings = [_posting(f"p-{i}") for i in range(n_postings)]
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: postings)
+    return profile_dir
+
+
+def test_mid_batch_stop_at_exactly_the_kth_recheck(tmp_path, monkeypatch):
+    """HOSTED_BUDGET_RECHECK_EVERY defaults to 5: with 20 eligible
+    postings (more than the top-N=15 default would need), the loop must
+    stop at EXACTLY the 5th verdict once spend crosses the cap at that
+    recheck — never 4 (too early) or 6+ (recheck skipped)."""
+    _setup_single_user_ladder(tmp_path, monkeypatch, n_postings=20, cap=1.0)
+
+    spend_calls = {"n": 0}
+
+    def _fake_spend(uid):
+        spend_calls["n"] += 1
+        # Call #1 is the pre-loop cap check (must be under cap so the loop
+        # starts); every call after that is a mid-batch recheck, which
+        # should only happen once, after verdict #5.
+        return 0.0 if spend_calls["n"] == 1 else 5.0
+
+    monkeypatch.setattr(db, "get_month_to_date_spend", _fake_spend)
+    _fixed_verdict_llm(monkeypatch)
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert counters["stage4_calls"] == 5
+    assert counters["users_budget_stopped"] == 1
+    assert spend_calls["n"] == 2  # pre-loop check + exactly one mid-batch recheck
+
+
+def test_mid_batch_recheck_does_not_fire_before_k(tmp_path, monkeypatch):
+    """Under 5 postings, the loop finishes before ever reaching a K-th
+    verdict — no mid-batch recheck fires, and nothing gets stopped."""
+    _setup_single_user_ladder(tmp_path, monkeypatch, n_postings=3, cap=1.0)
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    _fixed_verdict_llm(monkeypatch)
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert counters["stage4_calls"] == 3
+    assert counters["users_budget_stopped"] == 0
+
+
+def test_global_cap_blocks_stage4_but_cached_rubric_still_scores(tmp_path, monkeypatch):
+    """Global pool cap already exceeded at cycle start: a user with an
+    EXISTING compiled rubric still gets stages 1-3 (rubric score + match
+    write) — only stage 4 (new LLM spend) is blocked."""
+    _setup_single_user_ladder(
+        tmp_path, monkeypatch, n_postings=1, cap=100.0, global_spend=1_000.0,
+    )
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((uid, pid, kw)))
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert counters["users_errored"] == 0
+    assert counters["matches_written"] == 1
+    assert counters["stage4_calls"] == 0
+    assert counters["users_global_capped"] >= 1
+    assert upserts[0][2]["reason_source"] == "rubric"
+
+
+def test_global_cap_skips_new_rubric_compile_for_uncompiled_user(tmp_path, monkeypatch):
+    """Global pool cap exceeded AND the user has no cached rubric yet:
+    the one-time compile call (real LLM spend) must not happen — proven
+    by `_no_llm_by_default`'s autouse fixture, which raises if
+    `llm.complete_with_usage` is ever called without an explicit fake."""
+    profile_dir = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: profile_dir)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: None)
+    monkeypatch.setattr(db, "get_global_month_to_date_spend", lambda: 1_000.0)
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-1")])
+    compiled: list[str] = []
+    monkeypatch.setattr(db, "set_compiled_rubric", lambda uid, rubric: compiled.append(uid))
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert counters["users_errored"] == 0  # would be 1 if the boom fired
+    assert compiled == []
+    assert counters["matches_written"] == 0
+    assert counters["users_global_capped"] >= 1
+
+
+def test_byo_user_bypasses_both_caps_and_ledger_rows_flagged_byo(tmp_path, monkeypatch):
+    """A user with an `api_keys` row compiles AND scores stage 4 on their
+    own key even though BOTH the per-user cap and the global pool cap are
+    already blown — and every ledger row for their calls is tagged
+    `byo=True`."""
+    profile_dir = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: profile_dir)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: None)
+    monkeypatch.setattr(db, "get_global_month_to_date_spend", lambda: 1_000.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 999.0)
+    monkeypatch.setattr(db, "get_api_key_ciphertext", lambda uid: "v1:nonce-a:ct-a")
+    monkeypatch.setattr(fanout, "decrypt_key", lambda ct: "sk-ant-USER-A-KEY")
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-1")])
+    monkeypatch.setattr(db, "set_compiled_rubric", lambda uid, rubric: None)
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: None)
+
+    ledger_rows: list[tuple] = []
+    monkeypatch.setattr(
+        db, "insert_budget_ledger_row",
+        lambda uid, event, **kw: ledger_rows.append((uid, event, kw)),
+    )
+
+    seen_api_keys: list[object] = []
+
+    def _fake_complete(*, system, prompt, model, max_tokens, api_key=None):
+        seen_api_keys.append(api_key)
+        if model.startswith("claude-sonnet"):
+            return (json.dumps(_rubric()), CompletionUsage(input_tokens=10, output_tokens=5))
+        return (
+            json.dumps({"score": 0.8, "reason": "byo verdict"}),
+            CompletionUsage(input_tokens=10, output_tokens=5),
+        )
+
+    monkeypatch.setattr(llm, "complete_with_usage", _fake_complete)
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert counters["users_errored"] == 0
+    assert counters["stage4_calls"] == 1
+    assert counters["users_budget_stopped"] == 0
+    assert counters["users_global_capped"] == 0
+    assert seen_api_keys == ["sk-ant-USER-A-KEY", "sk-ant-USER-A-KEY"]  # compile + verdict
+    assert ledger_rows  # rubric_compile + llm_verdict rows, both present
+    assert all(kw["byo"] is True for _uid, _event, kw in ledger_rows)
+
+
+def test_two_users_byo_and_pool_use_different_keys_no_cross_leak(tmp_path, monkeypatch):
+    """Two users, one cycle: user-a has a BYO key, user-b doesn't. The
+    isolation regression this task exists to catch — user-a's stage-4
+    call must use HER decrypted key, user-b's must use the pool
+    (`api_key=None`), never swapped. `run_fanout_cycle` processes
+    `user_ids` in order with no reordering, so `calls[0]` is
+    deterministically user-a's call and `calls[1]` is user-b's — mirrors
+    `test_stage4_never_leaks_profile_across_users`'s approach but for key
+    material instead of thesis text."""
+    dir_a = _profile_dir(tmp_path, "user-a")
+    dir_b = _profile_dir(tmp_path, "user-b")
+    monkeypatch.setattr(
+        fanout, "materialize_profile_dir",
+        lambda uid: {"user-a": dir_a, "user-b": dir_b}[uid],
+    )
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: None)
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("shared-1")])
+
+    monkeypatch.setattr(
+        db, "get_api_key_ciphertext",
+        lambda uid: "v1:nonce-a:ct-a" if uid == "user-a" else None,
+    )
+    monkeypatch.setattr(fanout, "decrypt_key", lambda ct: "sk-ant-USER-A-KEY")
+
+    calls: list[object] = []
+
+    def _fake_verdict(*, system, prompt, model, max_tokens, api_key=None):
+        calls.append(api_key)
+        return ('{"score": 0.5, "reason": "ok"}', CompletionUsage(input_tokens=5, output_tokens=5))
+
+    monkeypatch.setattr(llm, "complete_with_usage", _fake_verdict)
+
+    fanout.run_fanout_cycle(["user-a", "user-b"])
+
+    assert calls == ["sk-ant-USER-A-KEY", None]
+
+
+def test_byo_key_decrypt_failure_falls_back_to_pool_with_caps(tmp_path, monkeypatch):
+    """A ciphertext that fails to decrypt (wrong/rotated secret, corrupt
+    row) must degrade to the pool path for that user — never crash the
+    cycle, never raise past `_run_user_ladder`."""
+    _setup_single_user_ladder(tmp_path, monkeypatch, n_postings=1, cap=100.0)
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_api_key_ciphertext", lambda uid: "not-decryptable")
+    # Real decrypt_key raises KeyDecryptionError on this malformed blob —
+    # no need to monkeypatch it, exercising the real code path.
+    calls = _fixed_verdict_llm(monkeypatch)
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert counters["users_errored"] == 0
+    assert counters["stage4_calls"] == 1
+    assert calls[0]["model"] == fanout.STAGE4_MODEL  # ran normally, on the pool

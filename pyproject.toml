@@ -34,6 +34,11 @@ dependencies = [
     # dependency in practice — VOYAGE_API_KEY unset / EMBEDDINGS_ENABLED=false
     # skips every call site before this package is ever imported.
     "voyageai>=0.3.0",
+    # Hosted (H6): BYO Anthropic key decryption (jobify.hosted.keycrypt).
+    # AES-256-GCM via `cryptography.hazmat.primitives.ciphers.aead.AESGCM` —
+    # matches the encrypt side's node:crypto AES-256-GCM exactly (both treat
+    # the GCM tag as appended to the ciphertext, not a separate field).
+    "cryptography>=41.0",
     # Hunt
     "feedparser>=6.0.11",
     "requests>=2.32.0",

@@ -129,7 +129,22 @@ def test_insert_budget_ledger_row_writes_all_columns(patch_db_client):
         "output_tokens": 20,
         "cost_usd": 0.0042,
         "run_id": "run-abc",
+        "byo": False,
     }
+
+
+def test_insert_budget_ledger_row_byo_true_is_written(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.insert_budget_ledger_row(
+        "user-1", "llm_verdict",
+        model="claude-haiku-4-5", input_tokens=100, output_tokens=20,
+        cost_usd=0.0042, byo=True,
+    )
+
+    _, q = fake.queries[-1]
+    assert q.insert_payload["byo"] is True
 
 
 def test_insert_budget_ledger_row_defaults_are_zero_and_none(patch_db_client):
@@ -147,6 +162,7 @@ def test_insert_budget_ledger_row_defaults_are_zero_and_none(patch_db_client):
         "output_tokens": 0,
         "cost_usd": 0.0,
         "run_id": None,
+        "byo": False,
     }
 
 
@@ -156,14 +172,28 @@ def test_insert_budget_ledger_row_defaults_are_zero_and_none(patch_db_client):
 def test_get_month_to_date_spend_sums_only_this_users_rows(patch_db_client):
     fake = _FakeClient({
         "budget_ledger": [
-            {"user_id": "user-1", "cost_usd": 1.5},
-            {"user_id": "user-1", "cost_usd": 2.25},
-            {"user_id": "user-2", "cost_usd": 99.0},
+            {"user_id": "user-1", "cost_usd": 1.5, "byo": False},
+            {"user_id": "user-1", "cost_usd": 2.25, "byo": False},
+            {"user_id": "user-2", "cost_usd": 99.0, "byo": False},
         ]
     })
     patch_db_client(fake)
 
     assert db.get_month_to_date_spend("user-1") == pytest.approx(3.75)
+
+
+def test_get_month_to_date_spend_excludes_byo_rows(patch_db_client):
+    """A BYO row (the user's own decrypted key) must never count against
+    their pool cap — 0006_cost_rails.sql's whole reason for the column."""
+    fake = _FakeClient({
+        "budget_ledger": [
+            {"user_id": "user-1", "cost_usd": 1.5, "byo": False},
+            {"user_id": "user-1", "cost_usd": 500.0, "byo": True},
+        ]
+    })
+    patch_db_client(fake)
+
+    assert db.get_month_to_date_spend("user-1") == pytest.approx(1.5)
 
 
 def test_get_month_to_date_spend_zero_for_no_rows(patch_db_client):
@@ -185,6 +215,53 @@ def test_get_month_to_date_spend_filters_by_utc_month_start(patch_db_client):
     assert col == "created_at"
     now = datetime.now(timezone.utc)
     assert val.startswith(now.strftime("%Y-%m-01T00:00:00"))
+
+
+# ── get_global_month_to_date_spend (H6) ──────────────────────────────────
+
+
+def test_get_global_month_to_date_spend_sums_every_user_and_null(patch_db_client):
+    fake = _FakeClient({
+        "budget_ledger": [
+            {"user_id": "user-1", "cost_usd": 1.5, "byo": False},
+            {"user_id": "user-2", "cost_usd": 2.5, "byo": False},
+            {"user_id": None, "cost_usd": 0.25, "byo": False},
+        ]
+    })
+    patch_db_client(fake)
+
+    assert db.get_global_month_to_date_spend() == pytest.approx(4.25)
+
+
+def test_get_global_month_to_date_spend_excludes_byo_rows(patch_db_client):
+    fake = _FakeClient({
+        "budget_ledger": [
+            {"user_id": "user-1", "cost_usd": 1.0, "byo": False},
+            {"user_id": "user-2", "cost_usd": 500.0, "byo": True},
+        ]
+    })
+    patch_db_client(fake)
+
+    assert db.get_global_month_to_date_spend() == pytest.approx(1.0)
+
+
+# ── get_api_key_ciphertext (H6 BYO keys) ─────────────────────────────────
+
+
+def test_get_api_key_ciphertext_returns_row_value(patch_db_client):
+    fake = _FakeClient({
+        "api_keys": [{"user_id": "user-1", "encrypted_key": "v1:nonce:ct"}],
+    })
+    patch_db_client(fake)
+
+    assert db.get_api_key_ciphertext("user-1") == "v1:nonce:ct"
+
+
+def test_get_api_key_ciphertext_none_when_no_row(patch_db_client):
+    fake = _FakeClient({"api_keys": []})
+    patch_db_client(fake)
+
+    assert db.get_api_key_ciphertext("user-1") is None
 
 
 # ── get_budget_cap ─────────────────────────────────────────────────────

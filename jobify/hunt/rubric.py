@@ -224,6 +224,7 @@ def _compile_user_msg(*, thesis: str, disqualifiers_text: str, targeting_text: s
 
 def compile_rubric_with_usage(
     *, thesis: str, disqualifiers_text: str, targeting_text: str,
+    api_key: Optional[str] = None,
 ) -> tuple[dict, llm.CompletionUsage]:
     """Same compilation contract as `compile_rubric` (identical retry/
     validate loop, identical inputs), but also returns real token usage
@@ -238,6 +239,12 @@ def compile_rubric_with_usage(
     loaders (add a parallel path rather than change an existing one's
     contract). Usage is summed across the (up to two) attempts, since a
     retry still spends real tokens the ledger must account for.
+
+    ``api_key`` (H6 BYO keys): passed through to each
+    `llm.complete_with_usage` call — see that function's docstring. Only
+    included in the call when truthy, so existing fakes that monkeypatch
+    `llm.complete_with_usage` with the pre-H6 fixed signature (no
+    `api_key` parameter) keep working unchanged for the pool path.
     """
     user_msg = _compile_user_msg(
         thesis=thesis, disqualifiers_text=disqualifiers_text, targeting_text=targeting_text,
@@ -247,12 +254,15 @@ def compile_rubric_with_usage(
     total_input = 0
     total_output = 0
     for attempt in range(2):
-        text, usage = llm.complete_with_usage(
+        call_kwargs: dict = dict(
             system=_compiler_system(),
             prompt=user_msg,
             model=COMPILER_MODEL,
             max_tokens=COMPILER_MAX_TOKENS,
         )
+        if api_key:
+            call_kwargs["api_key"] = api_key
+        text, usage = llm.complete_with_usage(**call_kwargs)
         total_input += usage.input_tokens
         total_output += usage.output_tokens
         try:

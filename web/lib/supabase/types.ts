@@ -88,6 +88,7 @@ export interface Database {
           output_tokens: number;
           cost_usd: number;
           run_id: string | null;
+          byo: boolean;
           created_at: string;
         };
         Insert: {
@@ -98,9 +99,54 @@ export interface Database {
           output_tokens?: number;
           cost_usd?: number;
           run_id?: string | null;
+          byo?: boolean;
         };
         Update: {
           [key: string]: never;
+        };
+        Relationships: [];
+      };
+      // H6 (0006_cost_rails.sql): per-user monthly spend cap, service-role-
+      // managed. `authenticated` gets SELECT only — a user can see but not
+      // raise their own cap (see 0002_multitenant.sql's header).
+      budget_caps: {
+        Row: {
+          user_id: string;
+          monthly_usd_cap: number;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          monthly_usd_cap?: number;
+        };
+        Update: {
+          [key: string]: never;
+        };
+        Relationships: [];
+      };
+      // H6: optional BYO Anthropic key. `encrypted_key` is ciphertext only
+      // (see web/lib/crypto/keys.ts) — the settings UI only ever reads
+      // `key_last4` back, never `encrypted_key`.
+      api_keys: {
+        Row: {
+          user_id: string;
+          provider: string;
+          encrypted_key: string;
+          key_last4: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          provider?: string;
+          encrypted_key: string;
+          key_last4?: string | null;
+        };
+        Update: {
+          provider?: string;
+          encrypted_key?: string;
+          key_last4?: string | null;
+          updated_at?: string;
         };
         Relationships: [];
       };
