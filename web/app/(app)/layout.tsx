@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { hasClaimedInvite } from "@/lib/db/invites";
@@ -16,5 +17,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const claimed = await hasClaimedInvite(supabase);
   if (!claimed) redirect("/invite");
 
-  return <>{children}</>;
+  return (
+    <>
+      <nav className="flex items-center gap-4 border-b border-zinc-200 px-6 py-3 text-sm font-medium dark:border-zinc-800">
+        <Link href="/feed">Feed</Link>
+        <Link href="/settings">Settings</Link>
+      </nav>
+      {children}
+    </>
+  );
 }
