@@ -37,7 +37,9 @@ from __future__ import annotations
 import argparse
 import logging
 
+from jobify import config, db
 from jobify.hosted import discovery, fanout
+from jobify.notify import send_ntfy_summary
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,12 +49,24 @@ logging.basicConfig(
 logger = logging.getLogger("jobify.hosted.worker")
 
 
-def _summary_line(discovery_summary: dict, fanout_summary: dict) -> str:
+def _summary_line(
+    discovery_summary: dict,
+    fanout_summary: dict,
+    global_spend: float | None = None,
+    global_cap: float | None = None,
+) -> str:
     """Render both cycles' summary dicts as one terminal/GHA-step-summary
     line. Field names are read straight off Task 2/3's own return-dict
     shapes (`discovery.run_discovery_cycle` / `fanout.run_fanout_cycle`
-    docstrings) rather than inventing new bookkeeping here."""
-    return (
+    docstrings) rather than inventing new bookkeeping here.
+
+    ``global_spend`` / ``global_cap`` (H7) are optional — appended as a
+    ``pool_spend=$X/$Y`` field when both are provided. Neither summary
+    dict carries pool spend, so `_execute()` fetches it fresh at cycle
+    end and passes it in here rather than this function reaching into
+    `jobify.db` / `jobify.config` itself.
+    """
+    line = (
         "done. "
         f"discovery: users={discovery_summary.get('users')} "
         f"fetched={discovery_summary.get('fetched')} "
@@ -66,6 +80,9 @@ def _summary_line(discovery_summary: dict, fanout_summary: dict) -> str:
         f"stage4_calls={fanout_summary.get('stage4_calls')} "
         f"budget_stopped={fanout_summary.get('users_budget_stopped')}"
     )
+    if global_spend is not None and global_cap is not None:
+        line += f" | pool_spend=${global_spend:.2f}/${global_cap:.2f}"
+    return line
 
 
 def _execute() -> dict:
@@ -79,11 +96,24 @@ def _execute() -> dict:
     discovery_summary = discovery.run_discovery_cycle()
     fanout_summary = fanout.run_fanout_cycle()
 
+    # Neither summary dict carries pool spend (H6's cap ledger lives in
+    # `jobify.db`, not either phase's return value) — fetched fresh here
+    # so the cycle telemetry line always reflects spend as of cycle end.
+    global_spend = db.get_global_month_to_date_spend()
+    global_cap = config.HOSTED_GLOBAL_MONTHLY_CAP_USD
+    summary_line = _summary_line(
+        discovery_summary, fanout_summary, global_spend, global_cap
+    )
+
+    # Logs/print always fire regardless of ntfy's outcome (unset topic,
+    # network failure, etc.) — the ntfy push is an additional side-effect
+    # on top of cycle visibility, not a gate on it.
     logger.info(
         "hosted worker cycle done: discovery=%s fanout=%s",
         discovery_summary, fanout_summary,
     )
-    print(_summary_line(discovery_summary, fanout_summary))
+    print(summary_line)
+    send_ntfy_summary(summary_line)
 
     return {"discovery": discovery_summary, "fanout": fanout_summary}
 

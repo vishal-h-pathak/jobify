@@ -150,6 +150,67 @@ export interface Database {
         };
         Relationships: [];
       };
+      // H7 (0002_multitenant.sql): global job postings pool, no user_id.
+      // Written only by the Python worker (service-role) via upsert — the
+      // web app only ever reads this table, so Insert/Update stay minimal.
+      postings: {
+        Row: {
+          id: string;
+          title: string | null;
+          company: string | null;
+          location: string | null;
+          remote: boolean | null;
+          description: string | null;
+          application_url: string | null;
+          ats_kind: string | null;
+          link_status: string | null;
+          source: string | null;
+          posted_at: string | null;
+          first_seen_at: string;
+          last_seen_at: string;
+          embedding: number[] | null;
+          raw: Record<string, unknown> | null;
+        };
+        Insert: {
+          [key: string]: never;
+        };
+        Update: {
+          [key: string]: never;
+        };
+        Relationships: [];
+      };
+      // H7 (0002_multitenant.sql): user_id x posting_id, ladder scores +
+      // aggregator state. `state` mirrors jobify/shared/match_state.json's
+      // CANONICAL_MATCH_STATES — keep this union in lockstep with that file.
+      matches: {
+        Row: {
+          user_id: string;
+          posting_id: string;
+          rubric_score: number | null;
+          embed_score: number | null;
+          llm_score: number | null;
+          reason: string | null;
+          reason_source: "llm" | "rubric" | null;
+          state: "new" | "seen" | "saved" | "dismissed" | "applied";
+          state_changed_at: string;
+          created_at: string;
+        };
+        Insert: {
+          user_id: string;
+          posting_id: string;
+          rubric_score?: number | null;
+          embed_score?: number | null;
+          llm_score?: number | null;
+          reason?: string | null;
+          reason_source?: "llm" | "rubric" | null;
+          state?: "new" | "seen" | "saved" | "dismissed" | "applied";
+        };
+        Update: {
+          state?: "new" | "seen" | "saved" | "dismissed" | "applied";
+          state_changed_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {

@@ -439,6 +439,35 @@ def send_failed(job: dict, reason: str) -> bool:
     return create_notification("failed", job, f"Reason: {reason}")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  Hosted cycle telemetry (H7) — ntfy.sh push, optional
+# ══════════════════════════════════════════════════════════════════════════
+
+def send_ntfy_summary(line: str) -> bool:
+    """POST a one-line hosted-worker cycle summary to ntfy.sh (H7).
+
+    ``NTFY_TOPIC`` is read lazily (at call time, like the rest of this
+    module's env lookups) rather than as a ``config.py`` constant. This
+    is genuinely optional telemetry, not a missing required secret, so
+    an unset topic returns False *silently* — no "would send" console
+    line, unlike the Resend functions above. The caller's own
+    logger/print calls are the source of truth for cycle visibility;
+    this is an additional side-effect, not a gate.
+    """
+    topic = os.environ.get("NTFY_TOPIC")
+    if not topic:
+        return False
+    resp = requests.post(
+        f"https://ntfy.sh/{topic}",
+        data=line.encode("utf-8"),
+        timeout=20,
+    )
+    if resp.status_code >= 300:
+        print(f"[notifier] ntfy failed {resp.status_code}: {resp.text}")
+        return False
+    return True
+
+
 # The PR-8 deprecated ``notify_*`` → ``send_*`` aliases lived here until
 # Session C verified (by grep across code, scripts, and workflows) that
 # no callers remained and removed them. ``send_*`` is the only surface.

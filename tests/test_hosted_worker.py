@@ -58,6 +58,12 @@ def test_execute_calls_discovery_then_fanout(monkeypatch, capsys):
 
     monkeypatch.setattr(worker.discovery, "run_discovery_cycle", fake_discovery)
     monkeypatch.setattr(worker.fanout, "run_fanout_cycle", fake_fanout)
+    monkeypatch.setattr(worker.db, "get_global_month_to_date_spend", lambda: 12.34)
+    monkeypatch.setattr(worker.config, "HOSTED_GLOBAL_MONTHLY_CAP_USD", 100.0)
+    ntfy_calls: list[str] = []
+    monkeypatch.setattr(
+        worker, "send_ntfy_summary", lambda line: ntfy_calls.append(line) or False
+    )
 
     result = worker._execute()
 
@@ -74,6 +80,12 @@ def test_execute_calls_discovery_then_fanout(monkeypatch, capsys):
     assert "matches_written=3" in printed
     assert "stage4_calls=1" in printed
     assert "budget_stopped=0" in printed
+    assert "pool_spend=$12.34/$100.00" in printed
+
+    # ntfy is called with the full summary line (H7), and logs/print fire
+    # regardless of what send_ntfy_summary returns (mocked to False here).
+    assert len(ntfy_calls) == 1
+    assert "pool_spend=$12.34/$100.00" in ntfy_calls[0]
 
 
 def test_execute_aborts_cycle_when_discovery_raises(monkeypatch):

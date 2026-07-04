@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "regen:h3-fixture": "npx tsx scripts/gen-h3-fixture.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

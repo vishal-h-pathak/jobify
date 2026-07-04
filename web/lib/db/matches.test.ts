@@ -104,25 +104,30 @@ describe("groupMatches", () => {
 describe("markSeenBulk", () => {
   it("issues one batched IN(...) update regardless of how many ids", async () => {
     const { supabase, calls } = fakeSupabase({ data: null, error: null });
-    await markSeenBulk(supabase, ["p1", "p2", "p3"]);
+    await markSeenBulk(supabase, "u1", ["p1", "p2", "p3"]);
     const inCalls = calls.filter((c) => c.method === "in");
     expect(inCalls).toHaveLength(1);
     expect(inCalls[0].args).toEqual(["posting_id", ["p1", "p2", "p3"]]);
     expect(calls.filter((c) => c.method === "update")).toHaveLength(1);
+    const eqCalls = calls.filter((c) => c.method === "eq");
+    expect(eqCalls).toEqual([
+      { method: "eq", args: ["user_id", "u1"] },
+      { method: "eq", args: ["state", "new"] },
+    ]);
   });
 
   it("is a no-op that never touches the client when there are no ids", async () => {
-    await expect(markSeenBulk(throwingSupabase(), [])).resolves.toBeUndefined();
+    await expect(markSeenBulk(throwingSupabase(), "u1", [])).resolves.toBeUndefined();
   });
 
   it("throws on a database error", async () => {
     const { supabase } = fakeSupabase({ data: null, error: new Error("boom") });
-    await expect(markSeenBulk(supabase, ["p1"])).rejects.toThrow("boom");
+    await expect(markSeenBulk(supabase, "u1", ["p1"])).rejects.toThrow("boom");
   });
 });
 
 describe("single-row state transitions", () => {
-  const cases: Array<[string, (s: FeedSupabaseClient, id: string) => Promise<void>]> = [
+  const cases: Array<[string, (s: FeedSupabaseClient, userId: string, id: string) => Promise<void>]> = [
     ["saveMatch", saveMatch],
     ["dismissMatch", dismissMatch],
     ["undismissMatch", undismissMatch],
@@ -132,17 +137,27 @@ describe("single-row state transitions", () => {
   for (const [name, fn] of cases) {
     it(`${name} resolves when the update affects a row`, async () => {
       const { supabase } = fakeSupabase({ data: [{ posting_id: "p1" }], error: null });
-      await expect(fn(supabase, "p1")).resolves.toBeUndefined();
+      await expect(fn(supabase, "u1", "p1")).resolves.toBeUndefined();
+    });
+
+    it(`${name} scopes the update by both user_id and posting_id`, async () => {
+      const { supabase, calls } = fakeSupabase({ data: [{ posting_id: "p1" }], error: null });
+      await fn(supabase, "u1", "p1");
+      const eqCalls = calls.filter((c) => c.method === "eq");
+      expect(eqCalls).toEqual([
+        { method: "eq", args: ["user_id", "u1"] },
+        { method: "eq", args: ["posting_id", "p1"] },
+      ]);
     });
 
     it(`${name} throws when the update affects zero rows (RLS-regression-fails-loud)`, async () => {
       const { supabase } = fakeSupabase({ data: [], error: null });
-      await expect(fn(supabase, "p1")).rejects.toThrow(/0 rows/);
+      await expect(fn(supabase, "u1", "p1")).rejects.toThrow(/0 rows/);
     });
 
     it(`${name} throws on a database error rather than silently reporting success`, async () => {
       const { supabase } = fakeSupabase({ data: null, error: new Error("boom") });
-      await expect(fn(supabase, "p1")).rejects.toThrow("boom");
+      await expect(fn(supabase, "u1", "p1")).rejects.toThrow("boom");
     });
   }
 });
