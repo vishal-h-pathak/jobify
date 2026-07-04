@@ -143,7 +143,7 @@ HOSTED_BUDGET_RECHECK_EVERY: Final[int] = int(
 # degrades to stages 1-3 (feed still updates; no new rubric compiles, no
 # stage-4 LLM verdicts) except for BYO users, who bypass this entirely.
 HOSTED_GLOBAL_MONTHLY_CAP_USD: Final[float] = float(
-    os.environ.get("HOSTED_GLOBAL_MONTHLY_CAP_USD", "100")
+    os.environ.get("HOSTED_GLOBAL_MONTHLY_CAP_USD") or "100"
 )
 
 # ── Hosted worker: BYO Anthropic key decryption (H6, jobify.hosted.keycrypt) ─
