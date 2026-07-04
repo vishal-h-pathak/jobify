@@ -99,6 +99,13 @@ jobify-tailor-one = "jobify.tailor.manual.cli:run"
 # console-script pattern; cron / .github/workflows/hosted-hunt.yml handles
 # recurrence.
 jobify-hosted-hunt = "jobify.hosted.worker:run"
+# H7 Launch Part A Task 3: invite-minting ops CLI. `invites` (0003) has
+# no `authenticated`-role INSERT policy — only a service-role client can
+# mint a code — so this is an operator-run CLI, not a web endpoint.
+# `--mint N` inserts N fresh codes and prints them (one per line, plain,
+# for pasting into invite links); `--list` prints every code's claim
+# status. Argparse dispatch, mirroring jobify-hosted-hunt's own shape.
+jobify-hosted-invite = "jobify.hosted.invites:run"
 
 [tool.setuptools]
 # Each listed package needs to be installed so setuptools wires up the

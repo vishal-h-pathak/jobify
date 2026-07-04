@@ -1,17 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/lib/supabase/types";
 
-/**
- * `matches`/`postings` row shapes. The app-wide `web/lib/supabase/types.ts`
- * Database interface doesn't have these two tables yet — that's a shared
- * file outside this session's ownership (see 14_h5_feed_ui.md's file
- * boundaries), so rather than editing it this module works against an
- * untyped `SupabaseClient` (any caller's `SupabaseClient<Database>` is
- * structurally assignable to it) and casts query results to the row
- * shapes below itself. Flagged for the merge reviewer to fold `matches`/
- * `postings` into the canonical `Database` so this can go back to a
- * fully generic-typed client.
- */
-export type FeedSupabaseClient = SupabaseClient;
+export type FeedSupabaseClient = SupabaseClient<Database>;
 
 export interface MatchRow {
   user_id: string;
@@ -32,9 +22,15 @@ export interface PostingRow {
   company: string | null;
   location: string | null;
   remote: boolean | null;
+  description: string | null;
   application_url: string | null;
   ats_kind: string | null;
+  link_status: string | null;
+  source: string | null;
+  posted_at: string | null;
   first_seen_at: string;
+  last_seen_at: string;
+  embedding: number[] | null;
   raw: Record<string, unknown> | null;
 }
 
@@ -80,12 +76,14 @@ export function groupMatches<T extends Pick<MatchRow, "state">>(matches: T[]): G
 
 async function assertRowsAffected(
   supabase: FeedSupabaseClient,
+  userId: string,
   postingId: string,
   newState: MatchRow["state"]
 ): Promise<void> {
   const { data, error } = await supabase
     .from("matches")
     .update({ state: newState, state_changed_at: new Date().toISOString() })
+    .eq("user_id", userId)
     .eq("posting_id", postingId)
     .select("posting_id");
   if (error) throw error;
@@ -103,32 +101,33 @@ async function assertRowsAffected(
  * the single-row transitions below, this is NOT the RLS-regression signal
  * the review note calls out; it's just "nothing left to mark."
  */
-export async function markSeenBulk(supabase: FeedSupabaseClient, postingIds: string[]): Promise<void> {
+export async function markSeenBulk(supabase: FeedSupabaseClient, userId: string, postingIds: string[]): Promise<void> {
   if (postingIds.length === 0) return;
   const { error } = await supabase
     .from("matches")
     .update({ state: "seen", state_changed_at: new Date().toISOString() })
+    .eq("user_id", userId)
     .eq("state", "new")
     .in("posting_id", postingIds);
   if (error) throw error;
 }
 
-export async function saveMatch(supabase: FeedSupabaseClient, postingId: string): Promise<void> {
-  await assertRowsAffected(supabase, postingId, "saved");
+export async function saveMatch(supabase: FeedSupabaseClient, userId: string, postingId: string): Promise<void> {
+  await assertRowsAffected(supabase, userId, postingId, "saved");
 }
 
-export async function dismissMatch(supabase: FeedSupabaseClient, postingId: string): Promise<void> {
-  await assertRowsAffected(supabase, postingId, "dismissed");
+export async function dismissMatch(supabase: FeedSupabaseClient, userId: string, postingId: string): Promise<void> {
+  await assertRowsAffected(supabase, userId, postingId, "dismissed");
 }
 
 /** No prior state is stored on the row, so undo lands on `seen` (already seen, not brand new). */
-export async function undismissMatch(supabase: FeedSupabaseClient, postingId: string): Promise<void> {
-  await assertRowsAffected(supabase, postingId, "seen");
+export async function undismissMatch(supabase: FeedSupabaseClient, userId: string, postingId: string): Promise<void> {
+  await assertRowsAffected(supabase, userId, postingId, "seen");
 }
 
 /** "I applied" is always an explicit human click — never called automatically. */
-export async function markApplied(supabase: FeedSupabaseClient, postingId: string): Promise<void> {
-  await assertRowsAffected(supabase, postingId, "applied");
+export async function markApplied(supabase: FeedSupabaseClient, userId: string, postingId: string): Promise<void> {
+  await assertRowsAffected(supabase, userId, postingId, "applied");
 }
 
 /**

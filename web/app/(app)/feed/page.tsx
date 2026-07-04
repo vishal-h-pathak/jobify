@@ -6,7 +6,6 @@ import {
   groupMatches,
   markSeenBulk,
   sortByBestScore,
-  type FeedSupabaseClient,
   type MatchRow,
   type MatchWithPosting,
   type PostingRow,
@@ -34,24 +33,19 @@ export default async function FeedPage() {
   // written by the onboarding chat's final turn) -> send them there.
   if (!profile) redirect("/onboarding");
 
-  // `matches`/`postings` aren't in the app-wide Database type yet (see
-  // lib/db/matches.ts's header comment) — same runtime client, narrower
-  // local type for these two tables only.
-  const feedClient = supabase as unknown as FeedSupabaseClient;
-
-  const { data: matchesData, error: matchesError } = await feedClient
+  const { data: matchesData, error: matchesError } = await supabase
     .from("matches")
     .select("*")
     .eq("user_id", user.id);
   if (matchesError) throw matchesError;
-  const matches = (matchesData ?? []) as MatchRow[];
+  const matches: MatchRow[] = matchesData ?? [];
 
   const postingIds = matches.map((m) => m.posting_id);
   let postings: PostingRow[] = [];
   if (postingIds.length > 0) {
-    const { data, error } = await feedClient.from("postings").select("*").in("id", postingIds);
+    const { data, error } = await supabase.from("postings").select("*").in("id", postingIds);
     if (error) throw error;
-    postings = (data ?? []) as PostingRow[];
+    postings = data ?? [];
   }
   const postingsById = new Map(postings.map((p) => [p.id, p]));
 
@@ -70,7 +64,7 @@ export default async function FeedPage() {
   // in one UPDATE before the response streams out.
   const stillNewIds = grouped.new.filter((m) => m.state === "new").map((m) => m.posting_id);
   if (stillNewIds.length > 0) {
-    await markSeenBulk(feedClient, stillNewIds);
+    await markSeenBulk(supabase, user.id, stillNewIds);
   }
 
   const totalMatches = withPosting.length;

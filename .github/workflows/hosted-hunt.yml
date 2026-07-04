@@ -1,9 +1,8 @@
 name: hosted-hunt
 
-# OPT-IN on a fork, same posture as hunt.yml. Nothing runs until you (a)
-# add the repository secrets read below and (b) un-comment the
-# `schedule:` block to enable the cron. `workflow_dispatch` lets you run
-# it manually without any cron.
+# OPT-IN on a fork, same posture as hunt.yml. Nothing runs until you add
+# the repository secrets read below. `workflow_dispatch` lets you run it
+# manually any time; the `schedule:` block below runs it daily on cron.
 #
 # This is the H4 hosted (multitenant) worker: one cycle = global
 # discovery (jobify.hosted.discovery.run_discovery_cycle — fills the
@@ -14,13 +13,20 @@ name: hosted-hunt
 # Deliberately simpler than hunt.yml: no dashboard-run-row integration
 # (scripts/mark_run.py, the `run_id` input) — that's single-user-dashboard
 # plumbing owned by H3 / a later task, not this branch's job.
+#
+# Full required-secrets list lives in docs/OPERATIONS.md — this header
+# only calls out the ones worth a second look; see the inline comments
+# on each `env:` entry below for what's required vs optional.
 
 on:
   workflow_dispatch: {}
-  # Cron — DISABLED by default. Un-comment to enable on your fork (and
-  # make sure the secrets below are set).
-  # schedule:
-  #   - cron: "0 14 * * *"
+  schedule:
+    # 10:00 UTC = 6am America/New_York during EDT (most of the year,
+    # including now). Drifts to 5am America/New_York during EST
+    # (winter) — GHA cron is UTC-only and can't express a DST-aware
+    # local time, so this is a deliberate, documented drift rather than
+    # something to "fix" here.
+    - cron: "0 10 * * *"
 
 jobs:
   hosted-hunt:
@@ -65,4 +71,16 @@ jobs:
           # so this workflow needs them too.
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
           JSEARCH_API_KEY: ${{ secrets.JSEARCH_API_KEY }}
+          # jobify.hosted.keycrypt — decrypts BYO Anthropic keys pasted
+          # in the settings UI (H6) for jobify.hosted.fanout to use.
+          # Required once any user has pasted a BYO key; safe to leave
+          # unset otherwise — a decrypt failure degrades to the
+          # pool-with-caps path rather than crashing the cycle.
+          JOBIFY_KEY_ENCRYPTION_SECRET: ${{ secrets.JOBIFY_KEY_ENCRYPTION_SECRET }}
+          # jobify.notify.send_ntfy_summary (H7) — optional cycle
+          # telemetry push. Unset = skip silently, no console noise.
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          # jobify.config.HOSTED_GLOBAL_MONTHLY_CAP_USD — optional
+          # override of the $100 default whole-pool monthly spend cap.
+          HOSTED_GLOBAL_MONTHLY_CAP_USD: ${{ secrets.HOSTED_GLOBAL_MONTHLY_CAP_USD }}
         run: jobify-hosted-hunt --once

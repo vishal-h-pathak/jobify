@@ -84,7 +84,7 @@ export function MatchCard({ match }: { match: MatchWithPosting }) {
       <div className="flex flex-wrap gap-2 pt-1">
         {state === "dismissed" ? (
           <button
-            onClick={() => transition("seen", () => undismissMatch(supabase, match.posting_id))}
+            onClick={() => transition("seen", () => undismissMatch(supabase, match.user_id, match.posting_id))}
             className="rounded-md border border-zinc-300 px-3 py-1 text-sm dark:border-zinc-700"
           >
             Undo
@@ -93,7 +93,7 @@ export function MatchCard({ match }: { match: MatchWithPosting }) {
           <>
             {state !== "saved" && state !== "applied" && (
               <button
-                onClick={() => transition("saved", () => saveMatch(supabase, match.posting_id))}
+                onClick={() => transition("saved", () => saveMatch(supabase, match.user_id, match.posting_id))}
                 className="rounded-md border border-zinc-300 px-3 py-1 text-sm dark:border-zinc-700"
               >
                 Save
@@ -101,7 +101,7 @@ export function MatchCard({ match }: { match: MatchWithPosting }) {
             )}
             {state !== "applied" && (
               <button
-                onClick={() => transition("dismissed", () => dismissMatch(supabase, match.posting_id))}
+                onClick={() => transition("dismissed", () => dismissMatch(supabase, match.user_id, match.posting_id))}
                 className="rounded-md border border-zinc-300 px-3 py-1 text-sm dark:border-zinc-700"
               >
                 Dismiss
@@ -109,7 +109,7 @@ export function MatchCard({ match }: { match: MatchWithPosting }) {
             )}
             {state !== "applied" && (
               <button
-                onClick={() => transition("applied", () => markApplied(supabase, match.posting_id))}
+                onClick={() => transition("applied", () => markApplied(supabase, match.user_id, match.posting_id))}
                 className="rounded-md bg-foreground px-3 py-1 text-sm font-medium text-background"
               >
                 I applied
