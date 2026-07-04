@@ -263,6 +263,7 @@ def insert_budget_ledger_row(
     output_tokens: int = 0,
     cost_usd: float = 0.0,
     run_id: str | None = None,
+    byo: bool = False,
 ) -> None:
     """Append one `budget_ledger` row. Append-only by RLS design (0002) —
     no update/delete helper exists for this table on purpose.
@@ -276,6 +277,13 @@ def insert_budget_ledger_row(
     a shared posting embedding computed once and reused by every user's
     match. Every other event stays attributed to the specific user whose
     action incurred the cost.
+
+    `byo` (H6, `0006_cost_rails.sql`): `True` when this call ran on the
+    user's own decrypted Anthropic key rather than the pool's. Real cost
+    is still recorded (the row is useful for the settings page's own-spend
+    display), but `get_month_to_date_spend` / `get_global_month_to_date_spend`
+    both filter `byo = FALSE` — a BYO row must never count against either
+    the per-user or the global pool cap.
     """
     _get_client().table("budget_ledger").insert(
         {
@@ -286,6 +294,7 @@ def insert_budget_ledger_row(
             "output_tokens": output_tokens,
             "cost_usd": cost_usd,
             "run_id": run_id,
+            "byo": byo,
         }
     ).execute()
 
@@ -296,9 +305,17 @@ def insert_budget_ledger_row(
 DEFAULT_MONTHLY_USD_CAP = 5.00
 
 
+def _utc_month_start() -> datetime:
+    return datetime.now(timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+
+
 def get_month_to_date_spend(user_id: str) -> float:
     """Sum of `budget_ledger.cost_usd` for `user_id` since the start of
-    the current UTC calendar month.
+    the current UTC calendar month, EXCLUDING `byo = TRUE` rows (H6,
+    `0006_cost_rails.sql`) — spend on a user's own decrypted key never
+    counts against their pool cap.
 
     Filters server-side by `created_at >=` the UTC month start (the
     Python equivalent of `date_trunc('month', now())`) and sums
@@ -306,14 +323,31 @@ def get_month_to_date_spend(user_id: str) -> float:
     so this matches this module's existing client-side aggregation style
     (see `get_job_counts_by_status`).
     """
-    month_start = datetime.now(timezone.utc).replace(
-        day=1, hour=0, minute=0, second=0, microsecond=0
-    )
     result = (
         _get_client().table("budget_ledger")
         .select("cost_usd")
         .eq("user_id", user_id)
-        .gte("created_at", month_start.isoformat())
+        .eq("byo", False)
+        .gte("created_at", _utc_month_start().isoformat())
+        .execute()
+    )
+    rows = result.data or []
+    return sum(float(r.get("cost_usd") or 0) for r in rows)
+
+
+def get_global_month_to_date_spend() -> float:
+    """Sum of `budget_ledger.cost_usd` for EVERY row (every user, plus the
+    `user_id IS NULL` global-embedding rows) since the start of the
+    current UTC calendar month, excluding `byo = TRUE` rows — the "$100
+    total" pool cap (H6, `HOSTED_GLOBAL_MONTHLY_CAP_USD`). Unlike
+    `get_month_to_date_spend`, no `user_id` filter — this is the
+    whole-pool total, not any one user's.
+    """
+    result = (
+        _get_client().table("budget_ledger")
+        .select("cost_usd")
+        .eq("byo", False)
+        .gte("created_at", _utc_month_start().isoformat())
         .execute()
     )
     rows = result.data or []
@@ -338,6 +372,24 @@ def get_budget_cap(user_id: str) -> float:
         return DEFAULT_MONTHLY_USD_CAP
     value = rows[0].get("monthly_usd_cap")
     return float(value) if value is not None else DEFAULT_MONTHLY_USD_CAP
+
+
+def get_api_key_ciphertext(user_id: str) -> str | None:
+    """Return `user_id`'s `api_keys.encrypted_key` ciphertext blob (H6 BYO
+    keys), or `None` if the user has no row. Ciphertext only — decrypting
+    it is `jobify.hosted.keycrypt.decrypt_key`'s job, never this module's;
+    `db.py` must never see or log plaintext.
+    """
+    result = (
+        _get_client().table("api_keys")
+        .select("encrypted_key")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return None
+    return rows[0].get("encrypted_key")
 
 
 def upsert_posting(job: dict) -> None:

@@ -307,7 +307,8 @@ class CompletionUsage:
 
 
 def _complete_raw(
-    *, system: SystemContent, prompt: str, model: str, max_tokens: int
+    *, system: SystemContent, prompt: str, model: str, max_tokens: int,
+    api_key: str | None = None,
 ) -> tuple[str, CompletionUsage]:
     """Shared implementation behind `complete()` and `complete_with_usage()`.
     Try the Messages API (pay-as-you-go credits) first; on a billing/
@@ -319,12 +320,37 @@ def _complete_raw(
 
     Raises on transient API errors (the caller's per-job handling catches
     them) and when no auth is usable at all.
-    """
-    api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
 
-    if api_key and not _api_key_in_cool_off():
+    ``api_key`` (H6 BYO keys, `jobify.hosted.fanout`): an explicit
+    caller-supplied credential — e.g. a user's own decrypted Anthropic
+    key — used INSTEAD of the env-based pool key for this one call. A
+    fresh client per call, never cached (the same per-call-client,
+    never-shared-across-users discipline `jobify.profile_loader` uses for
+    profile state). No cool-off benching and no OAuth fallback on this
+    path: a BYO key's own failure (invalid, out of credits) must surface
+    to the caller rather than silently spend the shared pool's credits
+    under a `byo=True` ledger row — that would hide the real cost. The
+    pool's env-based key and its cool-off state are untouched either way.
+    """
+    if api_key:
+        resp = _anthropic_client(api_key).messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        resp_usage = getattr(resp, "usage", None)
+        usage = CompletionUsage(
+            input_tokens=getattr(resp_usage, "input_tokens", 0) or 0,
+            output_tokens=getattr(resp_usage, "output_tokens", 0) or 0,
+        )
+        return _join_text(resp), usage
+
+    env_api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+
+    if env_api_key and not _api_key_in_cool_off():
         try:
-            resp = _anthropic_client(api_key).messages.create(
+            resp = _anthropic_client(env_api_key).messages.create(
                 model=model,
                 max_tokens=max_tokens,
                 system=system,
@@ -369,7 +395,10 @@ def _complete_raw(
 
 # ── Public entry point ──────────────────────────────────────────────────────
 
-def complete(*, system: SystemContent, prompt: str, model: str, max_tokens: int) -> str:
+def complete(
+    *, system: SystemContent, prompt: str, model: str, max_tokens: int,
+    api_key: str | None = None,
+) -> str:
     """Return assistant text. Try the Messages API (pay-as-you-go credits)
     first; on a billing/credit/auth failure, bench the key and fall back to
     the Claude Agent SDK under subscription OAuth.
@@ -378,11 +407,14 @@ def complete(*, system: SystemContent, prompt: str, model: str, max_tokens: int)
     preserved) or a plain string. Raises on transient API errors (the
     caller's per-job handling catches them) and when no auth is usable.
 
+    ``api_key``: see `_complete_raw`'s docstring (H6 BYO keys).
+
     Text-only; see `_complete_raw` for the shared implementation and
     `complete_with_usage` for the usage-capturing sibling.
     """
     text, _usage = _complete_raw(
         system=system, prompt=prompt, model=model, max_tokens=max_tokens,
+        api_key=api_key,
     )
     return text
 
@@ -391,7 +423,8 @@ def complete(*, system: SystemContent, prompt: str, model: str, max_tokens: int)
 
 
 def complete_with_usage(
-    *, system: SystemContent, prompt: str, model: str, max_tokens: int
+    *, system: SystemContent, prompt: str, model: str, max_tokens: int,
+    api_key: str | None = None,
 ) -> tuple[str, CompletionUsage]:
     """Like `complete()`, but also returns token usage for the budget
     ledger. Additive alongside `complete()` — that function's signature
@@ -403,7 +436,13 @@ def complete_with_usage(
     so ledger-writing callers (H4 Task 2/3: embeddings, rubric compile,
     LLM verdict) don't have to duplicate the auth logic to get usage.
     See `_complete_raw` for the shared implementation.
+
+    ``api_key``: see `_complete_raw`'s docstring (H6 BYO keys) — routes
+    this one call through a caller-supplied credential instead of the
+    pool's env-based key, bypassing the cool-off/OAuth fallback chain
+    entirely.
     """
     return _complete_raw(
         system=system, prompt=prompt, model=model, max_tokens=max_tokens,
+        api_key=api_key,
     )

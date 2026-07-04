@@ -162,3 +162,24 @@ collision between the two parallel sessions this migration wasn't written
 to reconcile — flagged for the controller to resolve at merge time
 (rename one, fold into the other, or pick one column shape) rather than
 decided unilaterally here.
+
+## 0006 — cost rails: hard caps, global pool, BYO keys
+
+`0006_cost_rails.sql` is additive on top of `0001`-`0005` — H6 of the
+hosted plan (`planning/HOSTED_AGGREGATOR_PLAN.md` §4,
+`planning/session-prompts/15_h6_cost_rails.md`). This phase is the launch
+blocker: no invites go out until it merges. It adds:
+
+| Object | Purpose |
+|---|---|
+| `api_keys.key_last4` | the only fragment of a BYO key the settings UI ever echoes back post-save |
+| `api_keys.updated_at` | parity with every other per-user table; a paste-new-key is an UPDATE |
+| `api_keys` DELETE policy | 0002 shipped none (own-row select/insert/update only) — the settings page's "remove key" needs it |
+| `budget_ledger.byo` | `TRUE` for a rubric compile / stage-4 verdict run on the user's own decrypted key; excludes that row from both the per-user and global pool-spend sums (see `docs/COST_RAILS.md`) |
+
+See `docs/COST_RAILS.md` for the three budget layers (per-user cap, global
+pool cap, BYO bypass), the BYO key encryption format, and the
+`JOBIFY_KEY_ENCRYPTION_SECRET` rotation runbook.
+
+Apply it the same way as `0001`-`0005` (SQL Editor / `supabase db push` /
+`apply_migration`), after `0005` is already applied.

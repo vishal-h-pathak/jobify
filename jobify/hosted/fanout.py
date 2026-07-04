@@ -33,6 +33,26 @@ response) must not abort the rest of the cycle — every per-user ladder
 run is wrapped in `run_fanout_cycle`'s try/except, same resilience
 pattern `jobify.hosted.discovery` and `jobify.hunt.agent.iter_all_jobs`
 both already use.
+
+Cost rails (H6, `planning/session-prompts/15_h6_cost_rails.md`): three
+budget layers stack on top of the ladder above — see `docs/COST_RAILS.md`
+for the full picture.
+
+    1. Per-user pool cap — `db.get_budget_cap`/`db.get_month_to_date_spend`,
+       now re-checked every `HOSTED_BUDGET_RECHECK_EVERY` stage-4 verdicts
+       within a single user's top-N loop (mid-batch), not just once per
+       batch.
+    2. Global pool cap — `HOSTED_GLOBAL_MONTHLY_CAP_USD`, total non-BYO
+       spend across every user this month. Exceeded => the cycle degrades
+       to stages 1-3 for pool users (no new rubric compiles, no stage-4
+       verdicts); feed matches already scored keep working.
+    3. BYO keys — a user with an `api_keys` row runs their rubric compile
+       and stage-4 verdicts on their OWN decrypted key (per-call client,
+       same never-cache-across-users discipline as the profile isolation
+       above) and bypasses both caps entirely. A decryption failure
+       (`jobify.hosted.keycrypt.KeyDecryptionError` — wrong/rotated
+       secret, corrupted row) is logged and falls back to pool-with-caps
+       for that user; it never crashes the cycle.
 """
 
 from __future__ import annotations
@@ -46,8 +66,13 @@ from pathlib import Path
 from typing import Optional
 
 from jobify import db
-from jobify.config import HOSTED_STAGE4_TOP_N
+from jobify.config import (
+    HOSTED_BUDGET_RECHECK_EVERY,
+    HOSTED_GLOBAL_MONTHLY_CAP_USD,
+    HOSTED_STAGE4_TOP_N,
+)
 from jobify.hosted import embed
+from jobify.hosted.keycrypt import KeyDecryptionError, decrypt_key
 from jobify.hunt import rubric as rubric_module
 # Plain module import (not a specific name) — `jobify.hunt.agent`'s
 # top-level sys.path bootstrap is what makes the bare `sources` package
@@ -144,18 +169,30 @@ def _extract_json_object(text: str) -> dict:
     return json.loads(text[start : end + 1])
 
 
-def _stage4_verdict(user_id: str, thesis: str, posting: dict) -> Optional[dict]:
+def _stage4_verdict(
+    user_id: str, thesis: str, posting: dict, *, api_key: Optional[str] = None,
+) -> Optional[dict]:
     """One stage-4 LLM call for one posting. Always writes the
     `llm_verdict` ledger row (real tokens were spent regardless of
     whether the response parsed); returns `None` (no `matches` write)
     only when the response itself wasn't usable JSON.
+
+    `api_key` (H6 BYO keys): routes this call through the user's own
+    decrypted key instead of the pool's, and tags the ledger row
+    `byo=True` — see `llm.complete_with_usage`'s docstring for the auth
+    semantics. Only included in the `llm.complete_with_usage` call when
+    truthy, so pool-path callers (and their tests, which monkeypatch that
+    function with the pre-H6 fixed signature) are unaffected.
     """
-    text, usage = llm.complete_with_usage(
+    call_kwargs: dict = dict(
         system=_STAGE4_SYSTEM,
         prompt=_stage4_user_msg(thesis, posting),
         model=STAGE4_MODEL,
         max_tokens=STAGE4_MAX_TOKENS,
     )
+    if api_key:
+        call_kwargs["api_key"] = api_key
+    text, usage = llm.complete_with_usage(**call_kwargs)
     db.insert_budget_ledger_row(
         user_id, LLM_VERDICT_EVENT,
         model=STAGE4_MODEL,
@@ -165,6 +202,7 @@ def _stage4_verdict(user_id: str, thesis: str, posting: dict) -> Optional[dict]:
             usage.input_tokens, usage.output_tokens,
             STAGE4_INPUT_USD_PER_MTOK, STAGE4_OUTPUT_USD_PER_MTOK,
         ),
+        byo=bool(api_key),
     )
 
     try:
@@ -213,23 +251,42 @@ def _targeting_text(profile: dict) -> str:
     return "\n".join(lines)
 
 
-def _ensure_rubric(user_id: str, profile_dir: Path) -> dict:
+def _ensure_rubric(
+    user_id: str, profile_dir: Path, *,
+    api_key: Optional[str] = None, allow_new_compile: bool = True,
+) -> Optional[dict]:
     """Return `user_id`'s compiled rubric, compiling and persisting it on
     first use. One Sonnet-class call per user, ever (until an explicit
     recompile) — every subsequent cycle reads `profiles.compiled_rubric`
     back via `jobify.db.get_compiled_rubric`.
+
+    `api_key` (H6 BYO keys): routes a NEW compile through the user's own
+    decrypted key and tags the ledger row `byo=True` — an existing cached
+    rubric is returned as-is regardless (no re-compile just because a key
+    was added).
+
+    `allow_new_compile=False` (H6 global pool cap): when the user has no
+    cached rubric yet and the global cap is exhausted, don't spend the
+    one-time compile call — return `None` instead. BYO callers always
+    pass `allow_new_compile=True` (BYO bypasses the global cap); the pool
+    path passes `False` when `fanout._global_cap_exceeded()` is true.
     """
     existing = db.get_compiled_rubric(user_id)
     if existing:
         return existing
+    if not allow_new_compile:
+        return None
 
     thesis = load_thesis(profile_dir)
     disqualifiers_text = load_disqualifiers_text(profile_dir)
     targeting_text = _targeting_text(load_profile(profile_dir))
 
-    data, usage = rubric_module.compile_rubric_with_usage(
+    compile_kwargs: dict = dict(
         thesis=thesis, disqualifiers_text=disqualifiers_text, targeting_text=targeting_text,
     )
+    if api_key:
+        compile_kwargs["api_key"] = api_key
+    data, usage = rubric_module.compile_rubric_with_usage(**compile_kwargs)
     db.set_compiled_rubric(user_id, data)
     db.insert_budget_ledger_row(
         user_id, RUBRIC_COMPILE_EVENT,
@@ -240,6 +297,7 @@ def _ensure_rubric(user_id: str, profile_dir: Path) -> dict:
             usage.input_tokens, usage.output_tokens,
             RUBRIC_COMPILE_INPUT_USD_PER_MTOK, RUBRIC_COMPILE_OUTPUT_USD_PER_MTOK,
         ),
+        byo=bool(api_key),
     )
     return data
 
@@ -374,10 +432,47 @@ def _composite_score(rubric_score: float, embed_score: Optional[float]) -> float
     return (rubric_score + embed_score) / 2.0
 
 
+# ── Cost rails: BYO key resolution + global pool cap (H6) ────────────────
+
+
+def _resolve_byo_key(user_id: str) -> Optional[str]:
+    """Return `user_id`'s decrypted Anthropic key, or `None` when they
+    have no `api_keys` row OR decryption failed. A decryption failure
+    (wrong/rotated `JOBIFY_KEY_ENCRYPTION_SECRET`, corrupted row) is
+    logged and treated exactly like "no BYO key" — the caller falls back
+    to pool-with-caps for this user rather than crashing the cycle.
+
+    Fresh DB read + decrypt on every call, no caching: the per-call,
+    never-shared-across-users discipline the module docstring describes
+    for profile state applies equally to key material.
+    """
+    ciphertext = db.get_api_key_ciphertext(user_id)
+    if not ciphertext:
+        return None
+    try:
+        return decrypt_key(ciphertext)
+    except KeyDecryptionError as exc:
+        logger.error(
+            "fanout: BYO key decrypt failed for user_id=%s (falling back to "
+            "pool-with-caps): %s", user_id, exc,
+        )
+        return None
+
+
+def _global_cap_exceeded() -> bool:
+    """True when this month's total non-BYO spend, across every user
+    (`jobify.db.get_global_month_to_date_spend`), has hit
+    `HOSTED_GLOBAL_MONTHLY_CAP_USD` — the "$100 total" pool promise.
+    """
+    return db.get_global_month_to_date_spend() >= HOSTED_GLOBAL_MONTHLY_CAP_USD
+
+
 # ── Per-user ladder ─────────────────────────────────────────────────────
 
 
-def _run_user_ladder(user_id: str, counters: dict[str, int]) -> None:
+def _run_user_ladder(
+    user_id: str, counters: dict[str, int], *, global_pool_capped: bool,
+) -> None:
     """Run stages 1-4 for one user, mutating `counters` in place.
 
     Linear flow, no early returns past the validation-status check: every
@@ -386,6 +481,14 @@ def _run_user_ladder(user_id: str, counters: dict[str, int]) -> None:
     `counters["users_processed"]` only increments once, at the very end —
     if anything above raises, it's the caller's job (`run_fanout_cycle`)
     to catch it and count the user as errored instead.
+
+    `global_pool_capped`: `run_fanout_cycle`'s cycle-start snapshot of
+    `_global_cap_exceeded()`. Gates whether THIS user may spend a NEW
+    rubric compile this cycle (an already-cached rubric is always reused
+    regardless). Stage 4's own gate re-checks the global cap fresh (not
+    this snapshot) at each mid-batch recheck, so one user's spend crossing
+    the cap mid-cycle still stops a LATER user's stage 4 in the same
+    cycle — see `_global_cap_exceeded`.
     """
     status = db.get_profile_validation_status(user_id)
     if status == VALIDATION_STATUS_INVALID:
@@ -396,6 +499,10 @@ def _run_user_ladder(user_id: str, counters: dict[str, int]) -> None:
     profile_dir = materialize_profile_dir(user_id)
     postings = db.get_unmatched_postings(user_id)
 
+    # BYO key resolution (H6): a decrypt failure degrades to `None` (pool
+    # path) rather than raising — see `_resolve_byo_key`.
+    byo_key = _resolve_byo_key(user_id)
+
     # ── Stage 1: title pre-filter. A failure gets no matches row. ───────
     survivors = [
         p for p in postings
@@ -404,16 +511,34 @@ def _run_user_ladder(user_id: str, counters: dict[str, int]) -> None:
 
     # ── Stage 2: compiled rubric. Deferred compile: if this cycle has
     # nothing to score for this user, don't spend the one-time compile
-    # call until there's actually something to run it against. ─────────
-    rubric_dict = _ensure_rubric(user_id, profile_dir) if survivors else None
+    # call until there's actually something to run it against. A BYO key
+    # always may compile (bypasses the global cap); the pool path may not
+    # when the global cap is already exhausted (`allow_new_compile`). ───
+    rubric_dict: Optional[dict] = None
+    if survivors:
+        rubric_dict = _ensure_rubric(
+            user_id, profile_dir, api_key=byo_key,
+            allow_new_compile=bool(byo_key) or not global_pool_capped,
+        )
+        if rubric_dict is None:
+            # No cached rubric AND the global pool cap is exhausted (pool
+            # path only — BYO never lands here). Feed keeps showing prior
+            # matches; this user's new postings wait for a future cycle.
+            counters["users_global_capped"] += 1
+            logger.info(
+                "fanout: user_id=%s has no compiled rubric and the global "
+                "pool cap is exceeded; skipping this cycle (retry next cycle)",
+                user_id,
+            )
 
     stage2_survivors: list[tuple[dict, RubricResult]] = []
-    for posting in survivors:
-        counters["postings_scored"] += 1
-        result = rubric_module.score_posting(rubric_dict, posting)
-        if result.disqualified:
-            continue  # hard disqualify -> no matches row, not a zero-score row
-        stage2_survivors.append((posting, result))
+    if rubric_dict is not None:
+        for posting in survivors:
+            counters["postings_scored"] += 1
+            result = rubric_module.score_posting(rubric_dict, posting)
+            if result.disqualified:
+                continue  # hard disqualify -> no matches row, not a zero-score row
+            stage2_survivors.append((posting, result))
 
     # ── Stage 3: embedding rerank (skips cleanly when disabled). ────────
     embed_scores = (
@@ -432,45 +557,80 @@ def _run_user_ladder(user_id: str, counters: dict[str, int]) -> None:
         counters["matches_written"] += 1
 
     # ── Stage 4: budget-gated LLM verdict for the top-N survivors. ──────
-    # Checked once, before the batch — NOT a hard cap. A user sitting just
-    # under `cap` here can still spend up to HOSTED_STAGE4_TOP_N more
-    # verdicts this cycle before the next cycle's check catches it up. Full
-    # caps enforcement (mid-batch re-checks, notifications) is H6's job.
+    # A BYO key bypasses both the per-user AND global pool caps entirely
+    # (ledger rows still written, tagged byo=True). The pool path is a
+    # HARD cap: re-checked every HOSTED_BUDGET_RECHECK_EVERY verdicts
+    # within the loop (mid-batch), not just once per batch, against BOTH
+    # the per-user cap and a fresh global-cap read (see module docstring).
     if stage2_survivors:
-        spend = db.get_month_to_date_spend(user_id)
-        cap = db.get_budget_cap(user_id)
-        if spend >= cap:
-            counters["users_budget_stopped"] += 1
+        if not byo_key and global_pool_capped:
+            counters["users_global_capped"] += 1
             logger.info(
-                "fanout: user_id=%s at/over budget cap ($%.4f >= $%.4f); "
-                "skipping stage 4 this cycle (rubric+embed scores only)",
-                user_id, spend, cap,
+                "fanout: user_id=%s: global pool cap exceeded; skipping "
+                "stage 4 this cycle (rubric+embed scores only)", user_id,
             )
         else:
-            thesis = load_thesis(profile_dir)
-            ranked = sorted(
-                stage2_survivors,
-                key=lambda pr: _composite_score(pr[1].score, embed_scores.get(pr[0]["id"])),
-                reverse=True,
-            )
-            for posting, _result in ranked[:HOSTED_STAGE4_TOP_N]:
-                try:
-                    verdict = _stage4_verdict(user_id, thesis, posting)
-                except Exception as exc:  # noqa: BLE001 — one bad call must not drop the rest of the top-N
-                    logger.error(
-                        "fanout: stage4 verdict failed for user_id=%s posting_id=%s: %s",
-                        user_id, posting.get("id"), exc,
+            per_user_capped = False
+            if not byo_key:
+                spend = db.get_month_to_date_spend(user_id)
+                cap = db.get_budget_cap(user_id)
+                if spend >= cap:
+                    per_user_capped = True
+                    counters["users_budget_stopped"] += 1
+                    logger.info(
+                        "fanout: user_id=%s at/over budget cap ($%.4f >= $%.4f); "
+                        "skipping stage 4 this cycle (rubric+embed scores only)",
+                        user_id, spend, cap,
                     )
-                    continue
-                counters["stage4_calls"] += 1
-                if verdict is None:
-                    continue
-                db.upsert_match(
-                    user_id, posting["id"],
-                    llm_score=verdict["score"],
-                    reason=verdict["reason"],
-                    reason_source="llm",
+
+            if not per_user_capped:
+                thesis = load_thesis(profile_dir)
+                ranked = sorted(
+                    stage2_survivors,
+                    key=lambda pr: _composite_score(pr[1].score, embed_scores.get(pr[0]["id"])),
+                    reverse=True,
                 )
+                for i, (posting, _result) in enumerate(ranked[:HOSTED_STAGE4_TOP_N], start=1):
+                    try:
+                        verdict = _stage4_verdict(user_id, thesis, posting, api_key=byo_key)
+                    except Exception as exc:  # noqa: BLE001 — one bad call must not drop the rest of the top-N
+                        logger.error(
+                            "fanout: stage4 verdict failed for user_id=%s posting_id=%s: %s",
+                            user_id, posting.get("id"), exc,
+                        )
+                        continue
+                    counters["stage4_calls"] += 1
+                    if verdict is not None:
+                        db.upsert_match(
+                            user_id, posting["id"],
+                            llm_score=verdict["score"],
+                            reason=verdict["reason"],
+                            reason_source="llm",
+                        )
+
+                    # Mid-batch hard-cap recheck (H6) — BYO bypasses this
+                    # entirely, so only the pool path re-checks.
+                    if not byo_key and i % HOSTED_BUDGET_RECHECK_EVERY == 0:
+                        spend = db.get_month_to_date_spend(user_id)
+                        cap = db.get_budget_cap(user_id)
+                        if spend >= cap:
+                            counters["users_budget_stopped"] += 1
+                            logger.info(
+                                "fanout: user_id=%s hit budget cap mid-batch "
+                                "($%.4f >= $%.4f) after %d/%d verdicts this "
+                                "cycle; stopping stage 4",
+                                user_id, spend, cap, i, min(len(ranked), HOSTED_STAGE4_TOP_N),
+                            )
+                            break
+                        if _global_cap_exceeded():
+                            counters["users_global_capped"] += 1
+                            logger.info(
+                                "fanout: global pool cap exceeded mid-batch "
+                                "(user_id=%s, %d/%d verdicts this cycle); "
+                                "stopping stage 4",
+                                user_id, i, min(len(ranked), HOSTED_STAGE4_TOP_N),
+                            )
+                            break
 
     counters["users_processed"] += 1
 
@@ -483,12 +643,26 @@ def run_fanout_cycle(user_ids: Optional[list[str]] = None) -> dict[str, int]:
     user with a `profiles` row); an explicit list is a testing/targeting
     hook (score one user without touching the rest of the roster).
 
+    The global pool cap (H6) is snapshotted ONCE here, at cycle start,
+    and passed to every user's ladder — see `_run_user_ladder`'s
+    docstring for why stage 4's mid-batch recheck re-reads it fresh
+    instead of trusting this snapshot for the whole cycle.
+
     Returns a summary dict for Task 4's cycle-summary log line:
     `users_processed`, `users_skipped_invalid`, `users_errored`,
     `postings_scored`, `matches_written`, `stage4_calls`,
-    `users_budget_stopped`.
+    `users_budget_stopped`, `users_global_capped`.
     """
     ids = user_ids if user_ids is not None else db.list_profile_user_ids()
+
+    global_pool_capped = _global_cap_exceeded()
+    if global_pool_capped:
+        logger.info(
+            "fanout: global pool cap exceeded at cycle start ($%.2f); this "
+            "cycle's stage-2 compiles + stage-4 verdicts are skipped for "
+            "every pool user (BYO users unaffected)",
+            HOSTED_GLOBAL_MONTHLY_CAP_USD,
+        )
 
     counters: dict[str, int] = {
         "users_processed": 0,
@@ -498,11 +672,12 @@ def run_fanout_cycle(user_ids: Optional[list[str]] = None) -> dict[str, int]:
         "matches_written": 0,
         "stage4_calls": 0,
         "users_budget_stopped": 0,
+        "users_global_capped": 0,
     }
 
     for user_id in ids:
         try:
-            _run_user_ladder(user_id, counters)
+            _run_user_ladder(user_id, counters, global_pool_capped=global_pool_capped)
         except Exception as exc:  # noqa: BLE001 — one user's failure must not abort the cycle
             counters["users_errored"] += 1
             logger.error("fanout: ladder failed for user_id=%s: %s", user_id, exc)

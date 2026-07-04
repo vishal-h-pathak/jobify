@@ -128,6 +128,34 @@ EMBEDDINGS_ENABLED: Final[bool] = _bool("EMBEDDINGS_ENABLED", "true")
 # gets tuned.
 HOSTED_STAGE4_TOP_N: Final[int] = int(os.environ.get("HOSTED_STAGE4_TOP_N", "15"))
 
+# ── Hosted worker: cost rails (H6, jobify.hosted.fanout + keycrypt) ──────────
+# Per-user hard cap: re-check `get_month_to_date_spend` against
+# `get_budget_cap` every K stage-4 verdicts within a single user's ladder
+# (mid-batch, not just once per batch) — 5 is a starting point, cheap
+# enough that a user can't blow past their cap by more than ~5 Haiku calls
+# worth of overshoot before the next cycle would have caught it anyway.
+HOSTED_BUDGET_RECHECK_EVERY: Final[int] = int(
+    os.environ.get("HOSTED_BUDGET_RECHECK_EVERY", "5")
+)
+
+# Global pool cap across every non-BYO user this month (the "$100 total"
+# promise — HOSTED_AGGREGATOR_PLAN.md §4). Exceeded => the whole cycle
+# degrades to stages 1-3 (feed still updates; no new rubric compiles, no
+# stage-4 LLM verdicts) except for BYO users, who bypass this entirely.
+HOSTED_GLOBAL_MONTHLY_CAP_USD: Final[float] = float(
+    os.environ.get("HOSTED_GLOBAL_MONTHLY_CAP_USD", "100")
+)
+
+# ── Hosted worker: BYO Anthropic key decryption (H6, jobify.hosted.keycrypt) ─
+# Soft default (empty string) so this module keeps importing without the
+# secret set — same convention as ANTHROPIC_API_KEY above. Base64-encoded,
+# must decode to exactly 32 bytes (AES-256-GCM). Rotating this value
+# invalidates every previously-encrypted api_keys row on purpose — see
+# docs/COST_RAILS.md's rotation runbook; a decrypt failure is caught by
+# jobify.hosted.fanout and degrades that user to pool-with-caps rather
+# than crashing the cycle.
+JOBIFY_KEY_ENCRYPTION_SECRET: Final[str] = os.environ.get("JOBIFY_KEY_ENCRYPTION_SECRET", "")
+
 
 # ── Claude model selection (PR-8: per-subtree to preserve LLM parity) ─────
 # Tailor and submitter use Sonnet for different tasks (resume / cover-letter
