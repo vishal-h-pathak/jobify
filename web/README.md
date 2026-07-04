@@ -7,8 +7,8 @@ links, per-user profile rows, invite-gated sign-up. See
 `planning/HOSTED_AGGREGATOR_PLAN.md` for the full shape.
 
 **v1 scope**: sign-in → invite gate → onboarding chat (produces a valid
-`profiles.doc`). The feed (scored postings, save/dismiss/applied) is H5 —
-`/feed` is a stub route for now.
+`profiles.doc`) → feed (scored `matches`×`postings`, grouped New/Saved/
+Applied/Dismissed, save/dismiss/"I applied"/undo, profile-health banner).
 
 ## No live Supabase project yet
 
@@ -24,7 +24,11 @@ Infra hosting decision is deferred. Everything here runs against a local
    supabase db execute --file ../jobify/migrations/0001_init.sql
    supabase db execute --file ../jobify/migrations/0002_multitenant.sql
    supabase db execute --file ../jobify/migrations/0003_hosted_onboarding.sql
+   supabase db execute --file ../jobify/migrations/0004_worker.sql
+   supabase db execute --file ../jobify/migrations/0005_invite_claim_fn.sql
    ```
+   (0002 creates `matches`/`postings` — the feed's tables; 0004 adds the
+   `validation_status` column the profile-health banner reads.)
    (paths relative to wherever your Supabase CLI project lives — adjust
    accordingly. See `jobify/migrations/README.md`.)
 2. `supabase status` for the local URL + anon + service_role keys.
@@ -61,7 +65,10 @@ Infra hosting decision is deferred. Everything here runs against a local
              onboarding_sessions) — stages 1-3 only: resume ingestion,
              identity & logistics, targeting. Voice / proof points /
              archetypes / template pick are tailor-era, out of v1.
-/feed        STUB — H5 builds the real feed against `matches`/`postings`
+/feed        scored matches grouped New/Saved/Applied/Dismissed (collapsed);
+             save/dismiss/"I applied"/undo via the authed client, batched
+             new -> seen marking, profile-health banner when
+             `profiles.validation_status.status === 'invalid'`
 ```
 
 The `(app)` route group's layout (`app/(app)/layout.tsx`) is the actual
@@ -102,7 +109,10 @@ check that a real generated doc passes both.
 
 ```bash
 npm test     # vitest — invite-claim logic, the invite gate, TS validator,
-             # buildProfileDoc, and the onboarding turn handler (mocked
+             # buildProfileDoc, the onboarding turn handler (mocked
              # Anthropic + mocked db writes: one budget_ledger row per turn,
-             # a profile upsert exactly when finish_interview fires)
+             # a profile upsert exactly when finish_interview fires), and
+             # the feed's matches.ts (score ordering, state transitions +
+             # 0-rows-affected failing loud, batched seen-marking,
+             # optimistic-revert) + ProfileHealthBanner
 ```
