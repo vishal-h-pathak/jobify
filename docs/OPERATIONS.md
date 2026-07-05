@@ -12,6 +12,18 @@ Vercel dashboard or `vercel project ls` — org/project slugs are operator-
 identifying, so they live outside the repo; deployed from `web/` in H7 Part B,
 2026-07-03). Invite links: `https://jobify-swart.vercel.app/invite?code=<code>`.
 
+**Deploy model (confirmed 2026-07-04): NO GitHub auto-deploy.** The project
+was created via the CLI, so pushes to GitHub do NOT deploy — the dashboard's
+"Redeploy" only re-runs the previous CLI upload (this bit us: prod served
+pre-UX code while main was five merges ahead). Until/unless the GitHub
+integration is connected (requires setting Root Directory = `web` in project
+settings first, or builds target the repo root and fail), **every merge to
+main must be followed by:**
+
+```
+cd <repo>/web && vercel --prod
+```
+
 ---
 
 ## 1. Env / secret inventory
