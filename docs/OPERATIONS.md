@@ -275,3 +275,38 @@ parked, not implemented.
 discovery-then-fan-out-everyone cycle, unchanged — useful for an
 operator who wants to force a full re-score outside the per-user trigger
 path.
+
+---
+
+## 8. System screen — what the numbers mean
+
+The `/admin/system` page (second tab next to "Operations") presents a
+static "How it works" explainer (top) and five live performance panels
+(bottom) backed by the `hunt_cycles` table.
+
+**Important:** `hunt_cycles` only has rows starting from this feature
+(wave 8) onward. Any cycle that ran before migration `0008_hunt_cycles.sql`
+was applied has no corresponding row. Immediately after this ships, the
+"Recent cycles" table and funnel will look sparse or empty — this is
+expected, not a bug. The panels populate over subsequent cycles.
+
+The five performance panels:
+
+- **Recent cycles** — one row per worker cycle (`hunt_cycles` table): cycle
+  start, trigger (`cron` or `user`), postings scored / matched / skipped,
+  pool spend, and any error.
+- **Ladder funnel** — from the most recent scoring cycle's stage counters:
+  how many candidates moved through stages 1 (rubric) → 2 (embeddings) →
+  3 (rerank) → 4 (verdict). See [`docs/SCORING.md`](SCORING.md) for the
+  scoring stages.
+- **Cost breakdown** — month-to-date pool spend vs cap, split by event
+  type (rubric, embedding, rerank, verdict) and model (Claude vs Voyage).
+  See [`docs/COST_RAILS.md`](COST_RAILS.md) for cost mechanics.
+- **Engagement** — matches by state (saved/applied/dismissed) and the
+  save:dismiss ratio, plus per-user applied match counts.
+- **Pool freshness** — current postings volume in the shared pool and
+  staleness (how many days old the oldest row is).
+
+For the scoring mechanics and cost-estimation formulas that underpin
+these numbers, see [`docs/SCORING.md`](SCORING.md) and
+[`docs/COST_RAILS.md`](COST_RAILS.md).
