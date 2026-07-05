@@ -2,16 +2,25 @@
 
 Composes Task 2's global discovery (`jobify.hosted.discovery.run_discovery_cycle`)
 and Task 3's per-user fan-out ladder (`jobify.hosted.fanout.run_fanout_cycle`)
-into one cycle: discovery fills the shared `postings` pool, then fan-out
-scores it per user. Console script `jobify-hosted-hunt` (declared in
-`pyproject.toml`) calls `run()`, mirroring `jobify.hunt.agent.run()`'s
-single-user console-script pattern — `argparse`, single-shot (no internal
-loop; cron / the GHA workflow handles recurrence), logger calls PLUS a
-`print(...)` summary line for terminal / GHA step-summary visibility.
+into one cycle: discovery fills the shared `postings` pool, then (unless
+told otherwise) fan-out scores it per user. Console script
+`jobify-hosted-hunt` (declared in `pyproject.toml`) calls `run()`,
+mirroring `jobify.hunt.agent.run()`'s single-user console-script pattern —
+`argparse`, single-shot (no internal loop; cron / the GHA workflow handles
+recurrence), logger calls PLUS a `print(...)` summary line for terminal /
+GHA step-summary visibility.
 
 This module reimplements nothing from Task 2/3 — it only calls their two
 entry functions in order and formats a combined summary from their
 already-named return-dict fields.
+
+HNT-1 (`planning/session-prompts/21_user_triggered_hunts.md`): scoring
+stopped being automatic. Three invocation shapes now exist, chosen by
+`run()`'s CLI flags: no flags = original behavior (discovery + fan-out
+for every user, kept for compat with an ad-hoc manual dispatch);
+`--discovery-only` = the daily cron, discovery only, zero fan-out/LLM
+spend; `--user <uuid>` = a "Run my hunt" trigger-route dispatch,
+discovery then fan-out for that one user only.
 
 Failure isolation between the two phases (documented per the brief):
 `jobify.hunt.agent`'s own posture is per-SOURCE resilience *inside* a
@@ -49,7 +58,19 @@ logging.basicConfig(
 logger = logging.getLogger("jobify.hosted.worker")
 
 
+_EMPTY_FANOUT_SUMMARY: dict[str, int] = {
+    "users_processed": 0,
+    "users_skipped_invalid": 0,
+    "users_errored": 0,
+    "postings_scored": 0,
+    "matches_written": 0,
+    "stage4_calls": 0,
+    "users_budget_stopped": 0,
+}
+
+
 def _summary_line(
+    mode: str,
     discovery_summary: dict,
     fanout_summary: dict,
     global_spend: float | None = None,
@@ -60,6 +81,10 @@ def _summary_line(
     shapes (`discovery.run_discovery_cycle` / `fanout.run_fanout_cycle`
     docstrings) rather than inventing new bookkeeping here.
 
+    ``mode`` (HNT-1) is one of ``"full"``, ``"discovery_only"``, or
+    ``"user:<uuid>"`` — surfaced up front so a GHA log/ntfy line makes it
+    obvious which of the three invocation shapes actually ran.
+
     ``global_spend`` / ``global_cap`` (H7) are optional — appended as a
     ``pool_spend=$X/$Y`` field when both are provided. Neither summary
     dict carries pool spend, so `_execute()` fetches it fresh at cycle
@@ -67,7 +92,7 @@ def _summary_line(
     `jobify.db` / `jobify.config` itself.
     """
     line = (
-        "done. "
+        f"done. mode={mode} "
         f"discovery: users={discovery_summary.get('users')} "
         f"fetched={discovery_summary.get('fetched')} "
         f"upserted={discovery_summary.get('upserted')} "
@@ -85,16 +110,32 @@ def _summary_line(
     return line
 
 
-def _execute() -> dict:
-    """Run one hosted-worker cycle: discovery, then fan-out, then a
-    combined summary. See the module docstring for the failure-isolation
-    policy between the two phases (discovery is not wrapped — a whole-
-    phase failure propagates and aborts the cycle before fan-out runs).
+def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
+    """Run one hosted-worker cycle: discovery, then (unless
+    ``discovery_only``) fan-out, then a combined summary. See the module
+    docstring for the failure-isolation policy between the two phases
+    (discovery is not wrapped — a whole-phase failure propagates and
+    aborts the cycle before fan-out runs).
+
+    HNT-1: scoring is no longer automatic-for-everyone every cycle.
+    ``discovery_only=True`` (the daily cron) runs discovery and skips
+    fan-out entirely — zero LLM spend, just keeps the shared `postings`
+    pool fresh. ``user_id`` (a user's own "Run my hunt" trigger) still
+    runs discovery first (it's free/idempotent, and the triggering
+    user's own fan-out benefits from a fresh pool) then fans out for
+    ONLY that one user via `fanout.run_fanout_cycle`'s existing
+    ``user_ids`` targeting hook — no fanout.py changes needed. Passing
+    both is contradictory and rejected by `run()`'s argparse before this
+    is ever called.
     """
-    logger.info("hosted worker cycle starting")
+    mode = f"user:{user_id}" if user_id else ("discovery_only" if discovery_only else "full")
+    logger.info("hosted worker cycle starting (mode=%s)", mode)
 
     discovery_summary = discovery.run_discovery_cycle()
-    fanout_summary = fanout.run_fanout_cycle()
+    if discovery_only:
+        fanout_summary = dict(_EMPTY_FANOUT_SUMMARY)
+    else:
+        fanout_summary = fanout.run_fanout_cycle(user_ids=[user_id] if user_id else None)
 
     # Neither summary dict carries pool spend (H6's cap ledger lives in
     # `jobify.db`, not either phase's return value) — fetched fresh here
@@ -102,7 +143,7 @@ def _execute() -> dict:
     global_spend = db.get_global_month_to_date_spend()
     global_cap = config.HOSTED_GLOBAL_MONTHLY_CAP_USD
     summary_line = _summary_line(
-        discovery_summary, fanout_summary, global_spend, global_cap
+        mode, discovery_summary, fanout_summary, global_spend, global_cap
     )
 
     # Logs/print always fire regardless of ntfy's outcome (unset topic,
@@ -127,6 +168,13 @@ def run() -> None:
     own ``run()`` — no internal looping. Daemonise via cron / the GHA
     ``hosted-hunt.yml`` workflow / launchd if you want recurring
     execution.
+
+    HNT-1: three mutually exclusive invocation shapes.
+    ``--discovery-only`` (the daily cron) and ``--user <uuid>`` (a
+    trigger-route dispatch) can't both be set — that's a contradiction
+    in intent, not something to silently resolve one way, so it's a
+    parser error. No flags at all keeps the original behavior (discovery
+    + fan-out for every user) for compat with an ad-hoc manual dispatch.
     """
     parser = argparse.ArgumentParser(
         prog="jobify-hosted-hunt",
@@ -140,8 +188,23 @@ def run() -> None:
              "cron / the GHA workflow can pass it for intent-clarity "
              "without breaking.",
     )
-    parser.parse_args()
-    _execute()
+    parser.add_argument(
+        "--discovery-only",
+        action="store_true",
+        help="Run discovery only, zero fan-out — no LLM spend. Used by "
+             "the daily cron now that scoring is user-triggered (HNT-1).",
+    )
+    parser.add_argument(
+        "--user",
+        metavar="UUID",
+        default=None,
+        help="Run discovery, then fan-out for ONLY this one user. Used "
+             "by the 'Run my hunt' trigger route dispatch (HNT-1).",
+    )
+    args = parser.parse_args()
+    if args.discovery_only and args.user:
+        parser.error("--discovery-only and --user are mutually exclusive")
+    _execute(discovery_only=args.discovery_only, user_id=args.user)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""tests/test_hosted_worker.py — jobify.hosted.worker (H4 Task 4).
+"""tests/test_hosted_worker.py — jobify.hosted.worker (H4 Task 4; HNT-1).
 
 The console-script entry point composes Task 2's `run_discovery_cycle()`
 and Task 3's `run_fanout_cycle()` — this file fakes both (no real
@@ -17,6 +17,9 @@ asserts:
      whole-phase failure).
   4. `run()` (the actual console-script target) parses `--once` and
      drives `_execute()` exactly once.
+  5. HNT-1: `--discovery-only` never calls fan-out; `--user <uuid>`
+     scores exactly that one user; the two flags are mutually
+     exclusive.
 """
 
 from __future__ import annotations
@@ -114,10 +117,94 @@ def test_execute_aborts_cycle_when_discovery_raises(monkeypatch):
 
 
 def test_run_parses_once_flag_and_executes_one_cycle(monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(worker, "_execute", lambda: calls.append("executed") or {})
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        worker, "_execute", lambda **kwargs: calls.append(kwargs) or {}
+    )
     monkeypatch.setattr("sys.argv", ["jobify-hosted-hunt", "--once"])
 
     worker.run()
 
-    assert calls == ["executed"]
+    assert calls == [{"discovery_only": False, "user_id": None}]
+
+
+def test_execute_discovery_only_never_calls_fanout(monkeypatch, capsys):
+    fanout_calls: list[str] = []
+
+    monkeypatch.setattr(
+        worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY)
+    )
+    monkeypatch.setattr(
+        worker.fanout,
+        "run_fanout_cycle",
+        lambda user_ids=None: fanout_calls.append("fanout") or dict(_FANOUT_SUMMARY),
+    )
+    monkeypatch.setattr(worker.db, "get_global_month_to_date_spend", lambda: 0.0)
+    monkeypatch.setattr(worker.config, "HOSTED_GLOBAL_MONTHLY_CAP_USD", 100.0)
+    monkeypatch.setattr(worker, "send_ntfy_summary", lambda line: False)
+
+    result = worker._execute(discovery_only=True)
+
+    assert fanout_calls == []
+    assert result["fanout"]["users_processed"] == 0
+    assert result["fanout"]["matches_written"] == 0
+
+    printed = capsys.readouterr().out
+    assert "mode=discovery_only" in printed
+    assert "processed=0" in printed
+
+
+def test_execute_with_user_id_scores_exactly_one_user(monkeypatch):
+    seen_user_ids: list = []
+
+    monkeypatch.setattr(
+        worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY)
+    )
+
+    def fake_fanout(user_ids=None):
+        seen_user_ids.append(user_ids)
+        return dict(_FANOUT_SUMMARY)
+
+    monkeypatch.setattr(worker.fanout, "run_fanout_cycle", fake_fanout)
+    monkeypatch.setattr(worker.db, "get_global_month_to_date_spend", lambda: 0.0)
+    monkeypatch.setattr(worker.config, "HOSTED_GLOBAL_MONTHLY_CAP_USD", 100.0)
+    monkeypatch.setattr(worker, "send_ntfy_summary", lambda line: False)
+
+    worker._execute(user_id="user-abc")
+
+    assert seen_user_ids == [["user-abc"]]
+
+
+def test_run_parses_discovery_only_flag(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        worker, "_execute", lambda **kwargs: calls.append(kwargs) or {}
+    )
+    monkeypatch.setattr("sys.argv", ["jobify-hosted-hunt", "--discovery-only"])
+
+    worker.run()
+
+    assert calls == [{"discovery_only": True, "user_id": None}]
+
+
+def test_run_parses_user_flag(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        worker, "_execute", lambda **kwargs: calls.append(kwargs) or {}
+    )
+    monkeypatch.setattr("sys.argv", ["jobify-hosted-hunt", "--user", "user-abc"])
+
+    worker.run()
+
+    assert calls == [{"discovery_only": False, "user_id": "user-abc"}]
+
+
+def test_run_rejects_discovery_only_and_user_together(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "sys.argv", ["jobify-hosted-hunt", "--discovery-only", "--user", "user-abc"]
+    )
+
+    with pytest.raises(SystemExit):
+        worker.run()
+
+    assert "mutually exclusive" in capsys.readouterr().err

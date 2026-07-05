@@ -17,9 +17,22 @@ name: hosted-hunt
 # Full required-secrets list lives in docs/OPERATIONS.md — this header
 # only calls out the ones worth a second look; see the inline comments
 # on each `env:` entry below for what's required vs optional.
+#
+# HNT-1 (planning/session-prompts/21_user_triggered_hunts.md): scoring is
+# no longer automatic-for-everyone. The `schedule:` cron below now runs
+# discovery only (`--discovery-only`, zero fan-out/LLM spend) — per-user
+# scoring is triggered on demand by `POST /api/hunt/run` (web), which
+# `workflow_dispatch`es this same workflow with a `user_id` input. A
+# manual `workflow_dispatch` with no `user_id` keeps the original
+# discovery+fan-out-everyone behavior, for admin/ad-hoc use.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      user_id:
+        description: "Score only this user (uuid). Leave blank for a full discovery+fan-out-everyone run."
+        required: false
+        type: string
   schedule:
     # 10:00 UTC = 6am America/New_York during EDT (most of the year,
     # including now). Drifts to 5am America/New_York during EST
@@ -88,4 +101,14 @@ jobs:
           # jobify.config.HOSTED_GLOBAL_MONTHLY_CAP_USD — optional
           # override of the $100 default whole-pool monthly spend cap.
           HOSTED_GLOBAL_MONTHLY_CAP_USD: ${{ secrets.HOSTED_GLOBAL_MONTHLY_CAP_USD }}
-        run: jobify-hosted-hunt --once
+        # schedule (cron) -> discovery only. workflow_dispatch with a
+        # user_id input -> fan out for that one user. workflow_dispatch
+        # with no input -> original discovery+fan-out-everyone behavior.
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            jobify-hosted-hunt --once --discovery-only
+          elif [ -n "${{ github.event.inputs.user_id }}" ]; then
+            jobify-hosted-hunt --once --user "${{ github.event.inputs.user_id }}"
+          else
+            jobify-hosted-hunt --once
+          fi
