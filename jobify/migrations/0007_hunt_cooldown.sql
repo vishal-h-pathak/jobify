@@ -1,0 +1,26 @@
+-- 0007_hunt_cooldown.sql — user-triggered hunts: per-user cooldown (HNT-1).
+--
+-- Additive on top of 0001-0006. Apply after 0006 is already applied.
+-- `ADD COLUMN IF NOT EXISTS` is idempotent, so re-running is safe.
+--
+-- Context (planning/session-prompts/21_user_triggered_hunts.md): scoring
+-- stopped being automatic — each user now scores on demand via a "Run my
+-- hunt" button (`POST /api/hunt/run`, web). last_hunt_requested_at is
+-- stamped by that route, service-role, right after a successful GitHub
+-- Actions dispatch of `hosted-hunt.yml --user <uuid>`, and read back by
+-- the same route on the next request to enforce a cooldown
+-- (`HUNT_COOLDOWN_HOURS`, default 6 — admins bypass it).
+--
+-- Known limitation (accepted for invite-only beta, not fixed here): no
+-- new RLS policy is added, because the existing profiles_update_own
+-- policy (0002_multitenant.sql) already lets an authenticated user UPDATE
+-- their own `profiles` row for any column they send — including this
+-- one. A malicious user could therefore null (or backdate) their own
+-- `last_hunt_requested_at` via a raw authed UPDATE to bypass the
+-- cooldown check the trigger route enforces. This only lets a user
+-- spend their OWN pool budget faster, not anyone else's, so the blast
+-- radius is small; the real fix (column-level privileges, or moving
+-- cooldown state to a separate service-role-only table) is parked, not
+-- implemented, in this migration.
+
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS last_hunt_requested_at TIMESTAMPTZ;

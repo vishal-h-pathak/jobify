@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/Card";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { MintInviteForm } from "./MintInviteForm";
+import { RunHuntForUserButton } from "./RunHuntForUserButton";
 
 // Every field here changes as friends sign up / the worker runs — never
 // statically cache (same reasoning as the settings page).
@@ -88,7 +89,8 @@ export default async function AdminPage() {
                   <th className="pb-2 pr-4 font-medium">Status</th>
                   <th className="pb-2 pr-4 font-medium">Matches</th>
                   <th className="pb-2 pr-4 font-medium">Spend MTD</th>
-                  <th className="pb-2 font-medium">BYO key</th>
+                  <th className="pb-2 pr-4 font-medium">BYO key</th>
+                  <th className="pb-2 font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -103,7 +105,10 @@ export default async function AdminPage() {
                       {user.matchCounts.dismissed} dismissed
                     </td>
                     <td className="py-2 pr-4 text-ink-muted">${user.spendUsdMtd.toFixed(2)}</td>
-                    <td className="py-2 text-ink-muted">{user.hasByoKey ? "Yes" : "No"}</td>
+                    <td className="py-2 pr-4 text-ink-muted">{user.hasByoKey ? "Yes" : "No"}</td>
+                    <td className="py-2">
+                      <RunHuntForUserButton userId={user.userId} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -131,7 +136,8 @@ export default async function AdminPage() {
           BYO spend this month: ${poolHealth.byoSpendUsdMtd.toFixed(2)} — doesn&apos;t count against the pool cap.
         </p>
         <p className="text-xs text-ink-muted">
-          No trigger-hunt button here yet — hunts run daily on cron; triggering one from the UI needs a GitHub token.
+          Discovery runs daily on cron; per-user scoring is triggered on demand — use a row's "Run hunt" button
+          above, or wait for a friend to hit "Run my hunt" on their own feed.
         </p>
       </Card>
     </div>

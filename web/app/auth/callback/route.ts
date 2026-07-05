@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import type { Database } from "@/lib/supabase/types";
 import { hasClaimedInvite } from "@/lib/db/invites";
+import { isAdmin } from "@/lib/admin/isAdmin";
 
 /**
  * The redirect `NextResponse` is built up front so cookies attach
@@ -46,15 +47,16 @@ export async function GET(request: NextRequest) {
     }
   );
 
-  const { error } = await supabase.auth.exchangeCodeForSession(code);
+  const { data, error } = await supabase.auth.exchangeCodeForSession(code);
   if (error) {
     return NextResponse.redirect(`${origin}/login?error=auth-failed`);
   }
 
-  // No explicit (or unsafe) next: land claimed users on /feed, everyone
-  // else on /invite, instead of always guessing /invite.
+  // No explicit (or unsafe) next: admins land on /admin (they may never
+  // hold a claimed invite of their own — see lib/admin/requireAdmin.ts);
+  // everyone else lands on /feed if claimed, /invite otherwise.
   if (!safeNext) {
-    const target = (await hasClaimedInvite(supabase)) ? "/feed" : "/invite";
+    const target = isAdmin(data.user) ? "/admin" : (await hasClaimedInvite(supabase)) ? "/feed" : "/invite";
     response.headers.set("location", `${origin}${target}`);
   }
 

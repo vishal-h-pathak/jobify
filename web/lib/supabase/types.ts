@@ -19,6 +19,7 @@ export interface Database {
           doc: Record<string, string>;
           compiled_rubric: Record<string, unknown> | null;
           validation_status: { status: string; errors: string[] } | null;
+          last_hunt_requested_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -30,6 +31,7 @@ export interface Database {
         Update: {
           doc?: Record<string, string>;
           validation_status?: { status: string; errors: string[] } | null;
+          last_hunt_requested_at?: string | null;
           updated_at?: string;
         };
         Relationships: [];

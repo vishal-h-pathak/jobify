@@ -10,6 +10,9 @@ vi.mock("@supabase/ssr", () => ({ createServerClient: createServerClientMock }))
 const hasClaimedInviteMock = vi.fn();
 vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
 
+const isAdminMock = vi.fn();
+vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
+
 process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
 
@@ -22,7 +25,10 @@ function req(pathAndQuery: string) {
 describe("GET /auth/callback", () => {
   beforeEach(() => {
     exchangeCodeForSessionMock.mockReset();
+    exchangeCodeForSessionMock.mockResolvedValue({ data: { user: { id: "user-1" } }, error: null });
     hasClaimedInviteMock.mockReset();
+    isAdminMock.mockReset();
+    isAdminMock.mockReturnValue(false);
     createServerClientMock.mockClear();
   });
 
@@ -33,13 +39,12 @@ describe("GET /auth/callback", () => {
   });
 
   it("redirects to /login with an error when the code exchange fails", async () => {
-    exchangeCodeForSessionMock.mockResolvedValue({ error: new Error("bad code") });
+    exchangeCodeForSessionMock.mockResolvedValue({ data: { user: null }, error: new Error("bad code") });
     const res = await GET(req("/auth/callback?code=abc"));
     expect(res.headers.get("location")).toBe("https://jobify.example/login?error=auth-failed");
   });
 
   it("carries a same-origin next with its own querystring through untouched — code preserved", async () => {
-    exchangeCodeForSessionMock.mockResolvedValue({ error: null });
     const next = encodeURIComponent("/invite?code=ABC-123");
     const res = await GET(req(`/auth/callback?code=abc&next=${next}`));
     expect(res.headers.get("location")).toBe("https://jobify.example/invite?code=ABC-123");
@@ -47,7 +52,6 @@ describe("GET /auth/callback", () => {
   });
 
   it("rejects a protocol-relative next (//evil.com) and falls back to the claim-based default", async () => {
-    exchangeCodeForSessionMock.mockResolvedValue({ error: null });
     hasClaimedInviteMock.mockResolvedValue(false);
     const next = encodeURIComponent("//evil.com");
     const res = await GET(req(`/auth/callback?code=abc&next=${next}`));
@@ -55,7 +59,6 @@ describe("GET /auth/callback", () => {
   });
 
   it("rejects an absolute next (https://evil.com) and falls back to the claim-based default", async () => {
-    exchangeCodeForSessionMock.mockResolvedValue({ error: null });
     hasClaimedInviteMock.mockResolvedValue(true);
     const next = encodeURIComponent("https://evil.com");
     const res = await GET(req(`/auth/callback?code=abc&next=${next}`));
@@ -63,16 +66,28 @@ describe("GET /auth/callback", () => {
   });
 
   it("defaults to /invite when there is no next and no claimed invite", async () => {
-    exchangeCodeForSessionMock.mockResolvedValue({ error: null });
     hasClaimedInviteMock.mockResolvedValue(false);
     const res = await GET(req("/auth/callback?code=abc"));
     expect(res.headers.get("location")).toBe("https://jobify.example/invite");
   });
 
   it("defaults to /feed when there is no next and the invite is already claimed", async () => {
-    exchangeCodeForSessionMock.mockResolvedValue({ error: null });
     hasClaimedInviteMock.mockResolvedValue(true);
     const res = await GET(req("/auth/callback?code=abc"));
+    expect(res.headers.get("location")).toBe("https://jobify.example/feed");
+  });
+
+  it("defaults admins to /admin when there is no next, without even checking hasClaimedInvite", async () => {
+    isAdminMock.mockReturnValue(true);
+    const res = await GET(req("/auth/callback?code=abc"));
+    expect(res.headers.get("location")).toBe("https://jobify.example/admin");
+    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
+  });
+
+  it("an admin's own explicit safe next still wins over the /admin default", async () => {
+    isAdminMock.mockReturnValue(true);
+    const next = encodeURIComponent("/feed");
+    const res = await GET(req(`/auth/callback?code=abc&next=${next}`));
     expect(res.headers.get("location")).toBe("https://jobify.example/feed");
   });
 });

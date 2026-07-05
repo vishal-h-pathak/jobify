@@ -47,6 +47,9 @@ gracefully (documented per-row), it never crashes.
 | `SERPAPI_KEY`, `JSEARCH_API_KEY` | optional | — | optional | Paid discovery sources, unioned across every hosted user. |
 | `ONBOARDING_CLAUDE_MODEL` | — | optional (default `claude-sonnet-5`) | optional | Onboarding chat's model override. |
 | `ADMIN_EMAILS` | — | optional | optional | Comma-separated emails (case-insensitive, trimmed) that can reach `/admin`. Unset = nobody is admin. See §6. |
+| `GITHUB_DISPATCH_TOKEN` | — | required (for user-triggered hunts) | optional | Fine-grained GitHub PAT, Actions read/write on the repo. `POST /api/hunt/run` (web) uses it to dispatch `hosted-hunt.yml`. Never a repo secret literal — env var only, server-only, never sent to the browser. Unset = the trigger route 503s (logged) rather than crashing. |
+| `GITHUB_REPO` | — | required (for user-triggered hunts) | optional | `owner/repo` slug of this repo. Env var, NOT hardcoded — the opensource scrub gate forbids the real slug appearing as a literal in code. |
+| `HUNT_COOLDOWN_HOURS` | — | optional (default `6`) | optional | Minimum hours between one user's own hunt triggers. Admins bypass it entirely (their own and anyone else's, via the admin panel's per-row button). See §7. |
 
 Setting GHA secrets (values piped, never pasted into argv or echoed):
 
@@ -167,14 +170,17 @@ where validation_status->>'status' = 'invalid';
    means either a typo, an already-claimed code, or (rarely) RLS drift —
    check `invites_claim_unclaimed`'s policy is still in place via `select *
    from pg_policies where tablename = 'invites'`.
-4. **Onboarding chat won't finish / feed is empty after a day** — check
-   `profiles.validation_status` (§4's snippet). `'invalid'` means the
-   fan-out worker is skipping that user every cycle; the feed's own
+4. **Onboarding chat won't finish / feed stays empty after they've hit "Run
+   my hunt"** — check `profiles.validation_status` (§4's snippet).
+   `'invalid'` means fan-out skips that user every run; the feed's own
    profile-health banner should already be telling them what's wrong.
-5. **Feed never populates even with a valid profile** — confirm the cron
-   actually ran (`gh run list --workflow=hosted-hunt.yml`) and check the
-   cycle's ntfy summary / GHA logs for `users_skipped_invalid` /
-   `users_errored` / `users_budget_stopped` counts against that user.
+5. **Feed never populates even after clicking "Run my hunt"** — scoring is
+   user-triggered now (HNT-1, §7), not automatic — confirm the dispatched
+   run actually ran (`gh run list --workflow=hosted-hunt.yml`) and check
+   the cycle's ntfy summary / GHA logs for `users_skipped_invalid` /
+   `users_errored` / `users_budget_stopped` counts against that user. A
+   429 in the browser means they're still in cooldown (§7) — check
+   `profiles.last_hunt_requested_at` for that user.
 6. **BYO key not working** — a decrypt failure degrades silently to the
    pool path (by design, see §3); check `budget_ledger` for that user's
    recent rows — `byo = false` rows appearing where the user expects `byo =
@@ -216,7 +222,56 @@ the UI day-to-day; the CLI (§2) still works identically and is the only
 option if you'd rather not sign in as an admin (e.g. scripting a bulk
 mint).
 
-**Pool health has no trigger-hunt button in v1** — running a hunt cycle
-on demand needs a GitHub token to dispatch the `hosted-hunt.yml` workflow,
-which the web app doesn't hold. Hunts run daily on cron regardless; use
-`gh workflow run hosted-hunt.yml` if you need one to fire early.
+**Users card has a per-row "Run hunt" button (HNT-1).** Dispatches
+`hosted-hunt.yml --user <uuid>` for that one row via the same
+`POST /api/hunt/run` route the feed's own button uses, with the admin
+cooldown bypass applied. See §7 for the full user-triggered-hunts model.
+
+---
+
+## 7. User-triggered hunts (HNT-1)
+
+Scoring stopped being automatic-for-everyone. `hosted-hunt.yml`'s daily
+cron now runs **discovery only** (`jobify-hosted-hunt --discovery-only`)
+— free, keeps the shared `postings` pool fresh, zero LLM spend. Each user
+scores on demand instead, via a "Run my hunt" button on their own feed
+(and an equivalent per-row button in the admin Users card, §6).
+
+**How a click becomes a scored feed:**
+
+1. Feed button → `POST /api/hunt/run` (optionally `{ userId }`, honored
+   only for admins).
+2. The route gates (signed in → invite-or-admin → target user's profile
+   exists and isn't `invalid`), then checks the cooldown (skipped for
+   admins), then calls the GitHub Actions REST API:
+   `POST /repos/${GITHUB_REPO}/actions/workflows/hosted-hunt.yml/dispatches`
+   with `{ ref: "main", inputs: { user_id } }`, authenticated as
+   `GITHUB_DISPATCH_TOKEN`.
+3. On a `204` the route stamps `profiles.last_hunt_requested_at` (service
+   role) and returns `{ ok: true, cooldown_until }`.
+4. GitHub Actions runs `jobify-hosted-hunt --user <uuid>` — discovery
+   (free, keeps the pool fresh) then fan-out for that one user only
+   (`jobify.hosted.fanout.run_fanout_cycle(user_ids=[uuid])`).
+5. The feed page polls (`router.refresh()` every 20s for 5 minutes) so
+   new matches show up without a manual reload.
+
+**Cooldown.** `HUNT_COOLDOWN_HOURS` (default `6`) gates how often a
+non-admin can trigger their own hunt — a 429 with `cooldown_until` is
+returned while still in the window. Admins bypass it entirely, for both
+their own hunt and any row's button in the admin panel.
+
+**Known limitation, accepted for invite-only beta (see
+`0007_hunt_cooldown.sql`'s header):** the existing `profiles_update_own`
+RLS policy already lets an authenticated user UPDATE their own
+`profiles` row for any column, including `last_hunt_requested_at`. A
+malicious user could null or backdate it via a raw authed UPDATE to
+bypass their own cooldown — but that only lets them spend their own pool
+budget faster, not anyone else's. The real fix (column-level privileges,
+or moving cooldown state to a separate service-role-only table) is
+parked, not implemented.
+
+**Manual/ad-hoc runs.** A `workflow_dispatch` with no `user_id` input
+(`gh workflow run hosted-hunt.yml`) still runs the original
+discovery-then-fan-out-everyone cycle, unchanged — useful for an
+operator who wants to force a full re-score outside the per-user trigger
+path.
