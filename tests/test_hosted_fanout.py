@@ -349,14 +349,17 @@ def test_upsert_match_calls_never_touch_state_columns(tmp_path, monkeypatch):
 
 
 class _FakeVoyageClient:
-    def __init__(self, vectors: dict[str, list[float]]):
+    def __init__(self, vectors: dict[str, list[float]], total_tokens: int = 10):
         self._vectors = vectors
+        self._total_tokens = total_tokens
 
     def embed(self, texts, model, input_type, output_dimension):
+        total_tokens = self._total_tokens
+
         class _Result:
             def __init__(self, embeddings):
                 self.embeddings = embeddings
-                self.total_tokens = 10
+                self.total_tokens = total_tokens
 
         out = []
         for t in texts:
@@ -469,13 +472,13 @@ def _setup_embedding_recompute_test(tmp_path, monkeypatch, d: Path):
     profile_store: dict[str, list[float]] = {}
     force_calls: list[bool] = []
 
-    def _fake_ensure_profile_embedding(user_id, text, *, force=False):
+    def _fake_ensure_profile_embedding(user_id, text, *, force=False, counters=None):
         force_calls.append(force)
         profile_store[user_id] = [1.0, 0.0]
         return True  # always "recomputed" when called, so `force_calls` isolates our own decision
     monkeypatch.setattr(embed, "ensure_profile_embedding", _fake_ensure_profile_embedding)
     monkeypatch.setattr(db, "get_profile_embedding", lambda uid: profile_store.get(uid))
-    monkeypatch.setattr(embed, "ensure_posting_embedding", lambda pid, text: True)
+    monkeypatch.setattr(embed, "ensure_posting_embedding", lambda pid, text, counters=None: True)
     monkeypatch.setattr(db, "get_posting_embedding", lambda pid: [1.0, 0.0])
     monkeypatch.setattr(db, "set_posting_embedding", lambda pid, vec: None)
 
@@ -963,3 +966,74 @@ def test_cost_usd_accumulates_rubric_compile_and_stage4_verdict(tmp_path, monkey
     assert len(ledger_costs) == 2  # rubric_compile + llm_verdict
     assert all(c > 0 for c in ledger_costs)
     assert counters["cost_usd"] == pytest.approx(sum(ledger_costs))
+
+
+def test_cost_usd_includes_embedding_spend(tmp_path, monkeypatch):
+    """`counters['cost_usd']` must also include stage-3 embedding ledger
+    cost (profile + posting embeds), not just rubric-compile/stage-4 cost —
+    the ADM-2 final-review bug this test guards against: `embed.py`'s two
+    `ensure_*_embedding` functions write their own `budget_ledger` rows but
+    previously had no way to feed that cost back into the cycle's
+    `counters` dict."""
+    d = _profile_dir(
+        tmp_path, "user-a", thesis="PROFILE_MARKER thesis text",
+        disqualifiers_yaml="hard_disqualifiers: []\n",
+    )
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: None)  # force a rubric compile
+    monkeypatch.setattr(db, "set_compiled_rubric", lambda uid, rubric: None)
+    monkeypatch.setattr(
+        db, "get_unmatched_postings",
+        lambda uid: [_posting("p-1", description="engineer ALIGNED_MARKER")],
+    )
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+
+    ledger_costs: list[float] = []
+    ledger_events: list[str] = []
+    monkeypatch.setattr(
+        db, "insert_budget_ledger_row",
+        lambda uid, event, **kw: (ledger_costs.append(kw["cost_usd"]), ledger_events.append(event)),
+    )
+
+    valid_rubric = _rubric(term="engineer")
+
+    def _fake_complete(*, system, prompt, model, max_tokens):
+        if model.startswith("claude-sonnet"):
+            return (json.dumps(valid_rubric), CompletionUsage(input_tokens=50, output_tokens=30))
+        return ('{"score": 0.5, "reason": "ok"}', CompletionUsage(input_tokens=10, output_tokens=5))
+
+    monkeypatch.setattr(llm, "complete_with_usage", _fake_complete)
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: None)
+
+    monkeypatch.setattr(embed, "embeddings_enabled", lambda: True)
+    fake_client = _FakeVoyageClient(
+        {"PROFILE_MARKER": [1.0, 0.0], "ALIGNED_MARKER": [1.0, 0.0]},
+        total_tokens=100_000,  # large enough that the embedding cost is unambiguously non-zero
+    )
+    monkeypatch.setattr(embed, "_get_client", lambda: fake_client)
+    monkeypatch.setattr(embed, "_client", None)
+
+    profile_store: dict[str, list[float]] = {}
+    posting_store: dict[str, list[float]] = {}
+    monkeypatch.setattr(db, "get_profile_embedding", lambda uid: profile_store.get(uid))
+    monkeypatch.setattr(db, "set_profile_embedding", lambda uid, vec: profile_store.__setitem__(uid, vec))
+    monkeypatch.setattr(db, "get_posting_embedding", lambda pid: posting_store.get(pid))
+    monkeypatch.setattr(db, "set_posting_embedding", lambda pid, vec: posting_store.__setitem__(pid, vec))
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    # One rubric_compile, two embedding events (profile + posting), one llm_verdict.
+    assert ledger_events.count("rubric_compile") == 1
+    assert ledger_events.count("embedding") == 2
+    assert ledger_events.count("llm_verdict") == 1
+
+    embedding_cost = sum(c for c, e in zip(ledger_costs, ledger_events) if e == "embedding")
+    non_embedding_cost = sum(c for c, e in zip(ledger_costs, ledger_events) if e != "embedding")
+    assert embedding_cost > 0
+    assert counters["cost_usd"] == pytest.approx(sum(ledger_costs))
+    assert counters["cost_usd"] == pytest.approx(embedding_cost + non_embedding_cost)
+    # The bug this test exists to catch: cost_usd must be MORE than just
+    # rubric-compile + stage-4 verdict cost.
+    assert counters["cost_usd"] > non_embedding_cost

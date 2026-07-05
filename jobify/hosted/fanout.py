@@ -394,6 +394,7 @@ def _profile_embed_text(profile_dir: Path) -> str:
 
 def _stage3_embed_rerank(
     user_id: str, profile_dir: Path, survivors: list[tuple[dict, RubricResult]],
+    counters: dict,
 ) -> dict[str, float]:
     """Cosine-rerank stage-2 survivors against the user's profile
     embedding. Returns `{posting_id: embed_score}`; a posting id missing
@@ -401,6 +402,14 @@ def _stage3_embed_rerank(
     or one of the two vectors came back `None`) — `embed_score` stays
     NULL for it and the ladder proceeds 1 -> 2 -> 4 unaffected, per the
     brief's degradation contract.
+
+    `counters`: the cycle's fan-out counters dict — always a real,
+    cycle-level dict (every caller is `_run_user_ladder`, which always has
+    one), unlike `_ensure_rubric`/`_stage4_verdict`'s optional `counters`
+    param. Threaded through to both `embed.ensure_profile_embedding` and
+    `embed.ensure_posting_embedding` so their embedding ledger costs (ADM-2
+    final-review fix) land in `counters["cost_usd"]` too, not just
+    rubric-compile/stage-4 cost.
     """
     if not embed.embeddings_enabled():
         return {}
@@ -409,7 +418,7 @@ def _stage3_embed_rerank(
     force = _embedding_is_stale(profile_dir, updated_at)
     try:
         recomputed = embed.ensure_profile_embedding(
-            user_id, _profile_embed_text(profile_dir), force=force,
+            user_id, _profile_embed_text(profile_dir), force=force, counters=counters,
         )
         profile_vec = db.get_profile_embedding(user_id)
     except Exception as exc:  # noqa: BLE001 — stage 3 is best-effort, never fatal to the ladder
@@ -424,7 +433,9 @@ def _stage3_embed_rerank(
     for posting, _result in survivors:
         posting_id = posting["id"]
         try:
-            embed.ensure_posting_embedding(posting_id, _posting_embed_text(posting))
+            embed.ensure_posting_embedding(
+                posting_id, _posting_embed_text(posting), counters=counters,
+            )
             posting_vec = db.get_posting_embedding(posting_id)
         except Exception as exc:  # noqa: BLE001 — one posting's embed failure must not drop the rest
             logger.error(
@@ -568,7 +579,7 @@ def _run_user_ladder(
 
     # ── Stage 3: embedding rerank (skips cleanly when disabled). ────────
     embed_scores = (
-        _stage3_embed_rerank(user_id, profile_dir, stage2_survivors)
+        _stage3_embed_rerank(user_id, profile_dir, stage2_survivors, counters)
         if stage2_survivors else {}
     )
     counters["embedded"] += len(embed_scores)
@@ -685,7 +696,8 @@ def run_fanout_cycle(user_ids: Optional[list[str]] = None) -> dict[str, int]:
     `postings_considered`, `passed_title_filter`, `embedded` (per-user
     counts of stage 1 input / stage 1 survivors / stage 3 scores, summed
     across the cycle), and `cost_usd` (running total of every ledger
-    write this cycle, from `_ensure_rubric` + `_stage4_verdict`).
+    write this cycle, from `_ensure_rubric`, `_stage4_verdict`, and
+    `_stage3_embed_rerank`'s embedding calls).
     """
     ids = user_ids if user_ids is not None else db.list_profile_user_ids()
 

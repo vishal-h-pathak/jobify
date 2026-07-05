@@ -308,8 +308,9 @@ The five performance panels:
   Voyage). See [`docs/COST_RAILS.md`](COST_RAILS.md) for cost mechanics.
 - **Engagement** — matches by state (new/seen/saved/dismissed/applied) and
   the save:dismiss ratio, plus per-user applied match counts.
-- **Pool freshness** — current postings volume in the shared pool and
-  staleness (how many days old the oldest row is).
+- **Pool freshness** — current postings volume in the shared pool, the
+  newest and oldest `last_seen_at` timestamps, and how many postings are
+  marked expired.
 
 For the scoring mechanics and cost-estimation formulas that underpin
 these numbers, see [`docs/SCORING.md`](SCORING.md) and
