@@ -174,7 +174,18 @@ def _validate_materialized(cache_dir: Path, user_id: str) -> None:
     status = VALIDATION_STATUS_VALID
     try:
         from onboarding.validate_profile import validate_profile_dir
-    except ImportError:  # pragma: no cover - onboarding not on the path
+    except ImportError:
+        # NEVER silent: this exact silent-return hid the fact that the
+        # deployed worker ran with the validation gate OFF (found 2026-07-04
+        # — `onboarding/` isn't an installed package; console scripts don't
+        # put the CWD on sys.path). The workflow sets PYTHONPATH to the
+        # checkout; if this still fires, that wiring broke.
+        logger.error(
+            "onboarding.validate_profile not importable — validation gate is "
+            "DISABLED for user_id=%s this run (set PYTHONPATH to the repo "
+            "checkout; see conftest.py header)",
+            user_id,
+        )
         return
     report = validate_profile_dir(cache_dir)
     if not report.passed:
