@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 
 export function KeyForm({ initialKeyLast4 }: { initialKeyLast4: string | null }) {
   const [keyLast4, setKeyLast4] = useState(initialKeyLast4);
@@ -52,18 +54,14 @@ export function KeyForm({ initialKeyLast4 }: { initialKeyLast4: string | null })
     return (
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-sm">
-            Key on file: <span className="font-mono">...{keyLast4}</span>
+          <p className="text-sm text-ink">
+            Key on file: <span className="font-mono">…{keyLast4}</span>
           </p>
-          <button
-            onClick={remove}
-            disabled={saving}
-            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
-          >
-            {saving ? "Removing…" : "Remove"}
-          </button>
+          <Button variant="danger-ghost" onClick={remove} busy={saving}>
+            Remove
+          </Button>
         </div>
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-danger">{error}</p>}
       </div>
     );
   }
@@ -71,22 +69,18 @@ export function KeyForm({ initialKeyLast4 }: { initialKeyLast4: string | null })
   return (
     <div className="flex flex-col gap-2">
       <div className="flex gap-2">
-        <input
+        <Input
           type="password"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="sk-ant-..."
-          className="flex-1 rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          className="flex-1"
         />
-        <button
-          onClick={save}
-          disabled={saving || !input.trim()}
-          className="rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background transition-colors hover:opacity-90 disabled:opacity-50"
-        >
-          {saving ? "Saving…" : "Save"}
-        </button>
+        <Button variant="primary" onClick={save} busy={saving} disabled={!input.trim()}>
+          Save
+        </Button>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
     </div>
   );
 }

@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0b0e14;
+  --foreground: #e6e9f0;
 }
 
 @theme inline {
@@ -10,17 +10,45 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  /* jobify design tokens (UX-1) — one fixed dark theme, warm amber accent. */
+  --color-base: #0b0e14;
+  --color-surface: #131722;
+  --color-line: #232937;
+  --color-ink: #e6e9f0;
+  --color-ink-muted: #8a93a6;
+  --color-amber: #f5a97f;
+  --color-amber-hover: #e8956a;
+  --color-success: #7fbf7f;
+  --color-danger: #d97a7a;
+  --color-badge-blue: #7a9bd9;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+::selection {
+  background: var(--color-amber);
+  color: var(--color-base);
+}
+
+a,
+button,
+input,
+textarea,
+select,
+[role="button"] {
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-amber) 40%, transparent);
 }

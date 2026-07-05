@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { MatchCard } from "@/components/feed/MatchCard";
 import { ProfileHealthBanner } from "@/components/feed/ProfileHealthBanner";
+import { EmptyState } from "@/components/ui/EmptyState";
 import {
   groupMatches,
   markSeenBulk,
@@ -77,24 +78,25 @@ export default async function FeedPage() {
         <ProfileHealthBanner errors={profile.validation_status.errors} />
       )}
 
-      <h1 className="text-2xl font-semibold tracking-tight">Your feed</h1>
+      <h1 className="text-2xl font-semibold tracking-tight text-ink">Your feed</h1>
 
       {totalMatches === 0 && (
-        <p className="text-zinc-600 dark:text-zinc-400">
-          Nothing yet — your profile is built and waiting on its first cycle. The hunter runs daily, so check back
-          tomorrow.
-        </p>
+        <EmptyState
+          heading="Nothing yet"
+          message="Your profile is built and waiting on its first cycle. The hunter runs daily, so check back tomorrow."
+        />
       )}
 
       {onlyDismissedLeft && (
-        <p className="text-zinc-600 dark:text-zinc-400">
-          You&apos;ve cleared everything for now — new postings show up here as tomorrow&apos;s run comes in.
-        </p>
+        <EmptyState
+          heading="You're all caught up"
+          message="You've cleared everything for now — new postings show up here as tomorrow's run comes in."
+        />
       )}
 
       {newSorted.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">New</h2>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">New ({newSorted.length})</h2>
           {newSorted.map((m) => (
             <MatchCard key={m.posting_id} match={m} />
           ))}
@@ -103,7 +105,9 @@ export default async function FeedPage() {
 
       {savedSorted.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Saved</h2>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">
+            Saved ({savedSorted.length})
+          </h2>
           {savedSorted.map((m) => (
             <MatchCard key={m.posting_id} match={m} />
           ))}
@@ -112,7 +116,9 @@ export default async function FeedPage() {
 
       {appliedSorted.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Applied</h2>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">
+            Applied ({appliedSorted.length})
+          </h2>
           {appliedSorted.map((m) => (
             <MatchCard key={m.posting_id} match={m} />
           ))}
@@ -120,8 +126,8 @@ export default async function FeedPage() {
       )}
 
       {dismissedSorted.length > 0 && (
-        <details className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
-          <summary className="cursor-pointer text-sm font-medium text-zinc-500">
+        <details className="rounded-lg border border-line bg-surface p-3">
+          <summary className="cursor-pointer text-sm font-medium text-ink-muted">
             Dismissed ({dismissedSorted.length})
           </summary>
           <div className="mt-3 flex flex-col gap-3">
