@@ -32,6 +32,7 @@ export async function POST(request: Request) {
   const session = await getOrCreateSession(supabase, user.id);
   const result = await handleOnboardingTurn({
     userId: user.id,
+    userEmail: user.email ?? "",
     userMessage: message,
     session: {
       stage: session.stage,

@@ -61,10 +61,13 @@ describe("POST /api/onboarding/turn", () => {
   });
 
   it("succeeds with a claimed invite", async () => {
-    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "user-1@example.com" } } });
     hasClaimedInviteMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ message: "hello" }));
     expect(res.status).toBe(200);
+    expect(handleOnboardingTurnMock).toHaveBeenCalledWith(
+      expect.objectContaining({ userEmail: "user-1@example.com" })
+    );
   });
 
   it("an admin without a claimed invite still succeeds — bypasses the gate", async () => {

@@ -43,6 +43,7 @@ describe("handleOnboardingTurn", () => {
 
     await handleOnboardingTurn({
       userId: "user-1",
+      userEmail: "user-1@example.com",
       userMessage: "here is my resume",
       session: baseSession(),
       supabase: fakeClient,
@@ -66,6 +67,7 @@ describe("handleOnboardingTurn", () => {
 
     const result = await handleOnboardingTurn({
       userId: "user-1",
+      userEmail: "user-1@example.com",
       userMessage: "Alex, alex@example.com",
       session: baseSession({ stage: "identity" }),
       supabase: fakeClient,
@@ -83,6 +85,40 @@ describe("handleOnboardingTurn", () => {
     );
   });
 
+  it("overwrites a model-supplied (bogus) record_identity email with deps.userEmail, unconditionally", async () => {
+    const runTurn = vi.fn(async (_history: ChatMessage[]) => ({
+      assistantText: "Got it — what's your target comp?",
+      toolCalls: [
+        { name: "record_identity", input: { name: "Alex", email: "totally-made-up@nowhere.invalid" } },
+      ],
+      usage: { inputTokens: 10, outputTokens: 10 },
+    }));
+
+    await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "real-auth-email@example.com",
+      userMessage: "Alex, totally-made-up@nowhere.invalid",
+      session: baseSession({ stage: "identity" }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    // The tool call the (mocked) model returned genuinely included a bogus
+    // email — assert on the history/tool-call itself so this test can't
+    // pass by accident (e.g. if applyToolCalls were changed to drop email).
+    const historyArg = runTurn.mock.calls[0][0];
+    expect(historyArg.at(-1)).toEqual({ role: "user", content: "Alex, totally-made-up@nowhere.invalid" });
+
+    // The persisted extracted.identity.email must be the auth email, never
+    // the model-supplied one, even though the model DID supply a value.
+    const savedArg = saveSessionMock.mock.calls[0][2] as {
+      extracted: { identity?: { email?: string } };
+    };
+    expect(savedArg.extracted.identity?.email).toBe("real-auth-email@example.com");
+    expect(savedArg.extracted.identity?.email).not.toBe("totally-made-up@nowhere.invalid");
+  });
+
   it("builds and upserts the profile doc when finish_interview fires, and marks the session complete", async () => {
     const runTurn = vi.fn(async () => ({
       assistantText: "All set!",
@@ -92,6 +128,7 @@ describe("handleOnboardingTurn", () => {
 
     const result = await handleOnboardingTurn({
       userId: "user-1",
+      userEmail: "user-1@example.com",
       userMessage: "yes that's everything",
       session: baseSession({
         stage: "targeting",
@@ -127,6 +164,7 @@ describe("handleOnboardingTurn", () => {
 
     await handleOnboardingTurn({
       userId: "user-1",
+      userEmail: "user-1@example.com",
       userMessage: "I do backend engineering, I'd love more systems design work",
       session: baseSession({ messages: [] }),
       supabase: fakeClient,
@@ -170,6 +208,7 @@ describe("handleOnboardingTurn", () => {
 
     await handleOnboardingTurn({
       userId: "user-1",
+      userEmail: "user-1@example.com",
       userMessage: "here is more detail",
       session: baseSession({
         messages: [
@@ -194,6 +233,7 @@ describe("handleOnboardingTurn", () => {
 
     const result = await handleOnboardingTurn({
       userId: "user-1",
+      userEmail: "user-1@example.com",
       userMessage: "hi again",
       session: baseSession({ status: "complete", stage: "done" }),
       supabase: fakeClient,

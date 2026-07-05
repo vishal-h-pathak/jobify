@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { INTERVIEW_SYSTEM_PROMPT, SEEDED_GREETING } from "./interview";
+import { INTERVIEW_SYSTEM_PROMPT, INTERVIEW_TOOLS, SEEDED_GREETING } from "./interview";
 
 describe("SEEDED_GREETING", () => {
   it("is the exact resume-first opening line Task 2's UI renders verbatim", () => {
@@ -117,6 +117,19 @@ describe("INTERVIEW_SYSTEM_PROMPT — stage 3: exactly five pointed targeting qu
     expect(INTERVIEW_SYSTEM_PROMPT).toContain("skippable, no follow-up if skipped");
     expect(INTERVIEW_SYSTEM_PROMPT).toContain("Any specific companies you'd want on the watchlist? Fine to skip.");
     expect(INTERVIEW_SYSTEM_PROMPT).toContain("feeds dream_companies");
+  });
+});
+
+describe("record_identity tool schema — email comes from auth, not the model", () => {
+  it("does not require email — only name is required, so the model isn't forced to invent one", () => {
+    const recordIdentity = INTERVIEW_TOOLS.find((t) => t.name === "record_identity");
+    expect(recordIdentity?.input_schema.required).toEqual(["name"]);
+  });
+
+  it("still allows email as an optional property — harmless if the model includes one, since handleTurn.ts overwrites it with the authenticated user's email regardless", () => {
+    const recordIdentity = INTERVIEW_TOOLS.find((t) => t.name === "record_identity");
+    const properties = recordIdentity?.input_schema.properties as Record<string, unknown> | undefined;
+    expect(properties).toHaveProperty("email");
   });
 });
 

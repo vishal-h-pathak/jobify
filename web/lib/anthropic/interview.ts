@@ -156,7 +156,7 @@ export const INTERVIEW_TOOLS: Anthropic.Tool[] = [
           },
         },
       },
-      required: ["name", "email"],
+      required: ["name"],
     },
   },
   {
