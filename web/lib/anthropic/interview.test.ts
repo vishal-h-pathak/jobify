@@ -37,7 +37,7 @@ describe("INTERVIEW_SYSTEM_PROMPT", () => {
     expect(INTERVIEW_SYSTEM_PROMPT.toLowerCase()).toMatch(/one topic per turn/);
   });
 
-  it("instructs the wrap-up text to mention the feed filling on the next hunt cycle", () => {
-    expect(INTERVIEW_SYSTEM_PROMPT).toContain("Your feed starts filling on the next hunt cycle");
+  it("instructs the wrap-up text to point the user at the feed's Run my hunt button (HNT-1: scoring is user-triggered, not daily cron)", () => {
+    expect(INTERVIEW_SYSTEM_PROMPT).toContain('Head to your feed and hit "Run my hunt"');
   });
 });

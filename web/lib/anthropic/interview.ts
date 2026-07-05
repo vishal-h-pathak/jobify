@@ -79,7 +79,7 @@ Synthesize a one-paragraph judgment thesis from everything they've told you acro
 conversation — including the interests/energy signals from the OPENING stage — into thesis_summary. \
 Once confirmed, call record_targeting, then call finish_interview. In the same turn as \
 finish_interview, write a short plain-words summary of the profile you just built, followed by \
-exactly this sentence: "Your feed starts filling on the next hunt cycle — usually within a day."
+exactly this sentence: "Head to your feed and hit \"Run my hunt\" to get your first results."
 
 Always include a short conversational reply for the user in the SAME turn as any tool call — never a \
 tool call with no visible text. Keep messages concise; this is a chat, not a form. Degrade gracefully \

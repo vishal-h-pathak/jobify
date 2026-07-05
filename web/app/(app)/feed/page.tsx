@@ -11,6 +11,7 @@ import {
   type MatchWithPosting,
   type PostingRow,
 } from "@/lib/db/matches";
+import { RunHuntButton } from "./RunHuntButton";
 
 // Per-user live read, not cacheable — mirrors the (app) layout's own
 // `force-dynamic` (auth.getUser() + a fresh matches/postings read every
@@ -78,12 +79,15 @@ export default async function FeedPage() {
         <ProfileHealthBanner errors={profile.validation_status.errors} />
       )}
 
-      <h1 className="text-2xl font-semibold tracking-tight text-ink">Your feed</h1>
+      <div className="flex items-start justify-between gap-4">
+        <h1 className="text-2xl font-semibold tracking-tight text-ink">Your feed</h1>
+        <RunHuntButton />
+      </div>
 
       {totalMatches === 0 && (
         <EmptyState
           heading="Nothing yet"
-          message="Your profile is built and waiting on its first cycle. The hunter runs daily, so check back tomorrow."
+          message="Your profile is built — the hunter runs when you ask. Hit &quot;Run my hunt&quot; above to get your first results."
         />
       )}
 
