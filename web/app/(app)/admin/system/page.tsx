@@ -125,7 +125,7 @@ export default async function AdminSystemPage() {
           <li>A recurring scheduled job keeps the shared discovery pool fresh — this costs nothing (no LLM calls at all).</li>
           <li>
             Actually scoring a user against that pool is triggered on demand: the user clicks a &quot;Run my
-            hunt&quot; button on their own feed (or an admin triggers it for them from this Operations tab).
+            hunt&quot; button on their own feed (or an admin triggers it for them from the Operations tab).
           </li>
           <li>That click dispatches a background job that runs discovery once more (cheap, idempotent) and then scores just that one user.</li>
           <li>A per-user cooldown limits how often someone can trigger their own hunt; admins bypass the cooldown for their own and anyone else&apos;s runs.</li>
