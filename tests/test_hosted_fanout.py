@@ -657,6 +657,12 @@ def test_run_fanout_cycle_defaults_to_every_profile_user(monkeypatch):
         "matches_written": 0,
         "stage4_calls": 0,
         "users_budget_stopped": 0,
+        # ADM-2 Task 2: additive stage-funnel/cost counters, zero on an
+        # empty-roster cycle same as everything else here.
+        "postings_considered": 0,
+        "passed_title_filter": 0,
+        "embedded": 0,
+        "cost_usd": 0.0,
     }
 
 
@@ -870,3 +876,90 @@ def test_byo_key_decrypt_failure_falls_back_to_pool_with_caps(tmp_path, monkeypa
     assert counters["users_errored"] == 0
     assert counters["stage4_calls"] == 1
     assert calls[0]["model"] == fanout.STAGE4_MODEL  # ran normally, on the pool
+
+
+# ── ADM-2 Task 2: stage-funnel counters + cost accumulator ───────────────
+
+
+def test_stage_funnel_counters_populated_for_a_one_user_cycle(tmp_path, monkeypatch):
+    """`postings_considered` / `passed_title_filter` / `embedded` are each
+    populated once per user: all of stage 1's input, stage 1's survivors,
+    and stage 3's scored postings, respectively."""
+    d = _profile_dir(
+        tmp_path, "user-a", thesis="PROFILE_MARKER thesis text",
+        portals_yaml="title_filter:\n  reject_substrings: ['intern']\n",
+    )
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric(term="engineer"))
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+
+    postings = [
+        _posting("p-intern", title="Engineering Intern", description="engineer ALIGNED_MARKER"),
+        _posting("aligned", description="engineer ALIGNED_MARKER"),
+        _posting("orthogonal", description="engineer ORTHOGONAL_MARKER"),
+    ]
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: postings)
+
+    monkeypatch.setattr(embed, "embeddings_enabled", lambda: True)
+    fake_client = _FakeVoyageClient({
+        "PROFILE_MARKER": [1.0, 0.0],
+        "ALIGNED_MARKER": [1.0, 0.0],
+        "ORTHOGONAL_MARKER": [0.0, 1.0],
+    })
+    monkeypatch.setattr(embed, "_get_client", lambda: fake_client)
+    monkeypatch.setattr(embed, "_client", None)
+
+    profile_store: dict[str, list[float]] = {}
+    posting_store: dict[str, list[float]] = {}
+    monkeypatch.setattr(db, "get_profile_embedding", lambda uid: profile_store.get(uid))
+    monkeypatch.setattr(db, "set_profile_embedding", lambda uid, vec: profile_store.__setitem__(uid, vec))
+    monkeypatch.setattr(db, "get_posting_embedding", lambda pid: posting_store.get(pid))
+    monkeypatch.setattr(db, "set_posting_embedding", lambda pid, vec: posting_store.__setitem__(pid, vec))
+
+    _fixed_verdict_llm(monkeypatch)
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: None)
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert counters["postings_considered"] == 3  # every posting db.get_unmatched_postings returned
+    assert counters["passed_title_filter"] == 2  # "p-intern" rejected by the title filter
+    assert counters["embedded"] == 2  # both stage-2 survivors got a stage-3 embed score
+
+
+def test_cost_usd_accumulates_rubric_compile_and_stage4_verdict(tmp_path, monkeypatch):
+    """`counters['cost_usd']` sums every ledger cost written this
+    cycle — one rubric compile (no cached rubric yet) plus one stage-4
+    verdict — not just the last write."""
+    d = _profile_dir(tmp_path, "user-a", disqualifiers_yaml="hard_disqualifiers: []\n")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: None)
+    monkeypatch.setattr(db, "set_compiled_rubric", lambda uid, rubric: None)
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-1")])
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+
+    ledger_costs: list[float] = []
+    monkeypatch.setattr(
+        db, "insert_budget_ledger_row",
+        lambda uid, event, **kw: ledger_costs.append(kw["cost_usd"]),
+    )
+
+    valid_rubric = _rubric()
+
+    def _fake_complete(*, system, prompt, model, max_tokens):
+        if model.startswith("claude-sonnet"):
+            return (json.dumps(valid_rubric), CompletionUsage(input_tokens=50, output_tokens=30))
+        return ('{"score": 0.5, "reason": "ok"}', CompletionUsage(input_tokens=10, output_tokens=5))
+
+    monkeypatch.setattr(llm, "complete_with_usage", _fake_complete)
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: None)
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert len(ledger_costs) == 2  # rubric_compile + llm_verdict
+    assert all(c > 0 for c in ledger_costs)
+    assert counters["cost_usd"] == pytest.approx(sum(ledger_costs))

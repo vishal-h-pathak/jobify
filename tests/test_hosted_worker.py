@@ -20,6 +20,10 @@ asserts:
   5. HNT-1: `--discovery-only` never calls fan-out; `--user <uuid>`
      scores exactly that one user; the two flags are mutually
      exclusive.
+  6. ADM-2 Task 2: every cycle — success or a whole-phase failure —
+     persists exactly one `hunt_cycles` row via
+     `db.insert_hunt_cycle_row`; a persist failure itself never crashes
+     an otherwise-successful cycle.
 """
 
 from __future__ import annotations
@@ -208,3 +212,103 @@ def test_run_rejects_discovery_only_and_user_together(monkeypatch, capsys):
         worker.run()
 
     assert "mutually exclusive" in capsys.readouterr().err
+
+
+# ── ADM-2 Task 2: hunt_cycles persistence ────────────────────────────────
+
+
+def test_execute_persists_hunt_cycle_row_on_success(monkeypatch):
+    """A clean cycle writes exactly one `hunt_cycles` row, with
+    `error=None` and the counters read straight off the fan-out
+    summary."""
+    monkeypatch.setattr(
+        worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY)
+    )
+    monkeypatch.setattr(
+        worker.fanout, "run_fanout_cycle", lambda user_ids=None: dict(_FANOUT_SUMMARY)
+    )
+    monkeypatch.setattr(worker.db, "get_global_month_to_date_spend", lambda: 0.0)
+    monkeypatch.setattr(worker.config, "HOSTED_GLOBAL_MONTHLY_CAP_USD", 100.0)
+    monkeypatch.setattr(worker, "send_ntfy_summary", lambda line: False)
+
+    persisted: list[dict] = []
+    monkeypatch.setattr(
+        worker.db, "insert_hunt_cycle_row", lambda **kw: persisted.append(kw)
+    )
+
+    result = worker._execute()
+
+    assert result == {"discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY}
+    assert len(persisted) == 1
+    row = persisted[0]
+    assert row["error"] is None
+    assert row["mode"] == "full"
+    assert row["triggered_by"] == "manual"
+    assert row["users_scored"] == _FANOUT_SUMMARY["users_processed"]
+    assert row["postings_fetched"] == _DISCOVERY_SUMMARY["fetched"]
+    assert row["postings_upserted"] == _DISCOVERY_SUMMARY["upserted"]
+    assert row["counters"] == _FANOUT_SUMMARY
+    assert row["cost_usd"] == _FANOUT_SUMMARY.get("cost_usd", 0.0)
+    assert row["started_at"] and row["finished_at"]
+
+
+def test_execute_persists_error_row_when_discovery_raises(monkeypatch):
+    """Extends `test_execute_aborts_cycle_when_discovery_raises`: the
+    `RuntimeError` still propagates (failure-isolation policy unchanged),
+    AND a `hunt_cycles` error row is written on the way out — even though
+    `fanout_summary` was never assigned."""
+    fanout_calls: list[str] = []
+
+    def fake_discovery():
+        raise RuntimeError("discovery phase blew up")
+
+    def fake_fanout(user_ids=None):
+        fanout_calls.append("fanout")
+        return dict(_FANOUT_SUMMARY)
+
+    monkeypatch.setattr(worker.discovery, "run_discovery_cycle", fake_discovery)
+    monkeypatch.setattr(worker.fanout, "run_fanout_cycle", fake_fanout)
+
+    persisted: list[dict] = []
+    monkeypatch.setattr(
+        worker.db, "insert_hunt_cycle_row", lambda **kw: persisted.append(kw)
+    )
+
+    with pytest.raises(RuntimeError, match="discovery phase blew up"):
+        worker._execute()
+
+    assert fanout_calls == []
+    assert len(persisted) == 1
+    row = persisted[0]
+    assert "discovery phase blew up" in row["error"]
+    assert row["mode"] == "full"
+    assert row["triggered_by"] == "manual"
+    assert row["users_scored"] == 0
+    assert row["postings_fetched"] == 0
+    assert row["postings_upserted"] == 0
+    assert row["counters"] is None
+    assert row["cost_usd"] == 0.0
+
+
+def test_execute_persist_failure_does_not_crash_a_successful_cycle(monkeypatch):
+    """A `db.insert_hunt_cycle_row` failure (e.g. a Supabase write error)
+    must only log — it never masks an otherwise-successful cycle's
+    normal return."""
+    monkeypatch.setattr(
+        worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY)
+    )
+    monkeypatch.setattr(
+        worker.fanout, "run_fanout_cycle", lambda user_ids=None: dict(_FANOUT_SUMMARY)
+    )
+    monkeypatch.setattr(worker.db, "get_global_month_to_date_spend", lambda: 0.0)
+    monkeypatch.setattr(worker.config, "HOSTED_GLOBAL_MONTHLY_CAP_USD", 100.0)
+    monkeypatch.setattr(worker, "send_ntfy_summary", lambda line: False)
+
+    def _boom(**kwargs):
+        raise RuntimeError("supabase write failed")
+
+    monkeypatch.setattr(worker.db, "insert_hunt_cycle_row", _boom)
+
+    result = worker._execute()
+
+    assert result == {"discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY}

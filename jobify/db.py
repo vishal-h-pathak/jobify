@@ -392,6 +392,58 @@ def get_api_key_ciphertext(user_id: str) -> str | None:
     return rows[0].get("encrypted_key")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  HOSTED — hunt-cycle telemetry (ADM-2 Task 2)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# `hunt_cycles` (0008_hunt_cycles.sql) records one row per
+# `jobify.hosted.worker._execute()` cycle — success or failure — so the
+# admin "System" screen has a persisted history to render instead of only
+# the transient log/ntfy summary line. Written exactly once per cycle, in
+# `_execute()`'s `finally` block.
+
+
+def insert_hunt_cycle_row(
+    *,
+    started_at: str,
+    finished_at: str | None = None,
+    mode: str,
+    triggered_by: str | None = None,
+    users_scored: int = 0,
+    postings_fetched: int = 0,
+    postings_upserted: int = 0,
+    counters: dict | None = None,
+    cost_usd: float = 0.0,
+    error: str | None = None,
+) -> None:
+    """Append one `hunt_cycles` row summarizing a completed worker cycle.
+
+    Plain insert, no update/delete helper — same append-only shape as
+    `insert_budget_ledger_row`. `finished_at` and `error` are `None` for a
+    row that hasn't happened yet in this module's own contract, but the
+    caller (`jobify.hosted.worker._execute`) always has both by the time
+    it calls this: `finished_at` is stamped fresh in the `finally` block,
+    and `error` is `None` on a clean cycle or `str(exc)` when either phase
+    raised. `counters` is `jobify.hosted.fanout.run_fanout_cycle`'s own
+    summary dict (stage-funnel counts, budget stops, stage4 calls) stored
+    as-is in the `counters` JSONB column — no reshaping here.
+    """
+    _get_client().table("hunt_cycles").insert(
+        {
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "mode": mode,
+            "triggered_by": triggered_by,
+            "users_scored": users_scored,
+            "postings_fetched": postings_fetched,
+            "postings_upserted": postings_upserted,
+            "counters": counters,
+            "cost_usd": cost_usd,
+            "error": error,
+        }
+    ).execute()
+
+
 def upsert_posting(job: dict) -> None:
     """Upsert one row into the GLOBAL `postings` pool (H4 Task 2 discovery).
 
