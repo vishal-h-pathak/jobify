@@ -18,6 +18,7 @@ export interface SessionSnapshot {
 
 export interface HandleTurnDeps {
   userId: string;
+  userEmail: string;
   userMessage: string;
   session: SessionSnapshot;
   supabase: SupabaseClient<Database>;
@@ -40,7 +41,7 @@ export interface HandleTurnResult {
  * row, per the H3 session prompt's "every LLM turn" contract.
  */
 export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<HandleTurnResult> {
-  const { userId, userMessage, session, supabase, admin, runTurn } = deps;
+  const { userId, userEmail, userMessage, session, supabase, admin, runTurn } = deps;
 
   if (session.status === "complete") {
     return { assistantText: "Your profile is already built — head to the feed.", stage: "done", done: true };
@@ -61,6 +62,14 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
   const turnResult = await runTurn(history);
   const { extracted, stage, done } = applyToolCalls(turnResult.toolCalls, session.extracted, session.stage);
   const newMessages: ChatMessage[] = [...history, { role: "assistant", content: turnResult.assistantText }];
+
+  // The authenticated user's real email always wins over whatever the model
+  // supplied (or fabricated) via record_identity — overwrite unconditionally,
+  // every turn `identity` exists, per the human-confirmed decision that a
+  // hallucinated or mistyped chat email must never reach storage.
+  if (extracted.identity) {
+    extracted.identity = { ...extracted.identity, email: userEmail };
+  }
 
   await recordOnboardingTurn(admin, {
     userId,

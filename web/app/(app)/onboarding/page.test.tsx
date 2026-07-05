@@ -102,9 +102,8 @@ describe("fetchInitialState — GET /api/onboarding/state, no POST turn call", (
     expect(displayed.filter((m) => m.content === SEEDED_GREETING)).toHaveLength(1);
 
     // And the progress rail reflects the restored (non-resume) stage.
-    const assistantCount = displayed.filter((m) => m.role === "assistant").length;
-    const rail = computeRailSteps(result.stage, assistantCount);
-    expect(rail.find((s) => s.label === "Targeting")?.status).toBe("current");
+    const rail = computeRailSteps(result.stage);
+    expect(rail.find((s) => s.label === "What you want")?.status).toBe("current");
     expect(rail.find((s) => s.label === "Basics")?.status).toBe("complete");
     expect(rail.find((s) => s.label === "Done")?.status).toBe("upcoming");
   });
@@ -207,8 +206,8 @@ describe("submitTurn / onboardingReducer — failed turn preserves the draft, wi
       { role: "assistant", content: "Nice — tell me more." },
     ]);
 
-    // computeRailSteps must be derived from the corrected (greeting-included)
-    // transcript so the rail heuristic isn't undercounted by one.
+    // Sanity check: the corrected (greeting-included) transcript has both
+    // assistant bubbles the seeded greeting and the real reply produced.
     const assistantCount = displayed.filter((m) => m.role === "assistant").length;
     expect(assistantCount).toBe(2);
   });
@@ -260,45 +259,35 @@ describe("handleUpload / validateUploadName — upload rejection", () => {
   });
 });
 
-describe("computeRailSteps — progress rail per stage", () => {
-  it("resume stage with <=2 assistant messages: About you current, Resume not reached", () => {
-    const rail = computeRailSteps("resume", 1);
-    expect(rail.find((s) => s.label === "About you")?.status).toBe("current");
-    expect(rail.find((s) => s.label === "Resume")?.status).toBe("upcoming");
-
-    const railAtTwo = computeRailSteps("resume", 2);
-    expect(railAtTwo.find((s) => s.label === "About you")?.status).toBe("current");
-    expect(railAtTwo.find((s) => s.label === "Resume")?.status).toBe("upcoming");
-  });
-
-  it("resume stage with >=3 assistant messages: About you complete, Resume current", () => {
-    const rail = computeRailSteps("resume", 3);
-    expect(rail.find((s) => s.label === "About you")?.status).toBe("complete");
+describe("computeRailSteps — progress rail per stage (INT-1: 4-label direct stage mapping)", () => {
+  it("resume stage maps to Resume current, nothing complete yet", () => {
+    const rail = computeRailSteps("resume");
     expect(rail.find((s) => s.label === "Resume")?.status).toBe("current");
     expect(rail.find((s) => s.label === "Basics")?.status).toBe("upcoming");
+    expect(rail.find((s) => s.label === "What you want")?.status).toBe("upcoming");
+    expect(rail.find((s) => s.label === "Done")?.status).toBe("upcoming");
   });
 
-  it("identity stage maps to Basics current, with About you and Resume complete", () => {
-    const rail = computeRailSteps("identity", 5);
-    expect(rail.find((s) => s.label === "About you")?.status).toBe("complete");
+  it("identity stage maps to Basics current, with Resume complete", () => {
+    const rail = computeRailSteps("identity");
     expect(rail.find((s) => s.label === "Resume")?.status).toBe("complete");
     expect(rail.find((s) => s.label === "Basics")?.status).toBe("current");
-    expect(rail.find((s) => s.label === "Targeting")?.status).toBe("upcoming");
+    expect(rail.find((s) => s.label === "What you want")?.status).toBe("upcoming");
   });
 
-  it("targeting stage maps to Targeting current, with Basics complete", () => {
-    const rail = computeRailSteps("targeting", 8);
+  it("targeting stage maps to What you want current, with Resume and Basics complete", () => {
+    const rail = computeRailSteps("targeting");
+    expect(rail.find((s) => s.label === "Resume")?.status).toBe("complete");
     expect(rail.find((s) => s.label === "Basics")?.status).toBe("complete");
-    expect(rail.find((s) => s.label === "Targeting")?.status).toBe("current");
+    expect(rail.find((s) => s.label === "What you want")?.status).toBe("current");
     expect(rail.find((s) => s.label === "Done")?.status).toBe("upcoming");
   });
 
   it("done stage maps to Done current, with every prior step complete", () => {
-    const rail = computeRailSteps("done", 12);
-    expect(rail.find((s) => s.label === "About you")?.status).toBe("complete");
+    const rail = computeRailSteps("done");
     expect(rail.find((s) => s.label === "Resume")?.status).toBe("complete");
     expect(rail.find((s) => s.label === "Basics")?.status).toBe("complete");
-    expect(rail.find((s) => s.label === "Targeting")?.status).toBe("complete");
+    expect(rail.find((s) => s.label === "What you want")?.status).toBe("complete");
     expect(rail.find((s) => s.label === "Done")?.status).toBe("current");
   });
 });
@@ -329,7 +318,7 @@ describe("OnboardingView — seeded greeting bubble in the rendered tree", () =>
     const view = OnboardingView({
       state,
       transcript,
-      railSteps: computeRailSteps(state.stage, 1),
+      railSteps: computeRailSteps(state.stage),
       scrollRef: { current: null },
       onInputChange: vi.fn(),
       onSend: vi.fn(),
@@ -345,22 +334,18 @@ describe("OnboardingView — seeded greeting bubble in the rendered tree", () =>
   });
 });
 
-describe("OnboardingView — progress rail active label per state", () => {
+describe("OnboardingView — progress rail active label per state (INT-1: 4-label direct stage mapping)", () => {
   it.each([
-    { stage: "resume" as const, assistantMessageCount: 1, expected: "About you" },
-    { stage: "resume" as const, assistantMessageCount: 3, expected: "Resume" },
-    { stage: "identity" as const, assistantMessageCount: 5, expected: "Basics" },
-    { stage: "done" as const, assistantMessageCount: 12, expected: "Done" },
-  ])("stage=$stage, assistantMessageCount=$assistantMessageCount -> $expected is current", ({
-    stage,
-    assistantMessageCount,
-    expected,
-  }) => {
+    { stage: "resume" as const, expected: "Resume" },
+    { stage: "identity" as const, expected: "Basics" },
+    { stage: "targeting" as const, expected: "What you want" },
+    { stage: "done" as const, expected: "Done" },
+  ])("stage=$stage -> $expected is current", ({ stage, expected }) => {
     const state: OnboardingState = { ...initialOnboardingState, loading: false, stage, done: stage === "done" };
     const view = OnboardingView({
       state,
       transcript: buildDisplayMessages(state.messages),
-      railSteps: computeRailSteps(stage, assistantMessageCount),
+      railSteps: computeRailSteps(stage),
       scrollRef: { current: null },
       onInputChange: vi.fn(),
       onSend: vi.fn(),
@@ -387,7 +372,7 @@ describe("OnboardingView — failed turn: error banner + retry, composer draft p
     const view = OnboardingView({
       state,
       transcript: buildDisplayMessages(state.messages),
-      railSteps: computeRailSteps(state.stage, 1),
+      railSteps: computeRailSteps(state.stage),
       scrollRef: { current: null },
       onInputChange: vi.fn(),
       onSend: vi.fn(),
@@ -421,7 +406,7 @@ describe("OnboardingView — rejected upload message in the rendered tree", () =
     const view = OnboardingView({
       state,
       transcript: buildDisplayMessages(state.messages),
-      railSteps: computeRailSteps(state.stage, 1),
+      railSteps: computeRailSteps(state.stage),
       scrollRef: { current: null },
       onInputChange: vi.fn(),
       onSend: vi.fn(),
