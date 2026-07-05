@@ -1,19 +1,53 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { BUTTON_VARIANT_CLASSES } from "@/components/ui/Button";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { hasClaimedInvite } from "@/lib/db/invites";
 
-export default function Home() {
+const LINK_BUTTON_BASE = "inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium";
+
+// Signed-in visitors with a claimed invite skip the pitch entirely.
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (user && (await hasClaimedInvite(supabase))) {
+    redirect("/feed");
+  }
+
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 text-center">
-      <h1 className="text-3xl font-semibold tracking-tight">jobify</h1>
-      <p className="max-w-md text-zinc-600 dark:text-zinc-400">
-        You&apos;ve got an invite? Sign in and we&apos;ll walk you through a short interview to build your hunting
-        profile.
+    <div className="flex flex-1 flex-col items-center justify-center gap-10 px-6 py-16 text-center">
+      <div className="flex flex-col items-center gap-3">
+        <h1 className="text-4xl font-semibold tracking-tight text-ink">
+          jobify<span className="text-amber">.</span>
+        </h1>
+        <p className="max-w-md text-xl font-medium tracking-tight text-ink">
+          a job feed that actually knows you
+        </p>
+      </div>
+
+      <ol className="flex max-w-md flex-col gap-2 text-left text-sm text-ink-muted">
+        <li>A short interview about what you&apos;re actually looking for.</li>
+        <li>A daily feed scored against that — not keyword soup.</li>
+        <li>Reasons for every match, so you know why it&apos;s there.</li>
+      </ol>
+
+      <p className="max-w-sm text-sm text-ink-muted">
+        Private beta — you&apos;ll need an invite from the person who sent you here.
       </p>
-      <Link
-        href="/login"
-        className="rounded-full bg-foreground px-6 py-3 text-sm font-medium text-background transition-colors hover:opacity-90"
-      >
-        Sign in
-      </Link>
+
+      <div className="flex flex-col items-center gap-4">
+        <Link href="/invite" className={`${LINK_BUTTON_BASE} ${BUTTON_VARIANT_CLASSES.primary}`}>
+          I have an invite
+        </Link>
+        <Link href="/login" className={`${LINK_BUTTON_BASE} ${BUTTON_VARIANT_CLASSES.ghost}`}>
+          Sign in
+        </Link>
+      </div>
     </div>
   );
 }
