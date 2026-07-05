@@ -12,6 +12,9 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
 
+const isAdminMock = vi.fn();
+vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
+
 const { default: InvitePage } = await import("./page");
 
 function searchParams(code?: string) {
@@ -22,6 +25,8 @@ describe("/invite — redirect chain", () => {
   beforeEach(() => {
     getUserMock.mockClear();
     hasClaimedInviteMock.mockClear();
+    isAdminMock.mockReset();
+    isAdminMock.mockReturnValue(false);
     redirectMock.mockClear();
   });
 
@@ -40,6 +45,14 @@ describe("/invite — redirect chain", () => {
     await expect(InvitePage({ searchParams: searchParams() })).rejects.toThrow(
       "REDIRECT:/login?next=%2Finvite"
     );
+  });
+
+  it("signed-in admin redirects to /admin without checking hasClaimedInvite", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "admin-1", email: "admin@example.com" } } });
+    isAdminMock.mockReturnValue(true);
+
+    await expect(InvitePage({ searchParams: searchParams("ABC-123") })).rejects.toThrow("REDIRECT:/admin");
+    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 
   it("signed-in and already claimed redirects to /feed instead of showing the form again", async () => {

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { hasClaimedInvite } from "@/lib/db/invites";
+import { isAdmin } from "@/lib/admin/isAdmin";
 import { InviteForm } from "./InviteForm";
 
 // Signed-out visitors get redirected to /login (no dead-end error), and
@@ -21,6 +22,13 @@ export default async function InvitePage({
   if (!user) {
     const target = `/invite${code ? `?code=${encodeURIComponent(code)}` : ""}`;
     redirect(`/login?next=${encodeURIComponent(target)}`);
+  }
+
+  // Admins may never hold a claimed invite of their own (no reason to
+  // spend one on yourself) — send them to /admin instead of the claim
+  // form, before even checking hasClaimedInvite.
+  if (isAdmin(user)) {
+    redirect("/admin");
   }
 
   if (await hasClaimedInvite(supabase)) {
