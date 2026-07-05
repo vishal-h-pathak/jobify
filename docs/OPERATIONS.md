@@ -292,18 +292,22 @@ expected, not a bug. The panels populate over subsequent cycles.
 
 The five performance panels:
 
-- **Recent cycles** — one row per worker cycle (`hunt_cycles` table): cycle
-  start, trigger (`cron` or `user`), postings scored / matched / skipped,
-  pool spend, and any error.
-- **Ladder funnel** — from the most recent scoring cycle's stage counters:
-  how many candidates moved through stages 1 (rubric) → 2 (embeddings) →
-  3 (rerank) → 4 (verdict). See [`docs/SCORING.md`](SCORING.md) for the
-  scoring stages.
+- **Recent cycles** — one row per worker cycle (`hunt_cycles` table): when
+  it ran, mode, trigger (`cron`, `dispatch`, or `manual` — a cron-triggered
+  discovery-only cycle, a user's "Run my hunt" click dispatching that one
+  user's cycle, or an ad-hoc manual full run), users scored, postings
+  landed, stage-4 verdict calls, pool spend, and any error.
+- **Ladder funnel** — from the most recent scoring cycle's stage counters,
+  five values in order: postings considered → passed title filter →
+  rubric-scored → embedded → LLM verdicts. This mirrors the four-stage
+  ladder in [`docs/SCORING.md`](SCORING.md) (title filter, compiled
+  rubric, embedding rerank, LLM verdict) — embedding and rerank are one
+  stage there, so the funnel's "embedded" count is that stage's output.
 - **Cost breakdown** — month-to-date pool spend vs cap, split by event
-  type (rubric, embedding, rerank, verdict) and model (Claude vs Voyage).
-  See [`docs/COST_RAILS.md`](COST_RAILS.md) for cost mechanics.
-- **Engagement** — matches by state (saved/applied/dismissed) and the
-  save:dismiss ratio, plus per-user applied match counts.
+  type (`rubric_compile`, `llm_verdict`, `embedding`) and model (Claude vs
+  Voyage). See [`docs/COST_RAILS.md`](COST_RAILS.md) for cost mechanics.
+- **Engagement** — matches by state (new/seen/saved/dismissed/applied) and
+  the save:dismiss ratio, plus per-user applied match counts.
 - **Pool freshness** — current postings volume in the shared pool and
   staleness (how many days old the oldest row is).
 
