@@ -120,7 +120,9 @@ def _cost_usd(total_tokens: int) -> float:
     return round(total_tokens * _COST_PER_TOKEN_USD, 6)
 
 
-def ensure_posting_embedding(posting_id: str, text: str) -> bool:
+def ensure_posting_embedding(
+    posting_id: str, text: str, *, counters: dict | None = None,
+) -> bool:
     """Compute and store `posting_id`'s embedding if it doesn't already
     have one. Postings are global/shared — this must only ever compute
     ONE embedding per posting, not one per user who happens to match
@@ -132,6 +134,13 @@ def ensure_posting_embedding(posting_id: str, text: str) -> bool:
     `user_id=None` on success (a global, unattributed cost —
     `0004_worker.sql` drops `budget_ledger.user_id`'s NOT NULL for exactly
     this case).
+
+    `counters` (ADM-2 final-review fix): the cycle's fan-out counters
+    dict, if the caller is threading one through — when an embedding is
+    computed, this call's cost (the same value written to the ledger row)
+    is added to `counters["cost_usd"]`. Optional and keyword-only so any
+    direct unit test of this helper that doesn't care about cost keeps
+    working unchanged.
     """
     if not embeddings_enabled():
         return False
@@ -149,14 +158,19 @@ def ensure_posting_embedding(posting_id: str, text: str) -> bool:
         return False
 
     db.set_posting_embedding(posting_id, embeddings[0])
+    cost = _cost_usd(total_tokens)
     db.insert_budget_ledger_row(
         None, EMBED_EVENT,
-        model=MODEL, input_tokens=total_tokens, cost_usd=_cost_usd(total_tokens),
+        model=MODEL, input_tokens=total_tokens, cost_usd=cost,
     )
+    if counters is not None:
+        counters["cost_usd"] = counters.get("cost_usd", 0.0) + cost
     return True
 
 
-def ensure_profile_embedding(user_id: str, text: str, *, force: bool = False) -> bool:
+def ensure_profile_embedding(
+    user_id: str, text: str, *, force: bool = False, counters: dict | None = None,
+) -> bool:
     """Compute and store `user_id`'s profile embedding.
 
     Unlike postings, profile embeddings are per-user and their source text
@@ -172,6 +186,13 @@ def ensure_profile_embedding(user_id: str, text: str, *, force: bool = False) ->
     the API call produced nothing). Writes an `event='embedding'`
     budget_ledger row with this specific `user_id` on success — it's that
     user's own profile, not a shared cost.
+
+    `counters` (ADM-2 final-review fix): the cycle's fan-out counters
+    dict, if the caller is threading one through — when an embedding is
+    computed, this call's cost (the same value written to the ledger row)
+    is added to `counters["cost_usd"]`. Optional and keyword-only so any
+    direct unit test of this helper that doesn't care about cost keeps
+    working unchanged.
     """
     if not embeddings_enabled():
         return False
@@ -189,8 +210,11 @@ def ensure_profile_embedding(user_id: str, text: str, *, force: bool = False) ->
         return False
 
     db.set_profile_embedding(user_id, embeddings[0])
+    cost = _cost_usd(total_tokens)
     db.insert_budget_ledger_row(
         user_id, EMBED_EVENT,
-        model=MODEL, input_tokens=total_tokens, cost_usd=_cost_usd(total_tokens),
+        model=MODEL, input_tokens=total_tokens, cost_usd=cost,
     )
+    if counters is not None:
+        counters["cost_usd"] = counters.get("cost_usd", 0.0) + cost
     return True

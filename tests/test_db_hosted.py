@@ -599,3 +599,76 @@ def test_get_unmatched_postings_excludes_expired_link_status(patch_db_client):
     result = db.get_unmatched_postings("user-1")
 
     assert [p["id"] for p in result] == ["p-2", "p-3", "p-4"]
+
+
+# ── insert_hunt_cycle_row (ADM-2 Task 2) ─────────────────────────────────
+
+
+def test_insert_hunt_cycle_row_writes_all_columns(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.insert_hunt_cycle_row(
+        started_at="2026-07-05T00:00:00+00:00",
+        finished_at="2026-07-05T00:05:00+00:00",
+        mode="full",
+        triggered_by="manual",
+        users_scored=2,
+        postings_fetched=5,
+        postings_upserted=4,
+        counters={"users_processed": 2, "cost_usd": 0.0123},
+        cost_usd=0.0123,
+        error=None,
+    )
+
+    name, q = fake.queries[-1]
+    assert name == "hunt_cycles"
+    assert q.insert_payload == {
+        "started_at": "2026-07-05T00:00:00+00:00",
+        "finished_at": "2026-07-05T00:05:00+00:00",
+        "mode": "full",
+        "triggered_by": "manual",
+        "users_scored": 2,
+        "postings_fetched": 5,
+        "postings_upserted": 4,
+        "counters": {"users_processed": 2, "cost_usd": 0.0123},
+        "cost_usd": 0.0123,
+        "error": None,
+    }
+
+
+def test_insert_hunt_cycle_row_defaults(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.insert_hunt_cycle_row(started_at="2026-07-05T00:00:00+00:00", mode="discovery_only")
+
+    _, q = fake.queries[-1]
+    assert q.insert_payload == {
+        "started_at": "2026-07-05T00:00:00+00:00",
+        "finished_at": None,
+        "mode": "discovery_only",
+        "triggered_by": None,
+        "users_scored": 0,
+        "postings_fetched": 0,
+        "postings_upserted": 0,
+        "counters": None,
+        "cost_usd": 0.0,
+        "error": None,
+    }
+
+
+def test_insert_hunt_cycle_row_error_row(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.insert_hunt_cycle_row(
+        started_at="2026-07-05T00:00:00+00:00",
+        finished_at="2026-07-05T00:00:01+00:00",
+        mode="full",
+        triggered_by="cron",
+        error="discovery phase blew up",
+    )
+
+    _, q = fake.queries[-1]
+    assert q.insert_payload["error"] == "discovery phase blew up"

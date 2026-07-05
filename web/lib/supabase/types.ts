@@ -213,6 +213,32 @@ export interface Database {
         };
         Relationships: [];
       };
+      // ADM-2 (0008_hunt_cycles.sql): one row per fanout/discovery
+      // invocation, written by the Python worker (service-role) —
+      // read-only from the web side, so Insert/Update stay minimal like
+      // `postings`'s entry above.
+      hunt_cycles: {
+        Row: {
+          id: number;
+          started_at: string;
+          finished_at: string | null;
+          mode: "full" | "discovery_only" | "single_user";
+          triggered_by: "cron" | "dispatch" | "manual" | null;
+          users_scored: number;
+          postings_fetched: number;
+          postings_upserted: number;
+          counters: Record<string, number> | null;
+          cost_usd: number;
+          error: string | null;
+        };
+        Insert: {
+          [key: string]: never;
+        };
+        Update: {
+          [key: string]: never;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {

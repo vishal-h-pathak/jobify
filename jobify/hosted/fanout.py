@@ -171,6 +171,7 @@ def _extract_json_object(text: str) -> dict:
 
 def _stage4_verdict(
     user_id: str, thesis: str, posting: dict, *, api_key: Optional[str] = None,
+    counters: Optional[dict] = None,
 ) -> Optional[dict]:
     """One stage-4 LLM call for one posting. Always writes the
     `llm_verdict` ledger row (real tokens were spent regardless of
@@ -183,6 +184,13 @@ def _stage4_verdict(
     semantics. Only included in the `llm.complete_with_usage` call when
     truthy, so pool-path callers (and their tests, which monkeypatch that
     function with the pre-H6 fixed signature) are unaffected.
+
+    `counters` (ADM-2 Task 2): the cycle's fan-out counters dict, if the
+    caller is threading one through — when provided, this call's cost
+    (the same value written to the `llm_verdict` ledger row) is added to
+    `counters["cost_usd"]`. Optional and keyword-only so any direct unit
+    test of this helper that doesn't care about cost keeps working
+    unchanged.
     """
     call_kwargs: dict = dict(
         system=_STAGE4_SYSTEM,
@@ -193,17 +201,20 @@ def _stage4_verdict(
     if api_key:
         call_kwargs["api_key"] = api_key
     text, usage = llm.complete_with_usage(**call_kwargs)
+    cost = _cost_usd(
+        usage.input_tokens, usage.output_tokens,
+        STAGE4_INPUT_USD_PER_MTOK, STAGE4_OUTPUT_USD_PER_MTOK,
+    )
     db.insert_budget_ledger_row(
         user_id, LLM_VERDICT_EVENT,
         model=STAGE4_MODEL,
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
-        cost_usd=_cost_usd(
-            usage.input_tokens, usage.output_tokens,
-            STAGE4_INPUT_USD_PER_MTOK, STAGE4_OUTPUT_USD_PER_MTOK,
-        ),
+        cost_usd=cost,
         byo=bool(api_key),
     )
+    if counters is not None:
+        counters["cost_usd"] = counters.get("cost_usd", 0.0) + cost
 
     try:
         data = _extract_json_object(text)
@@ -254,6 +265,7 @@ def _targeting_text(profile: dict) -> str:
 def _ensure_rubric(
     user_id: str, profile_dir: Path, *,
     api_key: Optional[str] = None, allow_new_compile: bool = True,
+    counters: Optional[dict] = None,
 ) -> Optional[dict]:
     """Return `user_id`'s compiled rubric, compiling and persisting it on
     first use. One Sonnet-class call per user, ever (until an explicit
@@ -270,6 +282,14 @@ def _ensure_rubric(
     one-time compile call — return `None` instead. BYO callers always
     pass `allow_new_compile=True` (BYO bypasses the global cap); the pool
     path passes `False` when `fanout._global_cap_exceeded()` is true.
+
+    `counters` (ADM-2 Task 2): the cycle's fan-out counters dict, if the
+    caller is threading one through — when a new compile happens, this
+    call's cost (the same value written to the `rubric_compile` ledger
+    row) is added to `counters["cost_usd"]`. Optional and keyword-only so
+    any direct unit test of this helper that doesn't care about cost
+    keeps working unchanged. Not touched at all on the cached-rubric /
+    no-new-compile paths — no cost was incurred.
     """
     existing = db.get_compiled_rubric(user_id)
     if existing:
@@ -288,17 +308,20 @@ def _ensure_rubric(
         compile_kwargs["api_key"] = api_key
     data, usage = rubric_module.compile_rubric_with_usage(**compile_kwargs)
     db.set_compiled_rubric(user_id, data)
+    cost = _cost_usd(
+        usage.input_tokens, usage.output_tokens,
+        RUBRIC_COMPILE_INPUT_USD_PER_MTOK, RUBRIC_COMPILE_OUTPUT_USD_PER_MTOK,
+    )
     db.insert_budget_ledger_row(
         user_id, RUBRIC_COMPILE_EVENT,
         model=rubric_module.COMPILER_MODEL,
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
-        cost_usd=_cost_usd(
-            usage.input_tokens, usage.output_tokens,
-            RUBRIC_COMPILE_INPUT_USD_PER_MTOK, RUBRIC_COMPILE_OUTPUT_USD_PER_MTOK,
-        ),
+        cost_usd=cost,
         byo=bool(api_key),
     )
+    if counters is not None:
+        counters["cost_usd"] = counters.get("cost_usd", 0.0) + cost
     return data
 
 
@@ -371,6 +394,7 @@ def _profile_embed_text(profile_dir: Path) -> str:
 
 def _stage3_embed_rerank(
     user_id: str, profile_dir: Path, survivors: list[tuple[dict, RubricResult]],
+    counters: dict,
 ) -> dict[str, float]:
     """Cosine-rerank stage-2 survivors against the user's profile
     embedding. Returns `{posting_id: embed_score}`; a posting id missing
@@ -378,6 +402,14 @@ def _stage3_embed_rerank(
     or one of the two vectors came back `None`) — `embed_score` stays
     NULL for it and the ladder proceeds 1 -> 2 -> 4 unaffected, per the
     brief's degradation contract.
+
+    `counters`: the cycle's fan-out counters dict — always a real,
+    cycle-level dict (every caller is `_run_user_ladder`, which always has
+    one), unlike `_ensure_rubric`/`_stage4_verdict`'s optional `counters`
+    param. Threaded through to both `embed.ensure_profile_embedding` and
+    `embed.ensure_posting_embedding` so their embedding ledger costs (ADM-2
+    final-review fix) land in `counters["cost_usd"]` too, not just
+    rubric-compile/stage-4 cost.
     """
     if not embed.embeddings_enabled():
         return {}
@@ -386,7 +418,7 @@ def _stage3_embed_rerank(
     force = _embedding_is_stale(profile_dir, updated_at)
     try:
         recomputed = embed.ensure_profile_embedding(
-            user_id, _profile_embed_text(profile_dir), force=force,
+            user_id, _profile_embed_text(profile_dir), force=force, counters=counters,
         )
         profile_vec = db.get_profile_embedding(user_id)
     except Exception as exc:  # noqa: BLE001 — stage 3 is best-effort, never fatal to the ladder
@@ -401,7 +433,9 @@ def _stage3_embed_rerank(
     for posting, _result in survivors:
         posting_id = posting["id"]
         try:
-            embed.ensure_posting_embedding(posting_id, _posting_embed_text(posting))
+            embed.ensure_posting_embedding(
+                posting_id, _posting_embed_text(posting), counters=counters,
+            )
             posting_vec = db.get_posting_embedding(posting_id)
         except Exception as exc:  # noqa: BLE001 — one posting's embed failure must not drop the rest
             logger.error(
@@ -498,6 +532,7 @@ def _run_user_ladder(
 
     profile_dir = materialize_profile_dir(user_id)
     postings = db.get_unmatched_postings(user_id)
+    counters["postings_considered"] += len(postings)
 
     # BYO key resolution (H6): a decrypt failure degrades to `None` (pool
     # path) rather than raising — see `_resolve_byo_key`.
@@ -508,6 +543,7 @@ def _run_user_ladder(
         p for p in postings
         if passes_title_filter(p.get("title") or "", profile_dir)
     ]
+    counters["passed_title_filter"] += len(survivors)
 
     # ── Stage 2: compiled rubric. Deferred compile: if this cycle has
     # nothing to score for this user, don't spend the one-time compile
@@ -519,6 +555,7 @@ def _run_user_ladder(
         rubric_dict = _ensure_rubric(
             user_id, profile_dir, api_key=byo_key,
             allow_new_compile=bool(byo_key) or not global_pool_capped,
+            counters=counters,
         )
         if rubric_dict is None:
             # No cached rubric AND the global pool cap is exhausted (pool
@@ -542,9 +579,10 @@ def _run_user_ladder(
 
     # ── Stage 3: embedding rerank (skips cleanly when disabled). ────────
     embed_scores = (
-        _stage3_embed_rerank(user_id, profile_dir, stage2_survivors)
+        _stage3_embed_rerank(user_id, profile_dir, stage2_survivors, counters)
         if stage2_survivors else {}
     )
+    counters["embedded"] += len(embed_scores)
 
     for posting, result in stage2_survivors:
         db.upsert_match(
@@ -592,7 +630,9 @@ def _run_user_ladder(
                 )
                 for i, (posting, _result) in enumerate(ranked[:HOSTED_STAGE4_TOP_N], start=1):
                     try:
-                        verdict = _stage4_verdict(user_id, thesis, posting, api_key=byo_key)
+                        verdict = _stage4_verdict(
+                            user_id, thesis, posting, api_key=byo_key, counters=counters,
+                        )
                     except Exception as exc:  # noqa: BLE001 — one bad call must not drop the rest of the top-N
                         logger.error(
                             "fanout: stage4 verdict failed for user_id=%s posting_id=%s: %s",
@@ -651,7 +691,13 @@ def run_fanout_cycle(user_ids: Optional[list[str]] = None) -> dict[str, int]:
     Returns a summary dict for Task 4's cycle-summary log line:
     `users_processed`, `users_skipped_invalid`, `users_errored`,
     `postings_scored`, `matches_written`, `stage4_calls`,
-    `users_budget_stopped`, `users_global_capped`.
+    `users_budget_stopped`, `users_global_capped`, plus (ADM-2 Task 2)
+    four additive stage-funnel/cost fields for the `hunt_cycles` row:
+    `postings_considered`, `passed_title_filter`, `embedded` (per-user
+    counts of stage 1 input / stage 1 survivors / stage 3 scores, summed
+    across the cycle), and `cost_usd` (running total of every ledger
+    write this cycle, from `_ensure_rubric`, `_stage4_verdict`, and
+    `_stage3_embed_rerank`'s embedding calls).
     """
     ids = user_ids if user_ids is not None else db.list_profile_user_ids()
 
@@ -673,6 +719,10 @@ def run_fanout_cycle(user_ids: Optional[list[str]] = None) -> dict[str, int]:
         "stage4_calls": 0,
         "users_budget_stopped": 0,
         "users_global_capped": 0,
+        "postings_considered": 0,
+        "passed_title_filter": 0,
+        "embedded": 0,
+        "cost_usd": 0.0,
     }
 
     for user_id in ids:

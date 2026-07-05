@@ -275,3 +275,43 @@ parked, not implemented.
 discovery-then-fan-out-everyone cycle, unchanged — useful for an
 operator who wants to force a full re-score outside the per-user trigger
 path.
+
+---
+
+## 8. System screen — what the numbers mean
+
+The `/admin/system` page (second tab next to "Operations") presents a
+static "How it works" explainer (top) and five live performance panels
+(bottom) backed by the `hunt_cycles` table.
+
+**Important:** `hunt_cycles` only has rows starting from this feature
+(wave 8) onward. Any cycle that ran before migration `0008_hunt_cycles.sql`
+was applied has no corresponding row. Immediately after this ships, the
+"Recent cycles" table and funnel will look sparse or empty — this is
+expected, not a bug. The panels populate over subsequent cycles.
+
+The five performance panels:
+
+- **Recent cycles** — one row per worker cycle (`hunt_cycles` table): when
+  it ran, mode, trigger (`cron`, `dispatch`, or `manual` — a cron-triggered
+  discovery-only cycle, a user's "Run my hunt" click dispatching that one
+  user's cycle, or an ad-hoc manual full run), users scored, postings
+  landed, stage-4 verdict calls, pool spend, and any error.
+- **Ladder funnel** — from the most recent scoring cycle's stage counters,
+  five values in order: postings considered → passed title filter →
+  rubric-scored → embedded → LLM verdicts. This mirrors the four-stage
+  ladder in [`docs/SCORING.md`](SCORING.md) (title filter, compiled
+  rubric, embedding rerank, LLM verdict) — embedding and rerank are one
+  stage there, so the funnel's "embedded" count is that stage's output.
+- **Cost breakdown** — month-to-date pool spend vs cap, split by event
+  type (`rubric_compile`, `llm_verdict`, `embedding`) and model (Claude vs
+  Voyage). See [`docs/COST_RAILS.md`](COST_RAILS.md) for cost mechanics.
+- **Engagement** — matches by state (new/seen/saved/dismissed/applied) and
+  the save:dismiss ratio, plus per-user applied match counts.
+- **Pool freshness** — current postings volume in the shared pool, the
+  newest and oldest `last_seen_at` timestamps, and how many postings are
+  marked expired.
+
+For the scoring mechanics and cost-estimation formulas that underpin
+these numbers, see [`docs/SCORING.md`](SCORING.md) and
+[`docs/COST_RAILS.md`](COST_RAILS.md).

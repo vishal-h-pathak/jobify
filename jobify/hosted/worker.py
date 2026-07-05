@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from datetime import datetime, timezone
 
 from jobify import config, db
 from jobify.hosted import discovery, fanout
@@ -127,36 +128,81 @@ def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
     ``user_ids`` targeting hook — no fanout.py changes needed. Passing
     both is contradictory and rejected by `run()`'s argparse before this
     is ever called.
+
+    ADM-2 Task 2: every exit path — a clean cycle, or either phase
+    raising — persists exactly one `hunt_cycles` row via
+    `db.insert_hunt_cycle_row`, in the `finally` block below. Discovery
+    can raise before `fanout_summary` is ever assigned (the documented
+    failure-isolation policy above), so both summaries are initialised
+    to `None` *before* the try block runs and the `finally` block reads
+    them back defensively (`(fanout_summary or {}).get(...)`) rather than
+    assuming either name is bound. A persist failure itself is caught
+    and only logged — it must never mask this cycle's real outcome nor
+    raise a new exception past `_execute()`.
     """
     mode = f"user:{user_id}" if user_id else ("discovery_only" if discovery_only else "full")
     logger.info("hosted worker cycle starting (mode=%s)", mode)
 
-    discovery_summary = discovery.run_discovery_cycle()
-    if discovery_only:
-        fanout_summary = dict(_EMPTY_FANOUT_SUMMARY)
-    else:
-        fanout_summary = fanout.run_fanout_cycle(user_ids=[user_id] if user_id else None)
+    started_at = datetime.now(timezone.utc).isoformat()
+    discovery_summary: dict | None = None
+    fanout_summary: dict | None = None
+    error: str | None = None
 
-    # Neither summary dict carries pool spend (H6's cap ledger lives in
-    # `jobify.db`, not either phase's return value) — fetched fresh here
-    # so the cycle telemetry line always reflects spend as of cycle end.
-    global_spend = db.get_global_month_to_date_spend()
-    global_cap = config.HOSTED_GLOBAL_MONTHLY_CAP_USD
-    summary_line = _summary_line(
-        mode, discovery_summary, fanout_summary, global_spend, global_cap
-    )
+    try:
+        discovery_summary = discovery.run_discovery_cycle()
+        if discovery_only:
+            fanout_summary = dict(_EMPTY_FANOUT_SUMMARY)
+        else:
+            fanout_summary = fanout.run_fanout_cycle(user_ids=[user_id] if user_id else None)
 
-    # Logs/print always fire regardless of ntfy's outcome (unset topic,
-    # network failure, etc.) — the ntfy push is an additional side-effect
-    # on top of cycle visibility, not a gate on it.
-    logger.info(
-        "hosted worker cycle done: discovery=%s fanout=%s",
-        discovery_summary, fanout_summary,
-    )
-    print(summary_line)
-    send_ntfy_summary(summary_line)
+        # Neither summary dict carries pool spend (H6's cap ledger lives in
+        # `jobify.db`, not either phase's return value) — fetched fresh here
+        # so the cycle telemetry line always reflects spend as of cycle end.
+        global_spend = db.get_global_month_to_date_spend()
+        global_cap = config.HOSTED_GLOBAL_MONTHLY_CAP_USD
+        summary_line = _summary_line(
+            mode, discovery_summary, fanout_summary, global_spend, global_cap
+        )
 
-    return {"discovery": discovery_summary, "fanout": fanout_summary}
+        # Logs/print always fire regardless of ntfy's outcome (unset topic,
+        # network failure, etc.) — the ntfy push is an additional side-effect
+        # on top of cycle visibility, not a gate on it. Only reachable on
+        # the success path, same as before ADM-2 Task 2 — a failure never
+        # gets a summary line (there's nothing coherent to summarize).
+        logger.info(
+            "hosted worker cycle done: discovery=%s fanout=%s",
+            discovery_summary, fanout_summary,
+        )
+        print(summary_line)
+        send_ntfy_summary(summary_line)
+
+        return {"discovery": discovery_summary, "fanout": fanout_summary}
+    except Exception as exc:  # noqa: BLE001 — record, then re-raise unchanged (fail-loud policy above)
+        error = str(exc)
+        raise
+    finally:
+        finished_at = datetime.now(timezone.utc).isoformat()
+        cycle_mode = (
+            "single_user" if user_id else ("discovery_only" if discovery_only else "full")
+        )
+        triggered_by = "dispatch" if user_id else ("cron" if discovery_only else "manual")
+        try:
+            db.insert_hunt_cycle_row(
+                started_at=started_at,
+                finished_at=finished_at,
+                mode=cycle_mode,
+                triggered_by=triggered_by,
+                users_scored=(fanout_summary or {}).get("users_processed", 0),
+                postings_fetched=(discovery_summary or {}).get("fetched", 0),
+                postings_upserted=(discovery_summary or {}).get("upserted", 0),
+                counters=fanout_summary,
+                cost_usd=(fanout_summary or {}).get("cost_usd", 0.0),
+                error=error,
+            )
+        except Exception as persist_exc:  # noqa: BLE001 — telemetry write must never mask the cycle's real outcome
+            logger.error(
+                "hosted worker: failed to persist hunt_cycles row: %s", persist_exc,
+            )
 
 
 def run() -> None:

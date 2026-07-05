@@ -40,3 +40,7 @@ cache/
 
 # jobify hosted env (Cowork H7 Part-B prep, 2026-07-03)
 .env.*
+
+# subagent-driven-development scratch workspace (task briefs, reports,
+# review packages) — never commit.
+.superpowers/
