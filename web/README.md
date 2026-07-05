@@ -73,7 +73,7 @@ Infra hosting decision is deferred. Everything here runs against a local
 
 The `(app)` route group's layout (`app/(app)/layout.tsx`) is the actual
 auth + invite gate — not `proxy.ts` (Next.js 16's renamed `middleware.ts`),
-which only refreshes the session cookie. This mirrors the papercuts
+which only refreshes the session cookie. This mirrors a proven magic-link
 pattern: the chunked Supabase auth cookie isn't reliably readable from
 every proxy runtime, so Server Components are the gate and proxy is a
 refresh layer only.

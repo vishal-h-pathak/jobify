@@ -1,14 +1,15 @@
 # OPERATIONS — running jobify cloud for friends
 
 The ops runbook for the hosted aggregator (`planning/HOSTED_AGGREGATOR_PLAN.md`,
-H7 of the hosted wave). Audience: Vishal, operating the live Supabase project
+H7 of the hosted wave). Audience: the operator of the live Supabase project
 (`vujlecpmurismvnjebcf`), the Vercel deploy of `web/`, and the
 `.github/workflows/hosted-hunt.yml` cron. For the budget mechanics themselves
 see [`docs/COST_RAILS.md`](COST_RAILS.md); for the scoring ladder see
 [`docs/SCORING.md`](SCORING.md).
 
-**Prod URL:** https://jobify-swart.vercel.app (Vercel project
-`vishal-pathaks-projects-f50febeb/jobify`, deployed from `web/` in H7 Part B,
+**Prod URL:** https://jobify-swart.vercel.app (Vercel project: see the
+Vercel dashboard or `vercel project ls` — org/project slugs are operator-
+identifying, so they live outside the repo; deployed from `web/` in H7 Part B,
 2026-07-03). Invite links: `https://jobify-swart.vercel.app/invite?code=<code>`.
 
 ---

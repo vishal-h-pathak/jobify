@@ -4,7 +4,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { hasClaimedInvite } from "@/lib/db/invites";
 
 // Auth + invite gate lives here, not in proxy.ts — see
-// lib/supabase/updateSession.ts for why (mirrors the papercuts pattern).
+// lib/supabase/updateSession.ts for why (mirrors a proven magic-link pattern).
 export const dynamic = "force-dynamic";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {

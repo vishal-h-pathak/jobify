@@ -6,7 +6,7 @@ import type { Database } from "@/lib/supabase/types";
  * The redirect `NextResponse` is built up front so cookies attach
  * directly to it — going through `next/headers` `cookies()` here can
  * racily lose cookies set during `exchangeCodeForSession` under the App
- * Router's Route Handlers (a real bug hit in the papercuts magic-link
+ * Router's Route Handlers (a real bug hit in a prior magic-link
  * implementation this route mirrors). Don't "simplify" this back to
  * `cookies()` without re-testing that.
  */
