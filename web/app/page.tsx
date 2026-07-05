@@ -32,7 +32,7 @@ export default async function Home() {
 
       <ol className="flex max-w-md flex-col gap-2 text-left text-sm text-ink-muted">
         <li>A short interview about what you&apos;re actually looking for.</li>
-        <li>A daily feed scored against that — not keyword soup.</li>
+        <li>A feed scored against that, whenever you ask — not keyword soup.</li>
         <li>Reasons for every match, so you know why it&apos;s there.</li>
       </ol>
 
