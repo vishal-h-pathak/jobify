@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "../supabase/types";
 import type { ChatMessage, InterviewStage, InterviewTurnResult } from "../anthropic/interview";
+import { SEEDED_GREETING } from "../anthropic/interview";
 import { ONBOARDING_MODEL } from "../anthropic/client";
 import { applyToolCalls } from "./applyToolCalls";
 import { buildProfileDoc, type ExtractedState } from "../profile/buildDoc";
@@ -45,7 +46,18 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     return { assistantText: "Your profile is already built — head to the feed.", stage: "done", done: true };
   }
 
-  const history: ChatMessage[] = [...session.messages, { role: "user", content: userMessage }];
+  // On the very first real turn (no assistant message has ever been
+  // persisted, including the seeded greeting), prepend the seeded greeting
+  // so the model sees its own opening line as context and the transcript
+  // persists in full on reload. This is a local prepend, not an extra
+  // Anthropic call — the single runTurn call below still fires exactly
+  // once, and so does the ledger row.
+  const priorMessages: ChatMessage[] =
+    session.messages.length === 0
+      ? [{ role: "assistant", content: SEEDED_GREETING }]
+      : session.messages;
+
+  const history: ChatMessage[] = [...priorMessages, { role: "user", content: userMessage }];
   const turnResult = await runTurn(history);
   const { extracted, stage, done } = applyToolCalls(turnResult.toolCalls, session.extracted, session.stage);
   const newMessages: ChatMessage[] = [...history, { role: "assistant", content: turnResult.assistantText }];
