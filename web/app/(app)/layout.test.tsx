@@ -37,14 +37,20 @@ describe("(app) layout — invite gate", () => {
     await expect(AppLayout({ children: "content" })).rejects.toThrow("REDIRECT:/invite");
   });
 
-  it("renders the nav plus children once signed in with a claimed invite", async () => {
+  it("renders the header, main content, and footer once signed in with a claimed invite", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     hasClaimedInviteMock.mockResolvedValue(true);
 
     const result = await AppLayout({ children: "content" });
-    const [nav, children] = result.props.children;
-    expect(children).toBe("content");
-    const navLinks = nav.props.children.map((link: { props: { href: string } }) => link.props.href);
-    expect(navLinks).toEqual(["/feed", "/settings"]);
+    const [header, main, footer] = result.props.children;
+
+    const [wordmarkLink, navGroup] = header.props.children.props.children;
+    expect(wordmarkLink.props.href).toBe("/feed");
+    const [navLinks, signOutButton] = navGroup.props.children;
+    expect(navLinks.type.name).toBe("NavLinks");
+    expect(signOutButton.type.name).toBe("SignOutButton");
+
+    expect(main.props.children).toBe("content");
+    expect(footer.props.children).toMatch(/private beta for friends/);
   });
 });
