@@ -37,3 +37,6 @@ cache/
 # Forensic backup of .git/ from a prior secret-removal pass. 2.2 MB,
 # kept on local disk only — never commit.
 .git.backup-pre-secret-cleanup/
+
+# jobify hosted env (Cowork H7 Part-B prep, 2026-07-03)
+.env.*
