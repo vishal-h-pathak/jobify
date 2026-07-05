@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const getUserMock = vi.fn();
 const hasClaimedInviteMock = vi.fn();
+const isAdminMock = vi.fn();
 const redirectMock = vi.fn((url: string) => {
   // Mirrors next/navigation's real redirect(): throws to unwind rendering,
   // so a layout that redirects never falls through to `return children`.
@@ -13,6 +14,7 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock } })),
 }));
 vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
 
 const { default: AppLayout } = await import("./layout");
 
@@ -20,6 +22,8 @@ describe("(app) layout — invite gate", () => {
   beforeEach(() => {
     getUserMock.mockClear();
     hasClaimedInviteMock.mockClear();
+    isAdminMock.mockReset();
+    isAdminMock.mockReturnValue(false);
     redirectMock.mockClear();
   });
 
@@ -48,9 +52,33 @@ describe("(app) layout — invite gate", () => {
     expect(wordmarkLink.props.href).toBe("/feed");
     const [navLinks, signOutButton] = navGroup.props.children;
     expect(navLinks.type.name).toBe("NavLinks");
+    expect(navLinks.props.isAdmin).toBe(false);
     expect(signOutButton.type.name).toBe("SignOutButton");
 
     expect(main.props.children).toBe("content");
     expect(footer.props.children).toMatch(/private beta for friends/);
+  });
+
+  it("an admin without a claimed invite bypasses the invite gate", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "admin-1", email: "admin@example.com" } } });
+    isAdminMock.mockReturnValue(true);
+
+    const result = await AppLayout({ children: "content" });
+
+    expect(redirectMock).not.toHaveBeenCalled();
+    // Short-circuits on the admin bypass — no need to query the invite.
+    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
+    const [header] = result.props.children;
+    const [, navGroup] = header.props.children.props.children;
+    const [navLinks] = navGroup.props.children;
+    expect(navLinks.props.isAdmin).toBe(true);
+  });
+
+  it("a non-admin without a claimed invite still redirects to /invite", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    isAdminMock.mockReturnValue(false);
+    hasClaimedInviteMock.mockResolvedValue(false);
+
+    await expect(AppLayout({ children: "content" })).rejects.toThrow("REDIRECT:/invite");
   });
 });

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { hasClaimedInvite } from "@/lib/db/invites";
+import { isAdmin } from "@/lib/admin/isAdmin";
 import { NavLinks } from "./NavLinks";
 import { SignOutButton } from "./SignOutButton";
 
@@ -16,7 +17,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const claimed = await hasClaimedInvite(supabase);
+  // Admins bypass the invite gate — they may not hold a claimed code.
+  const admin = isAdmin(user);
+  const claimed = admin || (await hasClaimedInvite(supabase));
   if (!claimed) redirect("/invite");
 
   return (
@@ -27,7 +30,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             jobify<span className="text-amber">.</span>
           </Link>
           <div className="flex items-center gap-6">
-            <NavLinks />
+            <NavLinks isAdmin={admin} />
             <SignOutButton />
           </div>
         </div>

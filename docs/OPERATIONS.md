@@ -34,6 +34,7 @@ gracefully (documented per-row), it never crashes.
 | `HOSTED_GLOBAL_MONTHLY_CAP_USD` | optional (default `100`) | — | optional | Override the $100/month total non-BYO pool cap. |
 | `SERPAPI_KEY`, `JSEARCH_API_KEY` | optional | — | optional | Paid discovery sources, unioned across every hosted user. |
 | `ONBOARDING_CLAUDE_MODEL` | — | optional (default `claude-sonnet-5`) | optional | Onboarding chat's model override. |
+| `ADMIN_EMAILS` | — | optional | optional | Comma-separated emails (case-insensitive, trimmed) that can reach `/admin`. Unset = nobody is admin. See §6. |
 
 Setting GHA secrets (values piped, never pasted into argv or echoed):
 
@@ -168,3 +169,42 @@ where validation_status->>'status' = 'invalid';
    true` means their stored key failed to decrypt (likely a secret
    rotation they haven't re-pasted past) or the key itself is invalid/out
    of credits at Anthropic.
+
+---
+
+## 6. Admin panel
+
+`/admin` (web, ADM-1) is a lightweight in-app alternative to the SQL
+snippets in §4 and the `jobify-hosted-invite` CLI in §2 — three read-mostly
+cards (Invites, Users, Pool health) for day-to-day ops, no SQL Editor
+required.
+
+**Who can reach it — `ADMIN_EMAILS`.** Set the env var (comma-separated,
+case-insensitive, trimmed) on Vercel (`vercel env add ADMIN_EMAILS
+production`) to the operator's own email(s). There is no admin flag in the
+DB and no client-side secret — `lib/admin/isAdmin.ts` reads
+`process.env.ADMIN_EMAILS` server-side on every request. Unset means
+nobody is admin; the "Admin" nav link only renders for admins, but every
+`/admin` page load and `/api/admin/*` route re-checks server-side
+regardless (the link is a convenience, not the security boundary).
+
+**Admins bypass the invite gate.** An admin's own account may never have
+claimed an invite code (there's no reason to spend one on yourself), so
+the `(app)` layout and the onboarding API routes treat "has a claimed
+invite OR is an admin" as passing. This only affects those specific
+gates — an admin still needs a real Supabase Auth session (magic link)
+like anyone else.
+
+**Minting invites — UI vs CLI.** The panel's "Mint invite" button (N =
+1/3/5) hits `POST /api/admin/invites` and calls the same
+`jobify-hosted-invite --mint`-equivalent code-generation shape (12-char
+lowercase base64url) via the service-role client — freshly minted codes
+render with a one-click copy of the full `/invite?code=...` link. Prefer
+the UI day-to-day; the CLI (§2) still works identically and is the only
+option if you'd rather not sign in as an admin (e.g. scripting a bulk
+mint).
+
+**Pool health has no trigger-hunt button in v1** — running a hunt cycle
+on demand needs a GitHub token to dispatch the `hosted-hunt.yml` workflow,
+which the web app doesn't hold. Hunts run daily on cron regardless; use
+`gh workflow run hosted-hunt.yml` if you need one to fire early.

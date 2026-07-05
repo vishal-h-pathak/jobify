@@ -8,12 +8,20 @@ const LINKS = [
   { href: "/settings", label: "Settings" },
 ];
 
-export function NavLinks() {
+const ADMIN_LINK = { href: "/admin", label: "Admin" };
+
+/**
+ * `isAdmin` is computed server-side (the (app) layout) and only crosses
+ * into this client component as a rendering hint — the admin routes/pages
+ * never rely on this link being hidden for actual security.
+ */
+export function NavLinks({ isAdmin = false }: { isAdmin?: boolean }) {
   const pathname = usePathname();
+  const links = isAdmin ? [...LINKS, ADMIN_LINK] : LINKS;
 
   return (
     <div className="flex items-center gap-6 text-sm font-medium">
-      {LINKS.map(({ href, label }) => {
+      {links.map(({ href, label }) => {
         const active = pathname === href || pathname?.startsWith(`${href}/`);
         return (
           <Link
