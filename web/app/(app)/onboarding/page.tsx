@@ -84,19 +84,21 @@ export interface RailStep {
   status: RailStepStatus;
 }
 
-export const RAIL_LABELS = ["About you", "Resume", "Basics", "Targeting", "Done"] as const;
+export const RAIL_LABELS = ["Resume", "Basics", "What you want", "Done"] as const;
+
+const STAGE_ORDER: InterviewStage[] = ["resume", "identity", "targeting", "done"];
 
 /**
- * Maps the backend's 4 stage values onto the 5-label rail. `resume` splits
- * into two rail states based on how many assistant messages have been
- * shown so far (counting the seeded greeting as the first one): <=2 means
- * only the opening + at most one interest follow-up have happened ("About
- * you" is current); >=3 means the assistant has moved on to asking for the
- * resume ("Resume" is current, "About you" complete).
+ * Maps the backend's 4 stage values 1:1 onto the 4-label rail (INT-1:
+ * resume -> Resume, identity -> Basics, targeting -> What you want, done ->
+ * Done). The prior 5-label scheme split `resume` into two rail states via
+ * an assistant-message-count heuristic to represent a pre-resume interest
+ * exchange; that exchange no longer exists (the seeded opener asks for the
+ * resume directly), so there's exactly one rail state per backend stage
+ * now and no message-count input is needed.
  */
-export function computeRailSteps(stage: InterviewStage, assistantMessageCount: number): RailStep[] {
-  const currentIndex =
-    stage === "done" ? 4 : stage === "targeting" ? 3 : stage === "identity" ? 2 : assistantMessageCount >= 3 ? 1 : 0;
+export function computeRailSteps(stage: InterviewStage): RailStep[] {
+  const currentIndex = STAGE_ORDER.indexOf(stage);
 
   return RAIL_LABELS.map((label, i) => ({
     label,
@@ -407,8 +409,7 @@ export default function OnboardingPage() {
   }, []);
 
   const transcript = buildDisplayMessages(state.messages);
-  const assistantMessageCount = transcript.filter((m) => m.role === "assistant").length;
-  const railSteps = computeRailSteps(state.stage, assistantMessageCount);
+  const railSteps = computeRailSteps(state.stage);
 
   useEffect(() => {
     const el = scrollRef.current;
