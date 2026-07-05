@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getOrCreateSession } from "@/lib/db/onboardingSession";
 import { hasClaimedInvite } from "@/lib/db/invites";
+import { isAdmin } from "@/lib/admin/isAdmin";
 
 export async function GET() {
   const supabase = await createSupabaseServerClient();
@@ -13,7 +14,8 @@ export async function GET() {
   }
   // Server-side invite enforcement (see turn/route.ts): getOrCreateSession
   // WRITES an onboarding_sessions row, so the uninvited must 403 here too.
-  if (!(await hasClaimedInvite(supabase))) {
+  // Admins bypass the invite gate — they may not hold a claimed code.
+  if (!isAdmin(user) && !(await hasClaimedInvite(supabase))) {
     return NextResponse.json({ error: "invite required" }, { status: 403 });
   }
 

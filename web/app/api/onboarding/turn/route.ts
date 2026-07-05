@@ -3,6 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getOrCreateSession } from "@/lib/db/onboardingSession";
 import { hasClaimedInvite } from "@/lib/db/invites";
+import { isAdmin } from "@/lib/admin/isAdmin";
 import { runInterviewTurn } from "@/lib/anthropic/interview";
 import { handleOnboardingTurn } from "@/lib/onboarding/handleTurn";
 
@@ -17,7 +18,8 @@ export async function POST(request: Request) {
   // Server-side invite enforcement: the (app) layout gates PAGES only —
   // API routes are reachable directly. No claimed invite → no LLM spend,
   // no profile writes (spec: 12_h3_onboarding_web.md task 2).
-  if (!(await hasClaimedInvite(supabase))) {
+  // Admins bypass the invite gate — they may not hold a claimed code.
+  if (!isAdmin(user) && !(await hasClaimedInvite(supabase))) {
     return NextResponse.json({ error: "invite required" }, { status: 403 });
   }
 
