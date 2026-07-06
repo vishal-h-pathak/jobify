@@ -41,6 +41,51 @@ describe("INTERVIEW_SYSTEM_PROMPT — tone ban-list", () => {
   });
 });
 
+describe("INTERVIEW_SYSTEM_PROMPT — FIX-1: every non-terminal turn ends with a question", () => {
+  it("contains a hard turn-structure rule requiring every turn to end with exactly one question", () => {
+    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/TURN-STRUCTURE RULE \(hard constraint\)/);
+    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/must end with exactly one question/i);
+  });
+
+  it("forbids bare acknowledgment-only turns by name", () => {
+    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/standalone acknowledgment-only turns are forbidden/i);
+    expect(INTERVIEW_SYSTEM_PROMPT).toContain('"Good, moving on."');
+    expect(INTERVIEW_SYSTEM_PROMPT).toContain('"Got it — locked in."');
+  });
+
+  it("bans empty messages explicitly", () => {
+    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/never return an empty message/i);
+  });
+
+  it("states advancing a stage is never itself a free turn", () => {
+    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/advancing to a new stage is never itself a free turn/i);
+  });
+
+  it("instructs record_resume and record_identity to ask the next stage's question in the SAME message", () => {
+    const sameMessageInstances = INTERVIEW_SYSTEM_PROMPT.match(/in that SAME message immediately ask/gi) ?? [];
+    expect(sameMessageInstances.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("instructs stage 3 sub-questions to acknowledge and ask the next question in the same message", () => {
+    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(
+      /immediately ask the next question in the SAME message — never send the acknowledgment alone/i
+    );
+  });
+});
+
+describe("INTERVIEW_SYSTEM_PROMPT — FIX-1: never re-ask resume-known fields", () => {
+  it("contains a hard rule that name/role/employer/education/skills/location come from the resume", () => {
+    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/NEVER RE-ASK RESUME-KNOWN FIELDS \(hard constraint\)/);
+    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/never ask the user for any of them again/i);
+  });
+
+  it("stage 2 explicitly forbids asking for the name/role/employer/education/skills already extracted", () => {
+    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(
+      /Do NOT ask for their name, current\/last role, employer, education, or skills/i
+    );
+  });
+});
+
 describe("INTERVIEW_SYSTEM_PROMPT — resume-first stage 1: reflect-back", () => {
   it("instructs reflecting back a compact summary ending with the exact correction prompt", () => {
     expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/REFLECT BACK/);

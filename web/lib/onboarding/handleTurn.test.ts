@@ -228,6 +228,147 @@ describe("handleOnboardingTurn", () => {
     expect(historyArg.filter((m) => m.content === SEEDED_GREETING)).toHaveLength(1);
   });
 
+  it("FIX-1: retries once on an empty assistant response, then falls back to a deterministic stage-appropriate question if still empty", async () => {
+    const runTurn = vi.fn(async () => ({
+      assistantText: "",
+      toolCalls: [],
+      usage: { inputTokens: 5, outputTokens: 0 },
+    }));
+
+    const result = await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "ok",
+      session: baseSession({ stage: "identity" }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    // Retried exactly once (two total attempts), never more.
+    expect(runTurn).toHaveBeenCalledTimes(2);
+
+    // The user must see a non-empty, stage-appropriate question — never a
+    // blank bubble.
+    expect(result.assistantText.trim()).not.toBe("");
+    expect(result.assistantText).toContain("?");
+    expect(result.assistantText).toMatch(/logistics|salary floor/i);
+
+    // A blank turn must never be persisted to messages.
+    const savedMessages = (saveSessionMock.mock.calls[0][2] as { messages: ChatMessage[] }).messages;
+    expect(savedMessages.every((m) => m.content.trim() !== "")).toBe(true);
+    expect(savedMessages.at(-1)?.content).toBe(result.assistantText);
+
+    // Still exactly one budget_ledger row, even though runTurn fired twice.
+    expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("FIX-1: does not retry when the first assistant response is non-empty", async () => {
+    const runTurn = vi.fn(async () => ({
+      assistantText: "Got it — what's your target comp?",
+      toolCalls: [],
+      usage: { inputTokens: 10, outputTokens: 10 },
+    }));
+
+    await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "40 hourly",
+      session: baseSession({ stage: "identity" }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    expect(runTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("FIX-1: recovers if the retry attempt returns real text (uses the retry's text, not the fallback)", async () => {
+    let call = 0;
+    const runTurn = vi.fn(async () => {
+      call += 1;
+      if (call === 1) return { assistantText: "", toolCalls: [], usage: { inputTokens: 5, outputTokens: 0 } };
+      return {
+        assistantText: "Got it — what's your target comp?",
+        toolCalls: [],
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+    });
+
+    const result = await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "ok",
+      session: baseSession({ stage: "identity" }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    expect(runTurn).toHaveBeenCalledTimes(2);
+    expect(result.assistantText).toBe("Got it — what's your target comp?");
+  });
+
+  it("FIX-1: a non-empty stage-transition turn that only acknowledges (no question) gets the next question appended", async () => {
+    const runTurn = vi.fn(async () => ({
+      assistantText: "Good, moving on.",
+      toolCalls: [{ name: "record_resume", input: { cv_markdown: "# CV" } }],
+      usage: { inputTokens: 40, outputTokens: 10 },
+    }));
+
+    const result = await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "This is good.",
+      session: baseSession({ stage: "resume" }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    // record_resume advances resume -> identity; the repaired turn must
+    // still contain the original acknowledgment AND end with a question.
+    expect(result.stage).toBe("identity");
+    expect(result.assistantText).toContain("Good, moving on.");
+    expect(result.assistantText).toContain("?");
+    expect(result.assistantText).toMatch(/logistics|salary floor/i);
+
+    const savedMessages = (saveSessionMock.mock.calls[0][2] as { messages: ChatMessage[] }).messages;
+    expect(savedMessages.at(-1)?.content).toBe(result.assistantText);
+  });
+
+  it("FIX-1: does not append a fallback question once the interview is done (finish_interview turn)", async () => {
+    const runTurn = vi.fn(async () => ({
+      assistantText: "All set!",
+      toolCalls: [{ name: "finish_interview", input: {} }],
+      usage: { inputTokens: 20, outputTokens: 5 },
+    }));
+
+    const result = await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "yes that's everything",
+      session: baseSession({
+        stage: "targeting",
+        extracted: {
+          identity: { name: "Alex", email: "alex@example.com" },
+          targeting: {
+            tiers: [{ key: "tier_1", label: "Backend engineering" }],
+            hard_disqualifiers: [],
+            soft_concerns: [],
+            thesis_summary: "Wants backend roles.",
+          },
+        },
+      }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    expect(result.done).toBe(true);
+    expect(result.assistantText).toBe("All set!");
+  });
+
   it("short-circuits (no Anthropic call, no ledger row) once the session is already complete", async () => {
     const runTurn = vi.fn();
 
