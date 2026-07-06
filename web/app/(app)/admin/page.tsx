@@ -6,21 +6,14 @@ import { listInvitesForAdmin } from "@/lib/admin/invites";
 import { listAllowlistedEmails } from "@/lib/admin/allowlist";
 import { getPoolHealth } from "@/lib/admin/poolHealth";
 import { Card } from "@/components/ui/Card";
-import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { MintInviteForm } from "./MintInviteForm";
 import { FriendsCard } from "./FriendsCard";
-import { RunHuntForUserButton } from "./RunHuntForUserButton";
+import { ProfileReviewRow } from "./ProfileReviewRow";
 
 // Every field here changes as friends sign up / the worker runs — never
 // statically cache (same reasoning as the settings page).
 export const dynamic = "force-dynamic";
-
-function validationTone(status: string | null): BadgeTone {
-  if (status === "valid") return "success";
-  if (status === "invalid") return "danger";
-  return "neutral";
-}
 
 export default async function AdminPage() {
   const gate = await requireAdmin();
@@ -103,21 +96,7 @@ export default async function AdminPage() {
               </thead>
               <tbody>
                 {users.map((user) => (
-                  <tr key={user.userId} className="border-t border-line">
-                    <td className="py-2 pr-4">{user.email}</td>
-                    <td className="py-2 pr-4">
-                      <Badge tone={validationTone(user.validationStatus)}>{user.validationStatus ?? "no profile"}</Badge>
-                    </td>
-                    <td className="py-2 pr-4 text-ink-muted">
-                      {user.matchCounts.new} new · {user.matchCounts.saved} saved · {user.matchCounts.applied} applied ·{" "}
-                      {user.matchCounts.dismissed} dismissed
-                    </td>
-                    <td className="py-2 pr-4 text-ink-muted">${user.spendUsdMtd.toFixed(2)}</td>
-                    <td className="py-2 pr-4 text-ink-muted">{user.hasByoKey ? "Yes" : "No"}</td>
-                    <td className="py-2">
-                      <RunHuntForUserButton userId={user.userId} />
-                    </td>
-                  </tr>
+                  <ProfileReviewRow key={user.userId} user={user} />
                 ))}
               </tbody>
             </table>

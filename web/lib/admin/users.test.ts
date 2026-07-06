@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listAllUserEmails, listUsersOverview } from "./users";
+import { listAllUserEmails, listUsersOverview, validationTone } from "./users";
 
 function chainable(result: { data: unknown; error: unknown; count?: number }) {
   const chain: Record<string, unknown> = {};
@@ -40,6 +40,15 @@ function fakeAdmin(opts: {
     listUsersCalls,
   };
 }
+
+describe("validationTone", () => {
+  it("is success for 'valid', danger for 'invalid', neutral otherwise", () => {
+    expect(validationTone("valid")).toBe("success");
+    expect(validationTone("invalid")).toBe("danger");
+    expect(validationTone(null)).toBe("neutral");
+    expect(validationTone("unchecked")).toBe("neutral");
+  });
+});
 
 describe("listAllUserEmails", () => {
   it("returns id -> email for a single page", async () => {

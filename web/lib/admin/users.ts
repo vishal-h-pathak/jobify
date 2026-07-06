@@ -1,5 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase/types";
+import type { BadgeTone } from "@/components/ui/Badge";
+
+/** Shared by the admin Users table and its profile-review expander. */
+export function validationTone(status: string | null): BadgeTone {
+  if (status === "valid") return "success";
+  if (status === "invalid") return "danger";
+  return "neutral";
+}
 
 /**
  * Every auth user's id -> email, paginating past `listUsers()`'s default
