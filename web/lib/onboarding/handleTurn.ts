@@ -34,6 +34,31 @@ export interface HandleTurnResult {
 }
 
 /**
+ * FIX-1 (2026-07-05): deterministic fallback questions, keyed by the stage
+ * the turn lands on. Used both when the model returns an empty response
+ * (after one retry) and, via the post-check below, when a non-empty
+ * response has no question mark in it at all — e.g. a bare "Good, moving
+ * on." acknowledgment. `done` has no next question, so it gets a
+ * completion line instead.
+ */
+const STAGE_FALLBACK_QUESTIONS: Record<Exclude<InterviewStage, "done">, string> = {
+  resume: "Quick check on what I pulled from your resume — anything wrong or missing?",
+  identity:
+    "Logistics, all in one go: where are you based, remote-only or is some onsite fine (and where), " +
+    "and what's the salary floor below which you won't even look?",
+  targeting:
+    "More of what you already do, a senior version of it, or something adjacent — which direction fits, " +
+    "or a mix? Pick, combine, or correct.",
+};
+
+const DONE_FALLBACK_TEXT =
+  'Your profile is built — head to your feed and hit "Run my hunt" to get your first results.';
+
+function fallbackAssistantText(stage: InterviewStage): string {
+  return stage === "done" ? DONE_FALLBACK_TEXT : STAGE_FALLBACK_QUESTIONS[stage];
+}
+
+/**
  * The onboarding chat's core per-turn logic, factored out of the route
  * handler so it's directly unit-testable with an injected `runTurn` (mock
  * Anthropic) and mocked db helpers — see `lib/onboarding/handleTurn.test.ts`.
@@ -59,9 +84,36 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
       : session.messages;
 
   const history: ChatMessage[] = [...priorMessages, { role: "user", content: userMessage }];
-  const turnResult = await runTurn(history);
+  let turnResult = await runTurn(history);
+
+  // FIX-1: a model turn that comes back empty/whitespace-only must never
+  // reach the user as a blank bubble. Retry once (still one real attempt at
+  // getting substantive text); if it's still empty, the caller below falls
+  // back to a deterministic stage-appropriate question. The turn is still
+  // billed either way — that's acceptable, the user must just never see
+  // nothing.
+  if (turnResult.assistantText.trim() === "") {
+    turnResult = await runTurn(history);
+  }
+
   const { extracted, stage, done } = applyToolCalls(turnResult.toolCalls, session.extracted, session.stage);
-  const newMessages: ChatMessage[] = [...history, { role: "assistant", content: turnResult.assistantText }];
+
+  let assistantText = turnResult.assistantText.trim();
+  if (assistantText === "") {
+    console.warn("handleOnboardingTurn: empty assistant response survived retry, using stage fallback", {
+      userId,
+      stage,
+    });
+    assistantText = fallbackAssistantText(stage);
+  } else if (stage !== "done" && !assistantText.includes("?")) {
+    // Deterministic post-check (preferred over relying on the prompt alone):
+    // a non-empty turn that never asks anything — e.g. a bare "Good, moving
+    // on." acknowledgment — gets the next question appended so the user
+    // always has something to answer.
+    assistantText = `${assistantText} ${fallbackAssistantText(stage)}`;
+  }
+
+  const newMessages: ChatMessage[] = [...history, { role: "assistant", content: assistantText }];
 
   // The authenticated user's real email always wins over whatever the model
   // supplied (or fabricated) via record_identity — overwrite unconditionally,
@@ -102,5 +154,5 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     });
   }
 
-  return { assistantText: turnResult.assistantText, stage, done, validation };
+  return { assistantText, stage, done, validation };
 }
