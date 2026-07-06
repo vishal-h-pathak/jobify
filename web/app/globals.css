@@ -52,3 +52,67 @@ select,
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-amber) 40%, transparent);
 }
+
+/* ONB redesign §3 type ramp — a global h1 floor so any heading that doesn't set
+   its own size renders at least text-2xl. Pages that already set an explicit
+   Tailwind size class (e.g. text-4xl on the landing wordmark, text-xl on several
+   app pages) are unaffected — a class selector always wins over this element
+   selector. Bumping those explicit page-owned headings to text-2xl is each page
+   owner's call, not this layout-level floor's job. */
+@layer base {
+  h1 {
+    font-size: 1.5rem;
+    line-height: 2rem;
+  }
+}
+
+/* ONB redesign §3 motion utilities — opt-in animation classes. Unused by any file
+   in this session; the onboarding surface (ONB-B) applies them to its stage panel
+   and chat messages. Both honor prefers-reduced-motion below. */
+@keyframes panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.panel-enter {
+  animation: panel-enter 240ms ease-out;
+}
+
+.message-enter {
+  animation: message-enter 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-enter,
+  .message-enter {
+    animation: none;
+  }
+}
+
+/* ONB redesign §3 "one flourish" — fixed, very subtle radial amber glow. Opt-in,
+   unused by any file in this session; the onboarding surface (ONB-B) applies it
+   behind its panel. */
+.amber-radial-glow {
+  background-image: radial-gradient(
+    circle at 50% 0%,
+    color-mix(in srgb, var(--color-amber) 6%, transparent),
+    transparent 70%
+  );
+}
