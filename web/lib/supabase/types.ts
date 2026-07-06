@@ -239,6 +239,24 @@ export interface Database {
         };
         Relationships: [];
       };
+      allowed_emails: {
+        Row: {
+          email: string;
+          note: string | null;
+          created_at: string;
+          consumed_by: string | null;
+          consumed_at: string | null;
+        };
+        Insert: {
+          email: string;
+          note?: string | null;
+        };
+        Update: {
+          consumed_by?: string | null;
+          consumed_at?: string | null;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {

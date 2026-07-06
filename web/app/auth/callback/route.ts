@@ -2,7 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import type { Database } from "@/lib/supabase/types";
 import { hasClaimedInvite } from "@/lib/db/invites";
+import { consumeAllowlistedEmail } from "@/lib/db/allowlist";
 import { isAdmin } from "@/lib/admin/isAdmin";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 /**
  * The redirect `NextResponse` is built up front so cookies attach
@@ -54,9 +56,21 @@ export async function GET(request: NextRequest) {
 
   // No explicit (or unsafe) next: admins land on /admin (they may never
   // hold a claimed invite of their own — see lib/admin/requireAdmin.ts);
-  // everyone else lands on /feed if claimed, /invite otherwise.
+  // everyone else lands on /feed if claimed. Otherwise (SGN-1), check
+  // whether the operator pre-approved this email in `allowed_emails` — a
+  // hit auto-mints+claims an invite and sends them straight to
+  // /onboarding; a miss (or any failure) falls through to the normal
+  // /invite routing untouched.
   if (!safeNext) {
-    const target = isAdmin(data.user) ? "/admin" : (await hasClaimedInvite(supabase)) ? "/feed" : "/invite";
+    let target: string;
+    if (isAdmin(data.user)) {
+      target = "/admin";
+    } else if (await hasClaimedInvite(supabase)) {
+      target = "/feed";
+    } else {
+      const admin = createSupabaseAdminClient();
+      target = (await consumeAllowlistedEmail(admin, data.user)) ? "/onboarding" : "/invite";
+    }
     response.headers.set("location", `${origin}${target}`);
   }
 

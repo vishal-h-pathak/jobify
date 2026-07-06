@@ -3,11 +3,13 @@ import { requireAdmin } from "@/lib/admin/requireAdmin";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { listAllUserEmails, listUsersOverview } from "@/lib/admin/users";
 import { listInvitesForAdmin } from "@/lib/admin/invites";
+import { listAllowlistedEmails } from "@/lib/admin/allowlist";
 import { getPoolHealth } from "@/lib/admin/poolHealth";
 import { Card } from "@/components/ui/Card";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { MintInviteForm } from "./MintInviteForm";
+import { FriendsCard } from "./FriendsCard";
 import { RunHuntForUserButton } from "./RunHuntForUserButton";
 
 // Every field here changes as friends sign up / the worker runs — never
@@ -29,8 +31,9 @@ export default async function AdminPage() {
   // Only constructed after requireAdmin() confirms the caller is an admin.
   const admin = createSupabaseAdminClient();
   const emails = await listAllUserEmails(admin);
-  const [invites, users, poolHealth] = await Promise.all([
+  const [invites, friends, users, poolHealth] = await Promise.all([
     listInvitesForAdmin(admin, emails),
+    listAllowlistedEmails(admin),
     listUsersOverview(admin, emails),
     getPoolHealth(admin),
   ]);
@@ -74,6 +77,11 @@ export default async function AdminPage() {
             </table>
           </div>
         )}
+      </Card>
+
+      <Card className="flex flex-col gap-4">
+        <h2 className="font-medium text-ink">Friends</h2>
+        <FriendsCard rows={friends} />
       </Card>
 
       <Card className="flex flex-col gap-4">

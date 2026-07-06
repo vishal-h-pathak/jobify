@@ -21,6 +21,9 @@ vi.mock("@/lib/admin/users", () => ({
 const listInvitesForAdminMock = vi.fn(async () => []);
 vi.mock("@/lib/admin/invites", () => ({ listInvitesForAdmin: listInvitesForAdminMock }));
 
+const listAllowlistedEmailsMock = vi.fn(async () => []);
+vi.mock("@/lib/admin/allowlist", () => ({ listAllowlistedEmails: listAllowlistedEmailsMock }));
+
 const getPoolHealthMock = vi.fn(async () => ({
   postingsCount: 0,
   newestLastSeenAt: null,
@@ -40,6 +43,7 @@ describe("/admin page", () => {
     listAllUserEmailsMock.mockClear();
     listUsersOverviewMock.mockClear();
     listInvitesForAdminMock.mockClear();
+    listAllowlistedEmailsMock.mockClear();
     getPoolHealthMock.mockClear();
   });
 
@@ -55,16 +59,18 @@ describe("/admin page", () => {
     expect(createSupabaseAdminClientMock).not.toHaveBeenCalled();
   });
 
-  it("renders the three cards for an admin", async () => {
+  it("renders the four cards for an admin", async () => {
     requireAdminMock.mockResolvedValue({ ok: true, user: { id: "admin-1" }, supabase: {} });
 
     const result = await AdminPage();
-    const [heading, invitesCard, usersCard, poolCard] = result.props.children;
+    const [heading, invitesCard, friendsCard, usersCard, poolCard] = result.props.children;
 
     expect(heading.props.children).toBe("Admin");
     expect(invitesCard.props.children[0].props.children).toBe("Invites");
+    expect(friendsCard.props.children[0].props.children).toBe("Friends");
     expect(usersCard.props.children[0].props.children).toBe("Users");
     expect(poolCard.props.children[0].props.children).toBe("Pool health");
     expect(createSupabaseAdminClientMock).toHaveBeenCalled();
+    expect(listAllowlistedEmailsMock).toHaveBeenCalled();
   });
 });

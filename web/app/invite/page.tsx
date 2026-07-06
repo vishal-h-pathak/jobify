@@ -38,6 +38,9 @@ export default async function InvitePage({
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6">
       <InviteForm initialCode={code ?? ""} />
+      <p className="max-w-sm text-center text-sm text-ink-muted">
+        Invited by email? Just sign in with that address — no code needed.
+      </p>
     </div>
   );
 }

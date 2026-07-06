@@ -67,7 +67,7 @@ describe("/invite — redirect chain", () => {
     hasClaimedInviteMock.mockResolvedValue(false);
 
     const result = await InvitePage({ searchParams: searchParams("ABC-123") });
-    const form = result.props.children;
+    const [form] = result.props.children;
     expect(form.type.name).toBe("InviteForm");
     expect(form.props.initialCode).toBe("ABC-123");
   });
@@ -77,7 +77,16 @@ describe("/invite — redirect chain", () => {
     hasClaimedInviteMock.mockResolvedValue(false);
 
     const result = await InvitePage({ searchParams: searchParams() });
-    const form = result.props.children;
+    const [form] = result.props.children;
     expect(form.props.initialCode).toBe("");
+  });
+
+  it("shows the codeless-signup hint alongside the claim form", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasClaimedInviteMock.mockResolvedValue(false);
+
+    const result = await InvitePage({ searchParams: searchParams() });
+    const [, hint] = result.props.children;
+    expect(hint.props.children).toContain("no code needed");
   });
 });
