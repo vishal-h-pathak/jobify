@@ -483,7 +483,7 @@ Expected: only these paths appear: `web/components/ui/Card.tsx`, `web/components
 
 - [ ] **Step 5: Scrub gate — no operator-identifying strings**
 
-Run: `git diff main -- web/components/ui/Card.tsx web/components/ui/Input.tsx web/app/page.tsx "web/app/(app)/layout.tsx" web/app/globals.css | grep -iE "vishal|pathak|vshlpthk"`
+Run: `git diff main -- web/components/ui/Card.tsx web/components/ui/Input.tsx web/app/page.tsx "web/app/(app)/layout.tsx" web/app/globals.css | grep -iE -f <(the operator-token list in scripts/scrub_gate.sh)`
 Expected: no output (grep exits non-zero / prints nothing).
 
 - [ ] **Step 6: Push (do not merge)**
