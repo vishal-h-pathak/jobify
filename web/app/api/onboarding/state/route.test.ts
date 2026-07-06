@@ -14,6 +14,17 @@ vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
 const getOrCreateSessionMock = vi.fn();
 vi.mock("@/lib/db/onboardingSession", () => ({ getOrCreateSession: getOrCreateSessionMock }));
 
+const createSupabaseAdminClientMock = vi.fn(() => ({ admin: true }));
+vi.mock("@/lib/supabase/admin", () => ({ createSupabaseAdminClient: createSupabaseAdminClientMock }));
+
+const runCalibrationGenerationMock = vi.fn();
+vi.mock("@/lib/anthropic/interview", () => ({ runCalibrationGeneration: runCalibrationGenerationMock }));
+
+const maybeGenerateCalibrationPromptsMock = vi.fn();
+vi.mock("@/lib/onboarding/maybeGenerateCalibration", () => ({
+  maybeGenerateCalibrationPrompts: maybeGenerateCalibrationPromptsMock,
+}));
+
 const { GET } = await import("./route");
 
 describe("GET /api/onboarding/state", () => {
@@ -23,7 +34,9 @@ describe("GET /api/onboarding/state", () => {
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getOrCreateSessionMock.mockReset();
-    getOrCreateSessionMock.mockResolvedValue({ stage: "resume", messages: [], status: "in_progress" });
+    getOrCreateSessionMock.mockResolvedValue({ stage: "resume", messages: [], extracted: {}, status: "in_progress" });
+    maybeGenerateCalibrationPromptsMock.mockReset();
+    maybeGenerateCalibrationPromptsMock.mockResolvedValue({ stage: "resume", messages: [], status: "in_progress" });
   });
 
   it("401s when not signed in", async () => {
@@ -54,5 +67,30 @@ describe("GET /api/onboarding/state", () => {
     const res = await GET();
     expect(res.status).toBe(200);
     expect(hasClaimedInviteMock).not.toHaveBeenCalled();
+  });
+
+  it("ONB-A: delegates lazy calibration-prompt generation to maybeGenerateCalibrationPrompts and returns its result", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasClaimedInviteMock.mockResolvedValue(true);
+    getOrCreateSessionMock.mockResolvedValue({
+      stage: "calibration",
+      messages: [],
+      extracted: { anchor: { current_title: "Engineer", current_company: "Acme" } },
+      status: "in_progress",
+    });
+    maybeGenerateCalibrationPromptsMock.mockResolvedValue({
+      stage: "calibration",
+      messages: [{ role: "assistant", content: "Four short prompts..." }],
+      status: "in_progress",
+    });
+
+    const res = await GET();
+    const body = await res.json();
+
+    expect(maybeGenerateCalibrationPromptsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "user-1", runGeneration: runCalibrationGenerationMock })
+    );
+    expect(body.stage).toBe("calibration");
+    expect(body.messages).toEqual([{ role: "assistant", content: "Four short prompts..." }]);
   });
 });
