@@ -20,6 +20,7 @@ import {
   initialAnchorFormValues,
   type AnchorFormValues,
 } from "@/components/onboarding/AnchorForm";
+import { DISCLOSURE_COPY } from "@/lib/admin/disclosureCopy";
 import {
   CalibrationGeneratingSkeleton,
   CalibrationPanel,
@@ -473,14 +474,19 @@ function renderStagePanel(props: OnboardingViewProps) {
   switch (state.stage) {
     case "anchor":
       return (
-        <AnchorForm
-          values={state.anchorValues}
-          submitting={state.anchorSubmitting}
-          error={state.anchorError}
-          onFieldChange={onAnchorFieldChange}
-          onModeToggle={onAnchorModeToggle}
-          onSubmit={onAnchorSubmit}
-        />
+        <>
+          <AnchorForm
+            values={state.anchorValues}
+            submitting={state.anchorSubmitting}
+            error={state.anchorError}
+            onFieldChange={onAnchorFieldChange}
+            onModeToggle={onAnchorModeToggle}
+            onSubmit={onAnchorSubmit}
+          />
+          {/* ONB-D handoff: beta disclosure rendered on the first screen
+              (owner decision #2 — friends are told captures are reviewable). */}
+          <p className="mt-6 text-xs text-ink-muted">{DISCLOSURE_COPY}</p>
+        </>
       );
     case "calibration":
       return state.calibrationGenerating ? (

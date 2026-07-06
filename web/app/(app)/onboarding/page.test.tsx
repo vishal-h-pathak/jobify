@@ -299,9 +299,14 @@ describe("OnboardingView — stage panel swap", () => {
     return panelWrapper.props.children;
   }
 
-  it("anchor stage renders AnchorForm", () => {
+  it("anchor stage renders AnchorForm plus the beta disclosure line (ONB-D handoff)", () => {
     const panel = panelOf({ ...initialOnboardingState, loading: false, stage: "anchor" });
-    expect(panel.type).toBe(AnchorForm);
+    // The anchor panel is a fragment: [AnchorForm, disclosure <p>].
+    const [form, disclosure] = panel.props.children;
+    expect(form.type).toBe(AnchorForm);
+    expect(disclosure.type).toBe("p");
+    expect(typeof disclosure.props.children).toBe("string");
+    expect(disclosure.props.children.length).toBeGreaterThan(10);
   });
 
   it("calibration stage while generating renders the loading skeleton, not CalibrationPanel", () => {
