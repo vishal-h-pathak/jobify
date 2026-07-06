@@ -2,6 +2,31 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "../supabase/types";
 import { validateProfileDoc } from "../profile/validate";
 
+export interface ProfileDocRow {
+  doc: Record<string, string>;
+  validationStatus: { status: string; errors: string[] } | null;
+}
+
+/**
+ * Reads the signed-in user's own `profiles` row (doc + validation_status)
+ * via the authed request-scoped client — own-row SELECT policy from 0002,
+ * same as `getMonthToDateSpend`. `null` means onboarding hasn't finished
+ * (no profiles row yet), which settings-resume callers treat as "nothing
+ * to regenerate".
+ */
+export async function getProfileDoc(
+  supabase: SupabaseClient<Database>,
+  userId: string
+): Promise<ProfileDocRow | null> {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("doc, validation_status")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? { doc: data.doc, validationStatus: data.validation_status } : null;
+}
+
 /**
  * Writes the finished interview's `profiles.doc` + `validation_status`.
  * Uses the authed request-scoped client (own-row INSERT/UPDATE policy from
