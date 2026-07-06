@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# setup-hosted-int2.sh — stage Hosted INT-2 (interview transition+empty-reply fixes) -
-# parallel-safe with ADM-2 and SGN-1.
-# PREREQ: wave 8 (ADM-2) merged to main — this script refuses to run before.
-# Run from anywhere:  bash setup-hosted-int2.sh
+# setup-hosted-wave8.sh — stage Hosted wave 8: ADM-2 (admin System screen +
+# hunt_cycles telemetry), single SONNET session.
+# PREREQ: wave 7 (HNT-1) merged to main — this script refuses to run before.
+# Run from anywhere:  bash setup-hosted-wave8.sh
 set -euo pipefail
 JOBIFY="$HOME/dev/jarvis/jobify"; WT_ROOT="$HOME/dev/jarvis/jobify-wt"
-BRANCH="feat/hosted-int2-fixes"
-PROMPT="$JOBIFY/planning/session-prompts/25_interview_fixes.md"
-WT="$WT_ROOT/hosted-int2-fixes"
+BRANCH="feat/hosted-adm2-system"
+PROMPT="$JOBIFY/planning/session-prompts/22_admin_system_screen.md"
+WT="$WT_ROOT/hosted-adm2-system"
 command -v claude >/dev/null 2>&1 || { echo "ERROR: 'claude' CLI not on PATH."; exit 1; }
 [ -f "$PROMPT" ] || { echo "ERROR: prompt not found: $PROMPT"; exit 1; }
+git -C "$JOBIFY" merge-base --is-ancestor \
+  "$(git -C "$JOBIFY" rev-parse feat/hosted-hnt1-triggers)" \
+  "$(git -C "$JOBIFY" rev-parse main)" \
+  || { echo "ERROR: wave 7 (HNT-1) not merged to main yet — merge first."; exit 1; }
 mkdir -p "$WT_ROOT"
 if [ ! -d "$WT" ]; then
   if git -C "$JOBIFY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
@@ -24,7 +28,7 @@ tell application "Terminal"
   activate
   tell application "System Events" to keystroke "t" using command down
   delay 0.5
-  do script "cd '$WT' && echo '──────── INT-2 · interview fixes · SONNET ────────' && claude --permission-mode bypassPermissions --model sonnet" in front window
+  do script "cd '$WT' && echo '──────── Wave 8 · ADM-2 system screen · SONNET ────────' && claude --permission-mode bypassPermissions --model sonnet" in front window
 end tell
 OSA
 sleep 6
@@ -34,5 +38,5 @@ tell application "Terminal" to activate
 delay 0.3
 tell application "System Events" to keystroke "v" using command down
 OSA
-echo "Staged INT-2 (Sonnet). Review directive, press Return."
-echo "Reviewer close-out: no migration; vercel --prod after merge."
+echo "Staged ADM-2 (Sonnet). Review directive, press Return."
+echo "Reviewer close-out: apply 0008 to live project + vercel --prod after merge."
