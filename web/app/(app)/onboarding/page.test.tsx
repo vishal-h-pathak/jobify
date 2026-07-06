@@ -1,14 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import { SEEDED_GREETING } from "@/lib/anthropic/interview";
 import type { ChatMessage } from "@/lib/anthropic/interview";
+import { RESUME_SKIP_MESSAGE } from "@/lib/onboarding/handleTurn";
+import { AnchorForm } from "@/components/onboarding/AnchorForm";
+import { CalibrationGeneratingSkeleton, CalibrationPanel } from "@/components/onboarding/CalibrationPanel";
+import { deriveSpineSteps } from "@/components/onboarding/StepSpine";
 import {
-  buildDisplayMessages,
-  computeRailSteps,
+  ChatStageView,
+  DoneView,
+  OnboardingView,
   fetchInitialState,
   handleUpload,
   initialOnboardingState,
   onboardingReducer,
-  OnboardingView,
+  submitAnchor,
   submitTurn,
   validateUploadName,
   type OnboardingState,
@@ -16,408 +20,518 @@ import {
 
 /**
  * This repo's vitest config runs in the `node` environment with no
- * jsdom/@testing-library/react installed (see web/vitest.config.ts and
- * web/package.json — neither is a devDependency, and adding them is out of
- * this task's file boundary). Every other stateful/hook-bearing test in
- * this repo (e.g. lib/onboarding/handleTurn.test.ts) follows the same
- * pattern: extract the business logic into plain, dependency-injected
- * functions and a pure reducer, then test those directly. page.tsx follows
- * that same shape here — `onboardingReducer` owns every state transition
- * the component makes, and `fetchInitialState`/`submitTurn`/`handleUpload`
- * own every network/file interaction — so this file gets full behavioral
- * coverage without needing a DOM renderer.
- *
- * `OnboardingView` (the hook-free presentational half of page.tsx, see the
- * split there) is additionally exercised by *directly invoking it* as a
- * plain function and inspecting the returned element tree — the same
- * direct-invocation style this repo already uses for FileButton
- * (components/ui/FileButton.test.tsx) and the (app) layout
- * (app/(app)/layout.test.tsx). `OnboardingPage` itself keeps the hooks
- * (useReducer/useEffect/useRef) and can't be called this way — calling a
- * hook-using function outside React's render cycle throws — so it stays
- * covered only indirectly, through the reducer/pure-function tests above.
+ * jsdom/@testing-library/react installed — every stateful/hook-bearing test
+ * extracts business logic into plain, dependency-injected functions and a
+ * pure reducer, then tests those directly (see lib/onboarding/handleTurn.test.ts).
+ * Hook-free presentational views (`OnboardingView`, `ChatStageView`,
+ * `DoneView`) are exercised by *directly invoking* them as plain functions
+ * and inspecting the returned element tree, same as FileButton.test.tsx.
  */
 
 function fakeResponse(body: unknown, ok = true): Response {
-  return {
-    ok,
-    json: async () => body,
-  } as Response;
+  return { ok, json: async () => body } as Response;
 }
 
-describe("buildDisplayMessages — seeded greeting rendering", () => {
-  it("prepends the seeded greeting locally when messages is empty (fresh session)", () => {
-    const result = buildDisplayMessages([]);
-    expect(result).toEqual([{ role: "assistant", content: SEEDED_GREETING }]);
+function noop() {
+  /* unused callback slot in a test that doesn't exercise it */
+}
+
+const baseViewProps = {
+  calibrationPrompts: [] as string[],
+  scrollRef: { current: null },
+  onInputChange: noop,
+  onSend: noop,
+  onRetry: noop,
+  onFileChange: noop,
+  onSkip: noop,
+  onAnchorFieldChange: noop,
+  onAnchorModeToggle: noop,
+  onAnchorSubmit: noop,
+  onCalibrationAnswerChange: noop,
+  onCalibrationSubmit: noop,
+};
+
+describe("fetchInitialState — GET /api/onboarding/state", () => {
+  it("defaults a brand-new session to the anchor stage", async () => {
+    const fetchMock = vi.fn(async () => fakeResponse({ stage: undefined, messages: [], status: "in_progress" }));
+    const result = await fetchInitialState(fetchMock as unknown as typeof fetch);
+    expect(result).toEqual({ messages: [], stage: "anchor", done: false });
   });
 
-  it("does not duplicate the greeting when messages already contains it (resumed session)", () => {
-    const persisted: ChatMessage[] = [
-      { role: "assistant", content: SEEDED_GREETING },
-      { role: "user", content: "I do backend engineering" },
-      { role: "assistant", content: "Nice — tell me more." },
-    ];
-    const result = buildDisplayMessages(persisted);
-    expect(result).toBe(persisted);
-    expect(result.filter((m) => m.content === SEEDED_GREETING)).toHaveLength(1);
+  it("restores a resumed session's stage and messages", async () => {
+    const persisted: ChatMessage[] = [{ role: "assistant", content: "Show your range…" }];
+    const fetchMock = vi.fn(async () => fakeResponse({ stage: "calibration", messages: persisted, status: "in_progress" }));
+    const result = await fetchInitialState(fetchMock as unknown as typeof fetch);
+    expect(result).toEqual({ messages: persisted, stage: "calibration", done: false });
+  });
+
+  it("rejects when the request fails", async () => {
+    const fetchMock = vi.fn(async () => fakeResponse({}, false));
+    await expect(fetchInitialState(fetchMock as unknown as typeof fetch)).rejects.toThrow("Could not load your session.");
   });
 });
 
-describe("fetchInitialState — GET /api/onboarding/state, no POST turn call", () => {
-  it("resolves messages/stage/done from a fresh session without ever calling POST turn", async () => {
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url === "/api/onboarding/state") {
-        return fakeResponse({ stage: "resume", messages: [], status: "in_progress" });
-      }
-      throw new Error(`unexpected fetch to ${url}`);
-    });
-
-    const result = await fetchInitialState(fetchMock as unknown as typeof fetch);
-
-    expect(result).toEqual({ messages: [], stage: "resume", done: false });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith("/api/onboarding/state");
-    // The seeded greeting is purely local decoration on top of this — no
-    // extra network call is needed to produce it.
-    const displayed = buildDisplayMessages(result.messages);
-    expect(displayed).toEqual([{ role: "assistant", content: SEEDED_GREETING }]);
-  });
-
-  it("restores a resumed session's full transcript and non-resume stage on mount", async () => {
-    const persisted: ChatMessage[] = [
-      { role: "assistant", content: SEEDED_GREETING },
-      { role: "user", content: "Alex, alex@example.com" },
-      { role: "assistant", content: "Got it — what's your target comp?" },
-    ];
-    const fetchMock = vi.fn(async () =>
-      fakeResponse({ stage: "targeting", messages: persisted, status: "in_progress" })
-    );
-
-    const result = await fetchInitialState(fetchMock as unknown as typeof fetch);
-
-    expect(result.stage).toBe("targeting");
-    expect(result.done).toBe(false);
-    const displayed = buildDisplayMessages(result.messages);
-    expect(displayed).toEqual(persisted);
-    expect(displayed.filter((m) => m.content === SEEDED_GREETING)).toHaveLength(1);
-
-    // And the progress rail reflects the restored (non-resume) stage.
-    const rail = computeRailSteps(result.stage);
-    expect(rail.find((s) => s.label === "What you want")?.status).toBe("current");
-    expect(rail.find((s) => s.label === "Basics")?.status).toBe("complete");
-    expect(rail.find((s) => s.label === "Done")?.status).toBe("upcoming");
-  });
-});
-
-describe("submitTurn / onboardingReducer — failed turn preserves the draft, with retry", () => {
-  it("rejects on a non-2xx response and does not touch the composer draft", async () => {
+describe("submitTurn — POST /api/onboarding/turn", () => {
+  it("rejects on a non-2xx response with the server's error", async () => {
     const fetchMock = vi.fn(async () => fakeResponse({ error: "model overloaded" }, false));
-
-    await expect(submitTurn("here is my resume", fetchMock as unknown as typeof fetch)).rejects.toThrow(
-      "model overloaded"
-    );
+    await expect(submitTurn("hello", fetchMock as unknown as typeof fetch)).rejects.toThrow("model overloaded");
   });
 
-  it("rejects when fetch itself throws (network error)", async () => {
+  it("rejects when fetch itself throws", async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("network down");
     });
-
-    await expect(submitTurn("here is my resume", fetchMock as unknown as typeof fetch)).rejects.toThrow(
-      "network down"
-    );
-  });
-
-  it("turn_failed keeps the typed message in the composer and surfaces the error", () => {
-    const afterTyping = onboardingReducer(initialOnboardingState, {
-      type: "input_changed",
-      value: "here is my resume",
-    });
-    const afterSendStart = onboardingReducer(afterTyping, { type: "turn_started" });
-    expect(afterSendStart.sending).toBe(true);
-
-    const afterFailure = onboardingReducer(afterSendStart, {
-      type: "turn_failed",
-      error: "Something went wrong.",
-    });
-
-    // The draft must survive the failure so Retry can resend it.
-    expect(afterFailure.input).toBe("here is my resume");
-    expect(afterFailure.sending).toBe(false);
-    expect(afterFailure.turnError).toBe("Something went wrong.");
-  });
-
-  it("turn_succeeded clears the composer, appends both messages, and clears any prior error", () => {
-    const typed = onboardingReducer(initialOnboardingState, { type: "input_changed", value: "hello" });
-    const started = onboardingReducer(typed, { type: "turn_started" });
-    const failedOnce = onboardingReducer(started, { type: "turn_failed", error: "oops" });
-
-    // Retry: same draft still present, resend succeeds this time.
-    expect(failedOnce.input).toBe("hello");
-    const retried = onboardingReducer(failedOnce, { type: "turn_started" });
-    const succeeded = onboardingReducer(retried, {
-      type: "turn_succeeded",
-      userMessage: "hello",
-      assistantText: "Thanks — tell me more.",
-      stage: "resume",
-      done: false,
-    });
-
-    expect(succeeded.input).toBe("");
-    expect(succeeded.turnError).toBe("");
-    expect(succeeded.messages).toEqual([
-      { role: "user", content: "hello" },
-      { role: "assistant", content: "Thanks — tell me more." },
-    ]);
-  });
-
-  it("regression: the seeded greeting is still displayed after the first turn_succeeded from an empty transcript", () => {
-    // Fresh session: state_loaded sets messages to [] (nothing persisted yet).
-    const loaded = onboardingReducer(initialOnboardingState, {
-      type: "state_loaded",
-      messages: [],
-      stage: "resume",
-      done: false,
-    });
-    const typed = onboardingReducer(loaded, { type: "input_changed", value: "I do backend engineering" });
-    const started = onboardingReducer(typed, { type: "turn_started" });
-    const succeeded = onboardingReducer(started, {
-      type: "turn_succeeded",
-      userMessage: "I do backend engineering",
-      assistantText: "Nice — tell me more.",
-      stage: "resume",
-      done: false,
-    });
-
-    // The optimistic local state is [userMsg, assistantReply] — length 2,
-    // non-empty, and NOT starting with the greeting. Before the fix,
-    // buildDisplayMessages's emptiness check would treat this as "already
-    // has messages" and silently drop the greeting from the transcript.
-    expect(succeeded.messages).toEqual([
-      { role: "user", content: "I do backend engineering" },
-      { role: "assistant", content: "Nice — tell me more." },
-    ]);
-
-    const displayed = buildDisplayMessages(succeeded.messages);
-    expect(displayed[0]).toEqual({ role: "assistant", content: SEEDED_GREETING });
-    expect(displayed).toEqual([
-      { role: "assistant", content: SEEDED_GREETING },
-      { role: "user", content: "I do backend engineering" },
-      { role: "assistant", content: "Nice — tell me more." },
-    ]);
-
-    // Sanity check: the corrected (greeting-included) transcript has both
-    // assistant bubbles the seeded greeting and the real reply produced.
-    const assistantCount = displayed.filter((m) => m.role === "assistant").length;
-    expect(assistantCount).toBe(2);
+    await expect(submitTurn("hello", fetchMock as unknown as typeof fetch)).rejects.toThrow("network down");
   });
 });
 
-describe("handleUpload / validateUploadName — upload rejection", () => {
+describe("submitAnchor — POST /api/onboarding/anchor", () => {
+  it("resolves with the new stage on success", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toBe("/api/onboarding/anchor");
+      return fakeResponse({ stage: "calibration" });
+    });
+    const result = await submitAnchor({ current_title: "PM", current_company: "Foo" }, fetchMock as unknown as typeof fetch);
+    expect(result).toEqual({ stage: "calibration" });
+  });
+
+  it("rejects with the server's error on a replay past the anchor stage (409)", async () => {
+    const fetchMock = vi.fn(async () =>
+      fakeResponse({ error: "onboarding has already moved past the anchor stage" }, false)
+    );
+    await expect(submitAnchor({ free_text: "x" }, fetchMock as unknown as typeof fetch)).rejects.toThrow(
+      "onboarding has already moved past the anchor stage"
+    );
+  });
+});
+
+describe("handleUpload / validateUploadName", () => {
   it("accepts a .txt file and returns its text", async () => {
-    const file = new File(["Alex Quinn resume body"], "resume.txt", { type: "text/plain" });
-    const result = await handleUpload(file);
-    expect(result).toEqual({ ok: true, text: "Alex Quinn resume body" });
+    const file = new File(["resume body"], "resume.txt", { type: "text/plain" });
+    expect(await handleUpload(file)).toEqual({ ok: true, text: "resume body" });
   });
 
-  it("accepts a .md file", async () => {
-    expect(validateUploadName("resume.md")).toBeNull();
-  });
-
-  it("rejects a disallowed extension with a friendly message and does not read its contents", async () => {
-    const file = new File(["binary junk"], "resume.pdf", { type: "application/pdf" });
+  it("rejects a disallowed extension without reading it", async () => {
+    const file = new File(["binary"], "resume.pdf", { type: "application/pdf" });
     const textSpy = vi.spyOn(file, "text");
-
-    const result = await handleUpload(file);
-
-    expect(result).toEqual({ ok: false, error: "Please upload a .txt or .md file." });
+    expect(await handleUpload(file)).toEqual({ ok: false, error: "Please upload a .txt or .md file." });
     expect(textSpy).not.toHaveBeenCalled();
   });
 
-  it("upload_rejected reducer action surfaces the message without populating the composer", () => {
-    const next = onboardingReducer(initialOnboardingState, {
-      type: "upload_rejected",
-      error: "Please upload a .txt or .md file.",
+  it("accepts .md", () => {
+    expect(validateUploadName("resume.md")).toBeNull();
+  });
+});
+
+describe("onboardingReducer — anchor stage transitions", () => {
+  it("anchor_field_changed updates one field and clears anchorError", () => {
+    const withError = { ...initialOnboardingState, anchorError: "provide current_title + current_company, or free_text" };
+    const next = onboardingReducer(withError, { type: "anchor_field_changed", field: "currentTitle", value: "PM" });
+    expect(next.anchorValues.currentTitle).toBe("PM");
+    expect(next.anchorValues.currentCompany).toBe("");
+    expect(next.anchorError).toBe("");
+  });
+
+  it("anchor_mode_toggled flips role <-> situation", () => {
+    const situation = onboardingReducer(initialOnboardingState, { type: "anchor_mode_toggled" });
+    expect(situation.anchorValues.mode).toBe("situation");
+    const backToRole = onboardingReducer(situation, { type: "anchor_mode_toggled" });
+    expect(backToRole.anchorValues.mode).toBe("role");
+  });
+
+  it("anchor_submit_started sets anchorSubmitting and clears any prior error", () => {
+    const withError = { ...initialOnboardingState, anchorError: "oops" };
+    const next = onboardingReducer(withError, { type: "anchor_submit_started" });
+    expect(next.anchorSubmitting).toBe(true);
+    expect(next.anchorError).toBe("");
+  });
+
+  it("anchor_submit_succeeded advances to calibration, flags generation in flight, and records the Role receipt", () => {
+    const started = onboardingReducer(initialOnboardingState, { type: "anchor_submit_started" });
+    const next = onboardingReducer(started, { type: "anchor_submit_succeeded", receipt: "PM · Foo" });
+    expect(next.stage).toBe("calibration");
+    expect(next.calibrationGenerating).toBe(true);
+    expect(next.anchorSubmitting).toBe(false);
+    expect(next.receipts.anchor).toBe("PM · Foo");
+  });
+
+  it("anchor_submit_failed preserves the typed form values (draft preserved on failure)", () => {
+    const typed = onboardingReducer(initialOnboardingState, {
+      type: "anchor_field_changed",
+      field: "currentTitle",
+      value: "PM",
     });
+    const started = onboardingReducer(typed, { type: "anchor_submit_started" });
+    const failed = onboardingReducer(started, { type: "anchor_submit_failed", error: "Something went wrong." });
+    expect(failed.anchorValues.currentTitle).toBe("PM");
+    expect(failed.anchorSubmitting).toBe(false);
+    expect(failed.anchorError).toBe("Something went wrong.");
+  });
+
+  it("state_loaded (the follow-up fetch after anchor submit) clears calibrationGenerating", () => {
+    const generating = { ...initialOnboardingState, calibrationGenerating: true, stage: "calibration" as const };
+    const loaded = onboardingReducer(generating, {
+      type: "state_loaded",
+      messages: [{ role: "assistant", content: "Four short prompts…" }],
+      stage: "calibration",
+      done: false,
+    });
+    expect(loaded.calibrationGenerating).toBe(false);
+    expect(loaded.loading).toBe(false);
+  });
+});
+
+describe("onboardingReducer — calibration stage transitions", () => {
+  it("calibration_answer_changed updates only the targeted index", () => {
+    const first = onboardingReducer(initialOnboardingState, { type: "calibration_answer_changed", index: 2, value: "range answer" });
+    expect(first.calibrationAnswers).toEqual(["", "", "range answer", ""]);
+  });
+
+  it("turn_succeeded with a calibration receiptUpdate merges it into receipts and advances stage", () => {
+    const started = onboardingReducer(initialOnboardingState, { type: "turn_started" });
+    const succeeded = onboardingReducer(started, {
+      type: "turn_succeeded",
+      userMessage: "1. a\n\n2. b\n\n3. c\n\n4. d",
+      assistantText: "Have a resume handy?",
+      stage: "resume",
+      done: false,
+      receiptUpdate: { calibration: "4 answers" },
+    });
+    expect(succeeded.stage).toBe("resume");
+    expect(succeeded.receipts).toEqual({ calibration: "4 answers" });
+  });
+
+  it("turn_failed after a calibration submit preserves the four answers (draft preserved on failed turn)", () => {
+    const withAnswers: OnboardingState = {
+      ...initialOnboardingState,
+      calibrationAnswers: ["a", "b", "c", "d"],
+    };
+    const started = onboardingReducer(withAnswers, { type: "turn_started" });
+    const failed = onboardingReducer(started, { type: "turn_failed", error: "model overloaded" });
+    expect(failed.calibrationAnswers).toEqual(["a", "b", "c", "d"]);
+    expect(failed.turnError).toBe("model overloaded");
+    expect(failed.sending).toBe(false);
+  });
+});
+
+describe("onboardingReducer — resume stage receipts (skip vs provided)", () => {
+  it("a normal send in the resume stage records 'resume added'", () => {
+    const state: OnboardingState = { ...initialOnboardingState, stage: "resume", input: "here is my resume" };
+    const started = onboardingReducer(state, { type: "turn_started" });
+    const succeeded = onboardingReducer(started, {
+      type: "turn_succeeded",
+      userMessage: "here is my resume",
+      assistantText: "Logistics, all in one go: …",
+      stage: "targeting",
+      done: false,
+      receiptUpdate: { resume: "resume added" },
+    });
+    expect(succeeded.receipts.resume).toBe("resume added");
+  });
+
+  it("the skip path records the skipped receipt with its own display text", () => {
+    const state: OnboardingState = { ...initialOnboardingState, stage: "resume" };
+    const started = onboardingReducer(state, { type: "turn_started" });
+    const succeeded = onboardingReducer(started, {
+      type: "turn_succeeded",
+      userMessage: "Skipped — using the anchor and range answers instead.",
+      assistantText: "Logistics, all in one go: …",
+      stage: "targeting",
+      done: false,
+      receiptUpdate: { resume: "skipped — built from your answers" },
+    });
+    expect(succeeded.messages[0]).toEqual({
+      role: "user",
+      content: "Skipped — using the anchor and range answers instead.",
+    });
+    expect(succeeded.receipts.resume).toBe("skipped — built from your answers");
+  });
+});
+
+describe("onboardingReducer — turn_failed keeps the composer draft (regression, carried from v1)", () => {
+  it("preserves state.input across a failed send", () => {
+    const typed = onboardingReducer(initialOnboardingState, { type: "input_changed", value: "here is my resume" });
+    const started = onboardingReducer(typed, { type: "turn_started" });
+    const failed = onboardingReducer(started, { type: "turn_failed", error: "Something went wrong." });
+    expect(failed.input).toBe("here is my resume");
+    expect(failed.sending).toBe(false);
+  });
+
+  it("upload_rejected surfaces the message without touching the composer draft", () => {
+    const next = onboardingReducer(initialOnboardingState, { type: "upload_rejected", error: "Please upload a .txt or .md file." });
     expect(next.uploadError).toBe("Please upload a .txt or .md file.");
     expect(next.input).toBe("");
   });
 
-  it("upload_accepted reducer action populates the composer and clears any prior upload error", () => {
-    const rejected = onboardingReducer(initialOnboardingState, {
-      type: "upload_rejected",
-      error: "Please upload a .txt or .md file.",
-    });
-    const accepted = onboardingReducer(rejected, {
-      type: "upload_accepted",
-      fileName: "resume.txt",
-      text: "resume body",
-    });
+  it("upload_accepted populates the composer and clears any prior upload error", () => {
+    const rejected = onboardingReducer(initialOnboardingState, { type: "upload_rejected", error: "bad file" });
+    const accepted = onboardingReducer(rejected, { type: "upload_accepted", fileName: "resume.txt", text: "body" });
     expect(accepted.uploadError).toBeNull();
-    expect(accepted.input).toBe("resume body");
+    expect(accepted.input).toBe("body");
     expect(accepted.fileName).toBe("resume.txt");
   });
 });
 
-describe("computeRailSteps — progress rail per stage (INT-1: 4-label direct stage mapping)", () => {
-  it("resume stage maps to Resume current, nothing complete yet", () => {
-    const rail = computeRailSteps("resume");
-    expect(rail.find((s) => s.label === "Resume")?.status).toBe("current");
-    expect(rail.find((s) => s.label === "Basics")?.status).toBe("upcoming");
-    expect(rail.find((s) => s.label === "What you want")?.status).toBe("upcoming");
-    expect(rail.find((s) => s.label === "Done")?.status).toBe("upcoming");
+describe("OnboardingView — loading and error states", () => {
+  it("renders a spine+panel skeleton, not a centered spinner, while loading", () => {
+    const view = OnboardingView({ state: { ...initialOnboardingState, loading: true }, ...baseViewProps });
+    expect(view.props.children).toHaveLength(3);
+    expect(view.props.children.every((c: { props: { className: string } }) => c.props.className.includes("animate-pulse"))).toBe(
+      true
+    );
   });
 
-  it("identity stage maps to Basics current, with Resume complete", () => {
-    const rail = computeRailSteps("identity");
-    expect(rail.find((s) => s.label === "Resume")?.status).toBe("complete");
-    expect(rail.find((s) => s.label === "Basics")?.status).toBe("current");
-    expect(rail.find((s) => s.label === "What you want")?.status).toBe("upcoming");
-  });
-
-  it("targeting stage maps to What you want current, with Resume and Basics complete", () => {
-    const rail = computeRailSteps("targeting");
-    expect(rail.find((s) => s.label === "Resume")?.status).toBe("complete");
-    expect(rail.find((s) => s.label === "Basics")?.status).toBe("complete");
-    expect(rail.find((s) => s.label === "What you want")?.status).toBe("current");
-    expect(rail.find((s) => s.label === "Done")?.status).toBe("upcoming");
-  });
-
-  it("done stage maps to Done current, with every prior step complete", () => {
-    const rail = computeRailSteps("done");
-    expect(rail.find((s) => s.label === "Resume")?.status).toBe("complete");
-    expect(rail.find((s) => s.label === "Basics")?.status).toBe("complete");
-    expect(rail.find((s) => s.label === "What you want")?.status).toBe("complete");
-    expect(rail.find((s) => s.label === "Done")?.status).toBe("current");
-  });
-});
-
-/**
- * OnboardingView — presentational tree, direct invocation.
- *
- * OnboardingView is the hook-free half of page.tsx (see the split there):
- * it takes plain data + callback props and returns the JSX tree, with no
- * useReducer/useEffect/useRef of its own. That means it can be called
- * directly as a plain function — `OnboardingView({...props})` — and its
- * returned React element tree inspected via `.props`, exactly like this
- * repo's FileButton.test.tsx and (app)/layout.test.tsx already do for their
- * own hook-free components. `OnboardingPage` itself still can't be tested
- * this way (calling a hook-using function outside React's render cycle
- * throws), which is why it stays covered only through the reducer /
- * pure-function tests above.
- */
-function railBadges(view: ReturnType<typeof OnboardingView>) {
-  const [, railRow] = view.props.children;
-  return railRow.props.children.map((item: (typeof railRow.props.children)[number]) => item.props.children[0]);
-}
-
-describe("OnboardingView — seeded greeting bubble in the rendered tree", () => {
-  it("renders the seeded greeting as the first assistant bubble for a fresh/empty transcript", () => {
-    const state: OnboardingState = { ...initialOnboardingState, loading: false };
-    const transcript = buildDisplayMessages([]);
+  it("renders the load-error banner", () => {
     const view = OnboardingView({
-      state,
-      transcript,
-      railSteps: computeRailSteps(state.stage),
-      scrollRef: { current: null },
-      onInputChange: vi.fn(),
-      onSend: vi.fn(),
-      onRetry: vi.fn(),
-      onFileChange: vi.fn(),
+      state: { ...initialOnboardingState, loading: false, loadError: "Could not load your session." },
+      ...baseViewProps,
     });
-
-    const [, , transcriptPane] = view.props.children;
-    const [messageBubbles] = transcriptPane.props.children;
-    const [greetingCard] = messageBubbles;
-
-    expect(greetingCard.props.children.props.children).toBe(SEEDED_GREETING);
+    const banner = view.props.children;
+    expect(banner.props.children).toBe("Could not load your session.");
   });
 });
 
-describe("OnboardingView — progress rail active label per state (INT-1: 4-label direct stage mapping)", () => {
-  it.each([
-    { stage: "resume" as const, expected: "Resume" },
-    { stage: "identity" as const, expected: "Basics" },
-    { stage: "targeting" as const, expected: "What you want" },
-    { stage: "done" as const, expected: "Done" },
-  ])("stage=$stage -> $expected is current", ({ stage, expected }) => {
-    const state: OnboardingState = { ...initialOnboardingState, loading: false, stage, done: stage === "done" };
-    const view = OnboardingView({
-      state,
-      transcript: buildDisplayMessages(state.messages),
-      railSteps: computeRailSteps(stage),
-      scrollRef: { current: null },
-      onInputChange: vi.fn(),
-      onSend: vi.fn(),
-      onRetry: vi.fn(),
-      onFileChange: vi.fn(),
-    });
+describe("OnboardingView — stage panel swap", () => {
+  function panelOf(state: OnboardingState, calibrationPrompts: string[] = []) {
+    const view = OnboardingView({ state, ...baseViewProps, calibrationPrompts });
+    const [, contentDiv] = view.props.children;
+    const [, panelWrapper] = contentDiv.props.children;
+    return panelWrapper.props.children;
+  }
 
-    const badges = railBadges(view);
-    const active = badges.find((b: (typeof badges)[number]) => b.props.tone === "amber");
-    expect(active.props.children).toBe(expected);
-    expect(badges.filter((b: (typeof badges)[number]) => b.props.tone === "amber")).toHaveLength(1);
+  it("anchor stage renders AnchorForm", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, stage: "anchor" });
+    expect(panel.type).toBe(AnchorForm);
   });
-});
 
-describe("OnboardingView — failed turn: error banner + retry, composer draft preserved", () => {
-  it("shows the error banner with a working Retry button, and keeps the typed draft in the composer", () => {
+  it("calibration stage while generating renders the loading skeleton, not CalibrationPanel", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, stage: "calibration", calibrationGenerating: true });
+    expect(panel.type).toBe(CalibrationGeneratingSkeleton);
+  });
+
+  it("calibration stage once generated renders CalibrationPanel with the parsed prompts", () => {
+    const panel = panelOf(
+      { ...initialOnboardingState, loading: false, stage: "calibration", calibrationGenerating: false },
+      ["depth", "breadth", "range", "evidence"]
+    );
+    expect(panel.type).toBe(CalibrationPanel);
+    expect(panel.props.prompts).toEqual(["depth", "breadth", "range", "evidence"]);
+  });
+
+  it("resume stage renders ChatStageView with upload + skip reachable", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, stage: "resume" });
+    expect(panel.type).toBe(ChatStageView);
+    const rendered = ChatStageView(panel.props);
+    const composerChildren = rendered.props.children[rendered.props.children.length - 1].props.children;
+    const uploadSkipSlot = composerChildren[0];
+    expect(uploadSkipSlot.props.children).toBeTruthy();
+  });
+
+  it("targeting stage renders ChatStageView with upload + skip NOT reachable", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, stage: "targeting" });
+    expect(panel.type).toBe(ChatStageView);
+    const rendered = ChatStageView(panel.props);
+    const composerChildren = rendered.props.children[rendered.props.children.length - 1].props.children;
+    const uploadSkipSlot = composerChildren[0];
+    // A plain empty <div /> placeholder, not the FileButton+Skip cluster.
+    expect(uploadSkipSlot.props.children).toBeUndefined();
+  });
+
+  it("done stage renders DoneView", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, stage: "done", done: true });
+    expect(panel.type).toBe(DoneView);
+  });
+
+  it("wires the spine from deriveSpineSteps(stage, receipts)", () => {
     const state: OnboardingState = {
       ...initialOnboardingState,
       loading: false,
-      input: "here is my resume",
+      stage: "resume",
+      receipts: { anchor: "PM · Foo", calibration: "4 answers" },
+    };
+    const view = OnboardingView({ state, ...baseViewProps });
+    const [, contentDiv] = view.props.children;
+    const [spine] = contentDiv.props.children;
+    expect(spine.props.steps).toEqual(deriveSpineSteps("resume", state.receipts));
+  });
+});
+
+describe("ChatStageView — motion classes wired to ONB-C's utilities", () => {
+  it("each message carries the message-enter class; the panel wrapper carries panel-enter", () => {
+    const state: OnboardingState = {
+      ...initialOnboardingState,
+      loading: false,
+      stage: "targeting",
+      messages: [{ role: "assistant", content: "Logistics, all in one go: …" }],
+    };
+    const rendered = ChatStageView({
+      state,
+      scrollRef: { current: null },
+      onInputChange: noop,
+      onSend: noop,
+      onRetry: noop,
+      onFileChange: noop,
+      onSkip: noop,
+    });
+    const [messageList] = rendered.props.children;
+    const [messageElements] = messageList.props.children;
+    const [assistantBubble] = messageElements;
+    expect(assistantBubble.props.className).toContain("message-enter");
+
+    const view = OnboardingView({ state, ...baseViewProps });
+    const [, contentDiv] = view.props.children;
+    const [, panelWrapper] = contentDiv.props.children;
+    expect(panelWrapper.props.className).toContain("panel-enter");
+  });
+});
+
+describe("ChatStageView — active question is visually the protagonist (text-lg), history is muted", () => {
+  it("only the last assistant message gets text-lg; earlier ones stay text-sm", () => {
+    const state: OnboardingState = {
+      ...initialOnboardingState,
+      loading: false,
+      stage: "targeting",
+      messages: [
+        { role: "assistant", content: "Have a resume handy?" },
+        { role: "user", content: "Skipped — using the anchor and range answers instead." },
+        { role: "assistant", content: "Logistics, all in one go: …" },
+      ],
+    };
+    const rendered = ChatStageView({
+      state,
+      scrollRef: { current: null },
+      onInputChange: noop,
+      onSend: noop,
+      onRetry: noop,
+      onFileChange: noop,
+      onSkip: noop,
+    });
+    const [messageList] = rendered.props.children;
+    const [messageElements] = messageList.props.children;
+    const [firstAssistant, , secondAssistant] = messageElements;
+    expect(firstAssistant.props.className).toContain("text-sm");
+    expect(secondAssistant.props.className).toContain("text-lg");
+  });
+});
+
+describe("ChatStageView — placeholder copy is stage-driven", () => {
+  it("differs between resume and targeting", () => {
+    const resumeView = ChatStageView({
+      state: { ...initialOnboardingState, loading: false, stage: "resume" },
+      scrollRef: { current: null },
+      onInputChange: noop,
+      onSend: noop,
+      onRetry: noop,
+      onFileChange: noop,
+      onSkip: noop,
+    });
+    const targetingView = ChatStageView({
+      state: { ...initialOnboardingState, loading: false, stage: "targeting" },
+      scrollRef: { current: null },
+      onInputChange: noop,
+      onSend: noop,
+      onRetry: noop,
+      onFileChange: noop,
+      onSkip: noop,
+    });
+    const composerChildren = (v: ReturnType<typeof ChatStageView>) => v.props.children;
+    const resumeTextArea = composerChildren(resumeView)[3];
+    const targetingTextArea = composerChildren(targetingView)[3];
+    expect(resumeTextArea.props.placeholder).not.toBe(targetingTextArea.props.placeholder);
+  });
+});
+
+describe("ChatStageView — failed turn: error banner + retry, draft preserved (ported from v1)", () => {
+  it("shows the error banner with a working Retry button, and keeps the typed draft in the composer", () => {
+    const onRetry = vi.fn();
+    const state: OnboardingState = {
+      ...initialOnboardingState,
+      loading: false,
+      stage: "targeting",
+      input: "my answer",
       turnError: "Something went wrong.",
     };
-    const onRetry = vi.fn();
-    const view = OnboardingView({
+    const rendered = ChatStageView({
       state,
-      transcript: buildDisplayMessages(state.messages),
-      railSteps: computeRailSteps(state.stage),
       scrollRef: { current: null },
-      onInputChange: vi.fn(),
-      onSend: vi.fn(),
+      onInputChange: noop,
+      onSend: noop,
       onRetry,
-      onFileChange: vi.fn(),
+      onFileChange: noop,
+      onSkip: noop,
     });
-
-    const [, , , composer] = view.props.children;
-    const [turnErrorBanner, , textArea] = composer.props.children;
+    const [, turnErrorBanner, , textArea] = rendered.props.children;
     const errorRow = turnErrorBanner.props.children;
     const [errorSpan, retryButton] = errorRow.props.children;
-
     expect(errorSpan.props.children).toBe("Something went wrong.");
-    expect(retryButton.props.children).toBe("Retry");
-
     retryButton.props.onClick();
     expect(onRetry).toHaveBeenCalledTimes(1);
-
-    // The composer must still show the preserved draft, not a cleared input.
-    expect(textArea.props.value).toBe("here is my resume");
+    expect(textArea.props.value).toBe("my answer");
   });
 });
 
-describe("OnboardingView — rejected upload message in the rendered tree", () => {
-  it("shows the upload-rejection message without touching the composer draft", () => {
-    const state: OnboardingState = {
-      ...initialOnboardingState,
-      loading: false,
-      uploadError: "Please upload a .txt or .md file.",
-    };
-    const view = OnboardingView({
-      state,
-      transcript: buildDisplayMessages(state.messages),
-      railSteps: computeRailSteps(state.stage),
+describe("ChatStageView — Skip button sends the reserved sentinel via onSkip", () => {
+  it("wires the Skip button, present only in the resume stage", () => {
+    const onSkip = vi.fn();
+    const rendered = ChatStageView({
+      state: { ...initialOnboardingState, loading: false, stage: "resume" },
       scrollRef: { current: null },
-      onInputChange: vi.fn(),
-      onSend: vi.fn(),
-      onRetry: vi.fn(),
-      onFileChange: vi.fn(),
+      onInputChange: noop,
+      onSend: noop,
+      onRetry: noop,
+      onFileChange: noop,
+      onSkip,
     });
+    const composerChildren = rendered.props.children[rendered.props.children.length - 1].props.children;
+    const [, skipButton] = composerChildren[0].props.children;
+    skipButton.props.onClick();
+    expect(onSkip).toHaveBeenCalledTimes(1);
+  });
+});
 
-    const [, , , composer] = view.props.children;
-    const [, uploadErrorNode, textArea] = composer.props.children;
+describe("DoneView — the summary moment", () => {
+  it("renders the three recap sections (rank-up / never-show / logistics) as separate paragraphs", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "confirmed" },
+      {
+        role: "assistant",
+        content: [
+          "Here's what I built: you'll rank up senior backend roles at seed-to-series-B startups.",
+          "You'll never see anything requiring a security clearance or on-call-heavy SRE work.",
+          "Logistics: Atlanta-based, remote-first, $180k floor.",
+          'Head to your feed and hit "Run my hunt" to get your first results.',
+        ].join("\n\n"),
+      },
+    ];
+    const view = DoneView({ messages });
+    const [, , recapSection] = view.props.children;
+    const paragraphs = recapSection.props.children;
+    expect(paragraphs).toHaveLength(4);
+    expect(paragraphs[0].props.children).toContain("rank up");
+    expect(paragraphs[1].props.children).toContain("never see");
+    expect(paragraphs[2].props.children).toContain("Logistics");
+  });
 
-    expect(uploadErrorNode.props.children).toBe("Please upload a .txt or .md file.");
-    expect(textArea.props.value).toBe("");
+  it("shows the fix-needed heading and error list when validation is invalid", () => {
+    const view = DoneView({
+      messages: [{ role: "assistant", content: "Summary." }],
+      validation: { status: "invalid", errors: ["tiers must be non-empty"] },
+    });
+    const [heading, errorList] = view.props.children;
+    expect(heading.props.children).toBe("Profile saved, but needs a fix:");
+    expect(errorList.props.children[0].props.children).toBe("tiers must be non-empty");
+  });
+
+  it("links to /feed with the primary 'Run my first hunt' action", () => {
+    const view = DoneView({ messages: [{ role: "assistant", content: "Summary." }] });
+    const [, , , link] = view.props.children;
+    expect(link.props.href).toBe("/feed");
+    expect(link.props.children).toBe("Run my first hunt");
+  });
+});
+
+describe("RESUME_SKIP_MESSAGE — page consumes ONB-A's exported sentinel, doesn't redefine it", () => {
+  it("is the string handleTurn.ts special-cases", () => {
+    expect(RESUME_SKIP_MESSAGE).toBe("__skip_resume__");
   });
 });
