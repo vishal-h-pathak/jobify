@@ -48,4 +48,24 @@ describe("landing page (/)", () => {
     expect(result.props.children).toBeTruthy();
     expect(redirectMock).not.toHaveBeenCalled();
   });
+
+  it("renders the 3 pitch steps as a visibly numbered list", async () => {
+    getUserMock.mockResolvedValue({ data: { user: null } });
+
+    const result = await Home();
+    const [, steps] = result.props.children;
+
+    expect(steps.type).toBe("ol");
+    expect(steps.props.className).toMatch(/list-decimal/);
+    expect(steps.props.children).toHaveLength(3);
+  });
+
+  it("renders the CTA pair side by side, not stacked", async () => {
+    getUserMock.mockResolvedValue({ data: { user: null } });
+
+    const result = await Home();
+    const [, , , ctas] = result.props.children;
+
+    expect(ctas.props.className).not.toMatch(/flex-col/);
+  });
 });
