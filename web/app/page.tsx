@@ -30,7 +30,7 @@ export default async function Home() {
         </p>
       </div>
 
-      <ol className="flex max-w-md flex-col gap-2 text-left text-sm text-ink-muted">
+      <ol className="max-w-md list-decimal list-inside space-y-2 text-left text-sm text-ink-muted">
         <li>A short interview about what you&apos;re actually looking for.</li>
         <li>A feed scored against that, whenever you ask — not keyword soup.</li>
         <li>Reasons for every match, so you know why it&apos;s there.</li>
@@ -40,7 +40,7 @@ export default async function Home() {
         Private beta — you&apos;ll need an invite to get in.
       </p>
 
-      <div className="flex flex-col items-center gap-4">
+      <div className="flex items-center gap-4">
         <Link href="/invite" className={`${LINK_BUTTON_BASE} ${BUTTON_VARIANT_CLASSES.primary}`}>
           I have an invite
         </Link>
