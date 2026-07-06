@@ -9,37 +9,42 @@
  * the fixture was originally "dumped once via `npx tsx`, not hand-authored"
  * — this script is that dump, made repeatable.
  *
- * IMPORTANT: `FIXTURE_EXTRACTED` below was reverse-engineered from the
- * checked-in fixture content, NOT copied from `buildDoc.test.ts`'s
- * `FULL_EXTRACTED`. The two literals look similar (same "Alex Quinn"
- * persona, same shape) but are NOT the same data — `FULL_EXTRACTED` in the
- * unit test is a smaller, simpler stand-in (e.g. it has no `phone`,
- * `linkedin`, `current_comp_usd`, `in_person_acceptable`, `relocation`, or
- * second tier, and its `cv_markdown`/`thesis_summary`/disqualifiers are all
- * shorter placeholder strings). Running `buildProfileDoc(FULL_EXTRACTED)`
- * would NOT reproduce the checked-in fixture byte-for-byte. If you need to
- * intentionally regenerate the fixture with a different mocked interview,
- * update `FIXTURE_EXTRACTED` here directly (and it will then diverge from
- * `buildDoc.test.ts`'s `FULL_EXTRACTED`, which is fine — they serve
- * different purposes).
+ * ONB-A (2026-07-05): regenerated for the v2 flow (anchor -> calibration ->
+ * resume, now optional -> targeting). `FIXTURE_EXTRACTED` deliberately
+ * SKIPS the resume stage, so the fixture also exercises `buildDoc.ts`'s
+ * synthesized-cv.md path (§2 stage 3) end to end through the real Python
+ * validator — not just the resume-provided path already covered by
+ * `buildDoc.test.ts`.
+ *
+ * IMPORTANT: `FIXTURE_EXTRACTED` below was NOT copied from
+ * `buildDoc.test.ts`'s `FULL_EXTRACTED`/`ANCHOR_ONLY` literals — it's its
+ * own persona data, only similar in shape. Running
+ * `buildProfileDoc(FULL_EXTRACTED)` would NOT reproduce this fixture
+ * byte-for-byte. If you need to intentionally regenerate the fixture with
+ * different mocked interview data, update `FIXTURE_EXTRACTED` here
+ * directly.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { buildProfileDoc, type ExtractedState } from "../lib/profile/buildDoc";
 
 const FIXTURE_EXTRACTED: ExtractedState = {
-  resume: {
-    cv_markdown:
-      "# Alex Quinn\n\n" +
-      "## Experience\n\n" +
-      "### Senior Backend Engineer, Acme Corp (2019-2025)\n" +
-      "- Built and operated high-throughput payment services.\n" +
-      "- Cut p99 latency from 4s to 300ms at 20k events/sec.\n\n" +
-      "## Education\n\n" +
-      "B.S. Computer Science, State University\n\n" +
-      "## Skills\n\n" +
-      "Go, Python, TypeScript, PostgreSQL, Kafka, Kubernetes",
-    key_technical_skills: ["Go", "Python", "TypeScript", "PostgreSQL", "Kafka", "Kubernetes"],
+  anchor: {
+    current_title: "Senior Backend Engineer",
+    current_company: "Acme Corp",
+    years_in_role: "6 years",
+  },
+  calibration: {
+    prompts: [
+      "A payment webhook starts silently dropping events under load. Walk me through how you'd handle it — a few sentences.",
+      "Which parts of the job around backend engineering do you get pulled into?",
+      "If your next role were outside backend engineering work, what would you want it to be — and what carries over?",
+      "Describe one piece of work you'd actually show someone — what it was, what you did, what happened.",
+    ],
+    skills: ["Go", "Python", "TypeScript", "PostgreSQL", "Kafka", "Kubernetes"],
+    evidence: ["Cut p99 latency from 4s to 300ms on a payments service running at 20k events/sec."],
+    range_statement:
+      "Open to platform/infrastructure work outside a pure backend title; less interested in pure data-science roles.",
     background_summary:
       "Backend and platform engineer with ~8 years building and operating high-throughput services.",
   },

@@ -86,4 +86,66 @@ describe("buildProfileDoc", () => {
     expect(result.errors).toEqual([]);
     expect(result.status).toBe("valid");
   });
+
+  it("ONB-A: leaves cv.md empty when neither resume nor anchor is present (defensive/edge state)", () => {
+    const doc = buildProfileDoc({
+      identity: { name: "A", email: "a@example.com" },
+      targeting: FULL_EXTRACTED.targeting,
+    });
+    expect(doc["cv.md"]).toBe("");
+  });
+});
+
+describe("ONB-A: buildProfileDoc — synthesized cv.md when resume is skipped", () => {
+  const ANCHOR_ONLY: ExtractedState = {
+    anchor: { current_title: "Senior Backend Engineer", current_company: "Acme Corp", years_in_role: "4 years" },
+    calibration: {
+      skills: ["Go", "Postgres"],
+      evidence: ["Cut p99 latency from 4s to 300ms on the payments service."],
+      range_statement: "Open to adjacent platform work.",
+      background_summary: "Backend engineer who owns high-throughput services.",
+    },
+    targeting: FULL_EXTRACTED.targeting,
+  };
+
+  it("synthesizes cv.md from anchor + calibration with the provenance header", () => {
+    const doc = buildProfileDoc(ANCHOR_ONLY);
+    expect(doc["cv.md"]).toContain("# CV — assembled from onboarding interview (no resume provided)");
+    expect(doc["cv.md"]).toContain("## Senior Backend Engineer — Acme Corp (4 years)");
+    expect(doc["cv.md"]).toContain("Cut p99 latency from 4s to 300ms on the payments service.");
+    expect(doc["cv.md"]).toContain("Go, Postgres");
+  });
+
+  it("falls back to the anchor's free-text description when no title/company (no-title escape path)", () => {
+    const doc = buildProfileDoc({
+      anchor: { free_text: "Final-year CS student, internships in backend dev" },
+      calibration: ANCHOR_ONLY.calibration,
+      targeting: FULL_EXTRACTED.targeting,
+    });
+    expect(doc["cv.md"]).toContain("## Final-year CS student, internships in backend dev");
+  });
+
+  it("uses the real resume's cv_markdown instead of synthesizing when a resume was provided", () => {
+    const doc = buildProfileDoc({ ...ANCHOR_ONLY, resume: FULL_EXTRACTED.resume });
+    expect(doc["cv.md"]).toBe(FULL_EXTRACTED.resume!.cv_markdown);
+    expect(doc["cv.md"]).not.toContain("assembled from onboarding interview");
+  });
+
+  it("falls back to calibration's skills/background_summary in profile.yml when there's no resume", () => {
+    const doc = buildProfileDoc(ANCHOR_ONLY);
+    expect(doc["profile.yml"]).toContain("Backend engineer who owns high-throughput services.");
+    expect(doc["profile.yml"]).toMatch(/key_technical_skills:\n\s*- Go\n\s*- Postgres/);
+  });
+
+  it("seeds portals.yml title_filter with the anchor's current_title", () => {
+    const doc = buildProfileDoc(ANCHOR_ONLY);
+    expect(doc["portals.yml"]).toMatch(/prefer_substrings:\n(\s*- .+\n)*\s*- Senior Backend Engineer/);
+  });
+
+  it("still passes the TS validator with a synthesized cv.md", () => {
+    const doc = buildProfileDoc(ANCHOR_ONLY);
+    const result = validateProfileDoc(doc);
+    expect(result.errors).toEqual([]);
+    expect(result.status).toBe("valid");
+  });
 });

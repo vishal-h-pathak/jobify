@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "../supabase/types";
 import type { ChatMessage, InterviewStage, InterviewTurnResult } from "../anthropic/interview";
-import { SEEDED_GREETING } from "../anthropic/interview";
 import { ONBOARDING_MODEL } from "../anthropic/client";
 import { applyToolCalls } from "./applyToolCalls";
 import { buildProfileDoc, type ExtractedState } from "../profile/buildDoc";
@@ -33,29 +32,49 @@ export interface HandleTurnResult {
   validation?: { status: "valid" | "invalid"; errors: string[] };
 }
 
-/**
- * FIX-1 (2026-07-05): deterministic fallback questions, keyed by the stage
- * the turn lands on. Used both when the model returns an empty response
- * (after one retry) and, via the post-check below, when a non-empty
- * response has no question mark in it at all — e.g. a bare "Good, moving
- * on." acknowledgment. `done` has no next question, so it gets a
- * completion line instead.
- */
-const STAGE_FALLBACK_QUESTIONS: Record<Exclude<InterviewStage, "done">, string> = {
-  resume: "Quick check on what I pulled from your resume — anything wrong or missing?",
-  identity:
-    "Logistics, all in one go: where are you based, remote-only or is some onsite fine (and where), " +
-    "and what's the salary floor below which you won't even look?",
-  targeting:
-    "More of what you already do, a senior version of it, or something adjacent — which direction fits, " +
-    "or a mix? Pick, combine, or correct.",
-};
+// ONB-A: an explicit Skip button sends this reserved sentinel through the
+// normal POST /turn path (not an empty send — the empty-reply guard below
+// stays intact for genuine blank sends). Intercepted before the model is
+// ever called: zero LLM cost, zero ledger row, deterministic transition.
+export const RESUME_SKIP_MESSAGE = "__skip_resume__";
+const RESUME_SKIP_DISPLAY_TEXT = "Skipped — using the anchor and range answers instead.";
+
+const RESUME_STAGE_FALLBACK = "Have a resume handy? Paste/upload it — or skip, we already have plenty.";
+const TARGETING_STAGE_FALLBACK =
+  "Logistics, all in one go: where are you based, remote-only or is some onsite fine (and where), " +
+  "and what's the salary floor below which you won't even look?";
+const CALIBRATION_STAGE_GENERIC_FALLBACK =
+  "Let's capture your range — tell me about the core of your work in a few sentences.";
 
 const DONE_FALLBACK_TEXT =
   'Your profile is built — head to your feed and hit "Run my hunt" to get your first results.';
 
-function fallbackAssistantText(stage: InterviewStage): string {
-  return stage === "done" ? DONE_FALLBACK_TEXT : STAGE_FALLBACK_QUESTIONS[stage];
+/**
+ * FIX-1 (2026-07-05), extended for ONB-A's 5-stage machine: deterministic
+ * fallback text, keyed by the stage the turn lands on. Used both when the
+ * model returns an empty response (after one retry) and, via the
+ * post-check below, when a non-empty response has no question mark in it
+ * at all. `calibration`'s fallback re-surfaces the first of the four
+ * already-generated prompts (extracted.calibration.prompts) rather than a
+ * fixed string, since the ingest turn's only real content IS those
+ * prompts; `anchor`/legacy `identity` never reach a chat turn in v2 (the
+ * anchor stage is a zero-LLM form, and no session is ever written back
+ * into 'identity'), so they fall back to the targeting text defensively.
+ */
+function fallbackAssistantText(stage: InterviewStage, extracted: ExtractedState): string {
+  switch (stage) {
+    case "done":
+      return DONE_FALLBACK_TEXT;
+    case "calibration":
+      return extracted.calibration?.prompts?.[0] ?? CALIBRATION_STAGE_GENERIC_FALLBACK;
+    case "resume":
+      return RESUME_STAGE_FALLBACK;
+    case "targeting":
+    case "anchor":
+    case "identity":
+    default:
+      return TARGETING_STAGE_FALLBACK;
+  }
 }
 
 /**
@@ -72,18 +91,30 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     return { assistantText: "Your profile is already built — head to the feed.", stage: "done", done: true };
   }
 
-  // On the very first real turn (no assistant message has ever been
-  // persisted, including the seeded greeting), prepend the seeded greeting
-  // so the model sees its own opening line as context and the transcript
-  // persists in full on reload. This is a local prepend, not an extra
-  // Anthropic call — the single runTurn call below still fires exactly
-  // once, and so does the ledger row.
-  const priorMessages: ChatMessage[] =
-    session.messages.length === 0
-      ? [{ role: "assistant", content: SEEDED_GREETING }]
-      : session.messages;
+  // ONB-A: the resume stage's explicit Skip button — zero LLM call, zero
+  // ledger row, deterministic transition straight to targeting. cv.md gets
+  // synthesized from anchor + calibration later, at buildDoc time.
+  if (session.stage === "resume" && userMessage === RESUME_SKIP_MESSAGE) {
+    const assistantText = TARGETING_STAGE_FALLBACK;
+    const newMessages: ChatMessage[] = [
+      ...session.messages,
+      { role: "user", content: RESUME_SKIP_DISPLAY_TEXT },
+      { role: "assistant", content: assistantText },
+    ];
+    await saveSession(supabase, userId, {
+      messages: newMessages,
+      extracted: session.extracted as unknown as Record<string, unknown>,
+      stage: "targeting",
+      status: "in_progress",
+    });
+    return { assistantText, stage: "targeting", done: false };
+  }
 
-  const history: ChatMessage[] = [...priorMessages, { role: "user", content: userMessage }];
+  // ONB-A: the calibration-generation turn (runCalibrationGeneration,
+  // triggered from GET /state) already appends the opening assistant
+  // message before any user turn reaches here, so there is no seeded
+  // greeting to prepend anymore — session.messages is the full history.
+  const history: ChatMessage[] = [...session.messages, { role: "user", content: userMessage }];
   let turnResult = await runTurn(history);
 
   // FIX-1: a model turn that comes back empty/whitespace-only must never
@@ -104,13 +135,13 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
       userId,
       stage,
     });
-    assistantText = fallbackAssistantText(stage);
+    assistantText = fallbackAssistantText(stage, extracted);
   } else if (stage !== "done" && !assistantText.includes("?")) {
     // Deterministic post-check (preferred over relying on the prompt alone):
     // a non-empty turn that never asks anything — e.g. a bare "Good, moving
     // on." acknowledgment — gets the next question appended so the user
     // always has something to answer.
-    assistantText = `${assistantText} ${fallbackAssistantText(stage)}`;
+    assistantText = `${assistantText} ${fallbackAssistantText(stage, extracted)}`;
   }
 
   const newMessages: ChatMessage[] = [...history, { role: "assistant", content: assistantText }];

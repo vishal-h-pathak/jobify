@@ -25,6 +25,22 @@ export function applyToolCalls(
 
   for (const call of toolCalls) {
     switch (call.name) {
+      case "record_calibration":
+        // Preserve the already-generated `prompts` (set by
+        // runCalibrationGeneration before this ingest turn ever fires) —
+        // this is a merge into the existing calibration object, not a
+        // replacement of it.
+        extracted.calibration = {
+          ...previous.calibration,
+          skills: Array.isArray(call.input.skills) ? (call.input.skills as string[]) : [],
+          evidence: Array.isArray(call.input.evidence) ? (call.input.evidence as string[]) : [],
+          range_statement:
+            typeof call.input.range_statement === "string" ? call.input.range_statement : undefined,
+          background_summary:
+            typeof call.input.background_summary === "string" ? call.input.background_summary : undefined,
+        };
+        if (stage === "calibration") stage = "resume";
+        break;
       case "record_resume":
         extracted.resume = {
           cv_markdown: String(call.input.cv_markdown ?? ""),
@@ -34,9 +50,15 @@ export function applyToolCalls(
           background_summary:
             typeof call.input.background_summary === "string" ? call.input.background_summary : undefined,
         };
-        if (stage === "resume") stage = "identity";
+        // ONB-A: resume now feeds directly into targeting — the old
+        // resume -> identity -> targeting chain collapsed once "identity"
+        // stopped being its own db stage (0010_onboarding_stage_v2.sql).
+        if (stage === "resume") stage = "targeting";
         break;
       case "record_identity":
+        // ONB-A: record_identity fires *during* the targeting stage now
+        // (the logistics opener), so it never advances the stage itself —
+        // only finish_interview (via record_targeting first) does.
         extracted.identity = {
           name: String(call.input.name ?? ""),
           email: String(call.input.email ?? ""),
@@ -50,7 +72,6 @@ export function applyToolCalls(
               ? (call.input.location_and_compensation as LocationAndCompensation)
               : undefined,
         };
-        if (stage === "identity") stage = "targeting";
         break;
       case "record_targeting":
         extracted.targeting = {

@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getOrCreateSession } from "@/lib/db/onboardingSession";
 import { hasClaimedInvite } from "@/lib/db/invites";
 import { isAdmin } from "@/lib/admin/isAdmin";
+import { runCalibrationGeneration } from "@/lib/anthropic/interview";
+import { maybeGenerateCalibrationPrompts } from "@/lib/onboarding/maybeGenerateCalibration";
 
 export async function GET() {
   const supabase = await createSupabaseServerClient();
@@ -20,9 +23,22 @@ export async function GET() {
   }
 
   const session = await getOrCreateSession(supabase, user.id);
-  return NextResponse.json({
-    stage: session.stage,
-    messages: session.messages,
-    status: session.status,
+
+  // ONB-A: the first time a session lands in 'calibration', lazily
+  // generate its four prompts (one LLM turn) before responding, so the
+  // frontend never has to drive a separate "generate now" action.
+  const withCalibration = await maybeGenerateCalibrationPrompts({
+    userId: user.id,
+    session: {
+      stage: session.stage,
+      messages: session.messages,
+      extracted: session.extracted,
+      status: session.status,
+    },
+    supabase,
+    admin: createSupabaseAdminClient(),
+    runGeneration: runCalibrationGeneration,
   });
+
+  return NextResponse.json(withCalibration);
 }

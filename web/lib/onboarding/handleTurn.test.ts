@@ -1,5 +1,4 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { SEEDED_GREETING } from "../anthropic/interview";
 import type { ChatMessage } from "../anthropic/interview";
 
 const saveSessionMock = vi.fn(async (..._args: unknown[]) => {});
@@ -13,7 +12,7 @@ vi.mock("../db/onboardingSession", () => ({ saveSession: saveSessionMock }));
 vi.mock("../db/profiles", () => ({ upsertProfileDoc: upsertProfileDocMock }));
 vi.mock("../db/ledger", () => ({ recordOnboardingTurn: recordOnboardingTurnMock }));
 
-const { handleOnboardingTurn } = await import("./handleTurn");
+const { handleOnboardingTurn, RESUME_SKIP_MESSAGE } = await import("./handleTurn");
 
 const fakeClient = {} as never;
 
@@ -69,13 +68,15 @@ describe("handleOnboardingTurn", () => {
       userId: "user-1",
       userEmail: "user-1@example.com",
       userMessage: "Alex, alex@example.com",
-      session: baseSession({ stage: "identity" }),
+      session: baseSession({ stage: "targeting" }),
       supabase: fakeClient,
       admin: fakeClient,
       runTurn,
     });
 
     expect(result.done).toBe(false);
+    // ONB-A: record_identity now fires during targeting (not a separate
+    // identity stage) and no longer advances the stage itself.
     expect(result.stage).toBe("targeting");
     expect(upsertProfileDocMock).not.toHaveBeenCalled();
     expect(saveSessionMock).toHaveBeenCalledWith(
@@ -98,7 +99,7 @@ describe("handleOnboardingTurn", () => {
       userId: "user-1",
       userEmail: "real-auth-email@example.com",
       userMessage: "Alex, totally-made-up@nowhere.invalid",
-      session: baseSession({ stage: "identity" }),
+      session: baseSession({ stage: "targeting" }),
       supabase: fakeClient,
       admin: fakeClient,
       runTurn,
@@ -155,9 +156,9 @@ describe("handleOnboardingTurn", () => {
     expect(saveSessionMock).toHaveBeenCalledWith(fakeClient, "user-1", expect.objectContaining({ status: "complete" }));
   });
 
-  it("prepends the seeded greeting on the very first turn (empty session.messages) without an extra LLM/ledger call", async () => {
+  it("ONB-A: no longer prepends anything on an empty session.messages — calibration generation now owns the opener", async () => {
     const runTurn = vi.fn(async (_history: ChatMessage[]) => ({
-      assistantText: "Nice — tell me more about what kind of work you're after.",
+      assistantText: "Got it — have a resume handy?",
       toolCalls: [],
       usage: { inputTokens: 30, outputTokens: 15 },
     }));
@@ -165,67 +166,17 @@ describe("handleOnboardingTurn", () => {
     await handleOnboardingTurn({
       userId: "user-1",
       userEmail: "user-1@example.com",
-      userMessage: "I do backend engineering, I'd love more systems design work",
-      session: baseSession({ messages: [] }),
+      userMessage: "here are my four answers",
+      session: baseSession({ stage: "calibration", messages: [] }),
       supabase: fakeClient,
       admin: fakeClient,
       runTurn,
     });
 
-    // The history passed to runTurn must start with the seeded greeting,
-    // followed by the user's message — not an extra runTurn call.
     expect(runTurn).toHaveBeenCalledTimes(1);
     const historyArg = runTurn.mock.calls[0][0];
-    expect(historyArg[0]).toEqual({ role: "assistant", content: SEEDED_GREETING });
-    expect(historyArg[1]).toEqual({
-      role: "user",
-      content: "I do backend engineering, I'd love more systems design work",
-    });
-
-    // The persisted newMessages (passed to saveSession) must also start
-    // with the greeting, so a page reload shows the full transcript.
-    expect(saveSessionMock).toHaveBeenCalledTimes(1);
-    const savedMessages = (
-      saveSessionMock.mock.calls[0][2] as { messages: ChatMessage[] }
-    ).messages;
-    expect(savedMessages[0]).toEqual({ role: "assistant", content: SEEDED_GREETING });
-    expect(savedMessages[1]).toEqual({
-      role: "user",
-      content: "I do backend engineering, I'd love more systems design work",
-    });
-
-    // Still exactly one budget_ledger row for this turn — the prepend is
-    // local bookkeeping, not an extra Anthropic call.
+    expect(historyArg).toEqual([{ role: "user", content: "here are my four answers" }]);
     expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does NOT prepend the seeded greeting on subsequent turns (non-empty session.messages)", async () => {
-    const runTurn = vi.fn(async (_history: ChatMessage[]) => ({
-      assistantText: "Got it, continuing.",
-      toolCalls: [],
-      usage: { inputTokens: 10, outputTokens: 10 },
-    }));
-
-    await handleOnboardingTurn({
-      userId: "user-1",
-      userEmail: "user-1@example.com",
-      userMessage: "here is more detail",
-      session: baseSession({
-        messages: [
-          { role: "assistant", content: SEEDED_GREETING },
-          { role: "user", content: "I do backend engineering" },
-          { role: "assistant", content: "Nice — tell me more." },
-        ],
-      }),
-      supabase: fakeClient,
-      admin: fakeClient,
-      runTurn,
-    });
-
-    const historyArg = runTurn.mock.calls[0][0];
-    expect(historyArg).toHaveLength(4);
-    expect(historyArg[0]).toEqual({ role: "assistant", content: SEEDED_GREETING });
-    expect(historyArg.filter((m) => m.content === SEEDED_GREETING)).toHaveLength(1);
   });
 
   it("FIX-1: retries once on an empty assistant response, then falls back to a deterministic stage-appropriate question if still empty", async () => {
@@ -239,7 +190,7 @@ describe("handleOnboardingTurn", () => {
       userId: "user-1",
       userEmail: "user-1@example.com",
       userMessage: "ok",
-      session: baseSession({ stage: "identity" }),
+      session: baseSession({ stage: "targeting" }),
       supabase: fakeClient,
       admin: fakeClient,
       runTurn,
@@ -274,7 +225,7 @@ describe("handleOnboardingTurn", () => {
       userId: "user-1",
       userEmail: "user-1@example.com",
       userMessage: "40 hourly",
-      session: baseSession({ stage: "identity" }),
+      session: baseSession({ stage: "targeting" }),
       supabase: fakeClient,
       admin: fakeClient,
       runTurn,
@@ -299,7 +250,7 @@ describe("handleOnboardingTurn", () => {
       userId: "user-1",
       userEmail: "user-1@example.com",
       userMessage: "ok",
-      session: baseSession({ stage: "identity" }),
+      session: baseSession({ stage: "targeting" }),
       supabase: fakeClient,
       admin: fakeClient,
       runTurn,
@@ -326,9 +277,10 @@ describe("handleOnboardingTurn", () => {
       runTurn,
     });
 
-    // record_resume advances resume -> identity; the repaired turn must
-    // still contain the original acknowledgment AND end with a question.
-    expect(result.stage).toBe("identity");
+    // ONB-A: record_resume now advances resume -> targeting directly; the
+    // repaired turn must still contain the original acknowledgment AND end
+    // with a question.
+    expect(result.stage).toBe("targeting");
     expect(result.assistantText).toContain("Good, moving on.");
     expect(result.assistantText).toContain("?");
     expect(result.assistantText).toMatch(/logistics|salary floor/i);
@@ -385,5 +337,87 @@ describe("handleOnboardingTurn", () => {
     expect(result.done).toBe(true);
     expect(runTurn).not.toHaveBeenCalled();
     expect(recordOnboardingTurnMock).not.toHaveBeenCalled();
+  });
+
+  describe("ONB-A: resume-skip sentinel", () => {
+    it("skips with zero LLM calls and zero ledger rows, advancing resume -> targeting", async () => {
+      const runTurn = vi.fn();
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: RESUME_SKIP_MESSAGE,
+        session: baseSession({ stage: "resume" }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(runTurn).not.toHaveBeenCalled();
+      expect(recordOnboardingTurnMock).not.toHaveBeenCalled();
+      expect(result.stage).toBe("targeting");
+      expect(result.done).toBe(false);
+      expect(result.assistantText).toContain("?");
+    });
+
+    it("never persists the raw sentinel string as the visible user turn", async () => {
+      const runTurn = vi.fn();
+
+      await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: RESUME_SKIP_MESSAGE,
+        session: baseSession({ stage: "resume" }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      const savedMessages = (saveSessionMock.mock.calls[0][2] as { messages: ChatMessage[] }).messages;
+      expect(savedMessages.some((m) => m.content === RESUME_SKIP_MESSAGE)).toBe(false);
+    });
+
+    it("does not trigger outside the resume stage — the same text at another stage goes to the model normally", async () => {
+      const runTurn = vi.fn(async () => ({
+        assistantText: "Got it — what's your target comp?",
+        toolCalls: [],
+        usage: { inputTokens: 10, outputTokens: 10 },
+      }));
+
+      await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: RESUME_SKIP_MESSAGE,
+        session: baseSession({ stage: "targeting" }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(runTurn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("ONB-A: the calibration stage's empty-reply fallback uses the first generated calibration prompt", async () => {
+    const runTurn = vi.fn(async () => ({
+      assistantText: "",
+      toolCalls: [],
+      usage: { inputTokens: 5, outputTokens: 0 },
+    }));
+
+    const result = await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "here are my answers",
+      session: baseSession({
+        stage: "calibration",
+        extracted: { calibration: { prompts: ["Tell me about a hard bug.", "b", "c", "d"] } },
+      }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    expect(result.assistantText).toBe("Tell me about a hard bug.");
   });
 });

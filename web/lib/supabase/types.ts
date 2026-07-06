@@ -55,9 +55,16 @@ export interface Database {
         Relationships: [];
       };
       onboarding_sessions: {
+        // ONB-A (2026-07-05): v2 stage machine — anchor -> calibration ->
+        // resume (optional) -> targeting -> done (0010_onboarding_stage_v2.sql).
+        // "identity" is kept as a legal union member purely so the pre-B
+        // onboarding UI (web/app/(app)/onboarding/page.tsx, out of this
+        // session's ownership) keeps compiling against its old literal
+        // "identity" stage usages; v2 code never writes it — migration
+        // 0010 remaps every existing 'identity' row to 'targeting'.
         Row: {
           user_id: string;
-          stage: "resume" | "identity" | "targeting" | "done";
+          stage: "anchor" | "calibration" | "resume" | "identity" | "targeting" | "done";
           messages: Array<{ role: "user" | "assistant"; content: string }>;
           extracted: Record<string, unknown>;
           status: "in_progress" | "complete";
@@ -66,13 +73,13 @@ export interface Database {
         };
         Insert: {
           user_id: string;
-          stage?: "resume" | "identity" | "targeting" | "done";
+          stage?: "anchor" | "calibration" | "resume" | "identity" | "targeting" | "done";
           messages?: Array<{ role: "user" | "assistant"; content: string }>;
           extracted?: Record<string, unknown>;
           status?: "in_progress" | "complete";
         };
         Update: {
-          stage?: "resume" | "identity" | "targeting" | "done";
+          stage?: "anchor" | "calibration" | "resume" | "identity" | "targeting" | "done";
           messages?: Array<{ role: "user" | "assistant"; content: string }>;
           extracted?: Record<string, unknown>;
           status?: "in_progress" | "complete";

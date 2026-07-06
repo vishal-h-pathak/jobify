@@ -29,14 +29,20 @@ function dedupeNonEmpty(values: string[]): string[] {
   return out;
 }
 
-export function buildTitleFilter(targeting: TargetingForPortals): {
+export function buildTitleFilter(
+  targeting: TargetingForPortals,
+  anchorTitle?: string
+): {
   reject_substrings: string[];
   prefer_substrings: string[];
   seniority_substrings: string[];
 } {
   const tierLabels = (targeting.tiers ?? []).map((t) => t.label).filter(Boolean);
 
-  const prefer = dedupeNonEmpty(tierLabels);
+  // ONB-A: the anchor's current_title (§2 stage 1) seeds prefer_substrings
+  // alongside tier labels, so the hunter keeps polling near the anchored
+  // role even before/without a full targeting conversation.
+  const prefer = dedupeNonEmpty([...tierLabels, ...(anchorTitle ? [anchorTitle] : [])]);
   const reject = dedupeNonEmpty(GENERIC_REJECT_SUBSTRINGS);
   const seniority = dedupeNonEmpty(GENERIC_SENIORITY_SUBSTRINGS);
 
@@ -49,12 +55,12 @@ export function buildTitleFilter(targeting: TargetingForPortals): {
   };
 }
 
-export function buildPortalsDoc(targeting: TargetingForPortals): Record<string, unknown> {
+export function buildPortalsDoc(targeting: TargetingForPortals, anchorTitle?: string): Record<string, unknown> {
   return {
     greenhouse: { companies: [] },
     lever: { companies: [] },
     ashby: { companies: [] },
     workday: { companies: [] },
-    title_filter: buildTitleFilter(targeting),
+    title_filter: buildTitleFilter(targeting, anchorTitle),
   };
 }
