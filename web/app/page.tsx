@@ -37,7 +37,7 @@ export default async function Home() {
       </ol>
 
       <p className="max-w-sm text-sm text-ink-muted">
-        Private beta — you&apos;ll need an invite from the person who sent you here.
+        Private beta — you&apos;ll need an invite to get in.
       </p>
 
       <div className="flex flex-col items-center gap-4">

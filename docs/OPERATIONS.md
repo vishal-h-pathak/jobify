@@ -72,11 +72,29 @@ vercel env add JOBIFY_KEY_ENCRYPTION_SECRET production
 
 ---
 
-## 2. Minting and distributing invites
+## 2. Inviting friends
 
-`jobify-hosted-invite` (service-role, run locally or anywhere `pip install
--e .` + the repo's `.env` are available — never wire this into a public-facing
-surface, it's operator-only):
+**Primary path (SGN-1): add their email, tell them to sign in.** Open
+`/admin` → the "Friends" card → add the friend's email (an optional short
+note, e.g. a first name, helps you tell rows apart later) → tell them to
+sign in at the site with that exact address. Their first magic-link
+sign-in auto-mints and auto-claims an invite for them and routes them
+straight into onboarding — no code to generate, copy, or hand over. The
+row's status flips from "waiting" to "signed up `<date>`" once they've
+gone through. Removing a row (even after they've signed up) only stops a
+*future* auto-claim for that address — it never revokes an invite that
+already got claimed.
+
+`allowed_emails` is service-role-only (RLS enabled, no policies) — nobody
+reads it back through the app, not even the friend it names. It holds a
+third party's email before they've consented to an account, so keep only
+what's needed (email + an optional short note) and delete rows freely once
+they're no longer useful.
+
+**Fallback: minting a manual code.** For anyone you'd rather not
+pre-register by email — or if the allowlist path ever misbehaves — the
+original code-based flow still works unchanged, either from the panel's
+"Mint invite" button (§6) or the CLI:
 
 ```bash
 jobify-hosted-invite --mint 5      # prints 5 fresh codes, one per line
@@ -85,7 +103,8 @@ jobify-hosted-invite --list        # shows every code + claimed_by/claimed_at
 
 Distribute a code as a link: `https://<vercel-prod-url>/invite?code=<code>`
 (or just hand over the bare code — the `/invite` page has a manual-entry
-field too). Codes are single-use (`invites_claim_unclaimed`'s RLS policy
+field too, and now also a hint pointing allowlisted friends back to the
+sign-in path). Codes are single-use (`invites_claim_unclaimed`'s RLS policy
 only allows a claim while `claimed_by IS NULL`); minting more costs nothing
 and there's no expiry, so over-minting is harmless — under-minting just means
 running the command again.
@@ -169,7 +188,13 @@ where validation_status->>'status' = 'invalid';
    the code exists and `claimed_by` is still null. A zero-rows claim update
    means either a typo, an already-claimed code, or (rarely) RLS drift —
    check `invites_claim_unclaimed`'s policy is still in place via `select *
-   from pg_policies where tablename = 'invites'`.
+   from pg_policies where tablename = 'invites'`. If this friend was added
+   via the Friends card instead, they don't need a code at all — confirm
+   they're signing in with the *exact* address you added (case doesn't
+   matter, typos do) and check the row's status in `/admin`; the auto-claim
+   swallows its own failures and falls back to the normal `/invite` page,
+   so a stuck "waiting" row plus a friend stuck on `/invite` just means
+   minting them a manual code (above) instead.
 4. **Onboarding chat won't finish / feed stays empty after they've hit "Run
    my hunt"** — check `profiles.validation_status` (§4's snippet).
    `'invalid'` means fan-out skips that user every run; the feed's own
@@ -193,9 +218,8 @@ where validation_status->>'status' = 'invalid';
 ## 6. Admin panel
 
 `/admin` (web, ADM-1) is a lightweight in-app alternative to the SQL
-snippets in §4 and the `jobify-hosted-invite` CLI in §2 — three read-mostly
-cards (Invites, Users, Pool health) for day-to-day ops, no SQL Editor
-required.
+snippets in §4 and the `jobify-hosted-invite` CLI in §2 — Invites, Friends,
+Users, and Pool health cards for day-to-day ops, no SQL Editor required.
 
 **Who can reach it — `ADMIN_EMAILS`.** Set the env var (comma-separated,
 case-insensitive, trimmed) on Vercel (`vercel env add ADMIN_EMAILS
@@ -221,6 +245,14 @@ render with a one-click copy of the full `/invite?code=...` link. Prefer
 the UI day-to-day; the CLI (§2) still works identically and is the only
 option if you'd rather not sign in as an admin (e.g. scripting a bulk
 mint).
+
+**Friends card (SGN-1) — codeless signup.** Add an email + optional note,
+hit "Add friend"; the row shows "waiting" until that address's first
+magic-link sign-in auto-mints and auto-claims an invite for them (see §2).
+"Remove" hits `DELETE /api/admin/allowlist` and only ever deletes the
+allowlist row itself — a friend who already signed up keeps their claimed
+invite regardless. Both routes sit behind the same `requireAdmin()` gate as
+every other `/api/admin/*` route.
 
 **Users card has a per-row "Run hunt" button (HNT-1).** Dispatches
 `hosted-hunt.yml --user <uuid>` for that one row via the same
