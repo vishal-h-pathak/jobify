@@ -128,6 +128,29 @@ describe("POST /api/onboarding/anchor", () => {
     );
   });
 
+  it("409s and writes nothing when the session has already moved past the anchor stage (replay/resubmit guard)", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasClaimedInviteMock.mockResolvedValue(true);
+    getOrCreateSessionMock.mockResolvedValue({
+      stage: "targeting",
+      messages: [{ role: "assistant", content: "..." }],
+      extracted: { targeting: { tiers: [], hard_disqualifiers: [], soft_concerns: [], thesis_summary: "t" } },
+      status: "in_progress",
+    });
+    const res = await POST(jsonRequest({ current_title: "Engineer", current_company: "Acme" }));
+    expect(res.status).toBe(409);
+    expect(saveSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("409s when the session is already complete, even though status alone wouldn't otherwise block it", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasClaimedInviteMock.mockResolvedValue(true);
+    getOrCreateSessionMock.mockResolvedValue({ stage: "done", messages: [], extracted: {}, status: "complete" });
+    const res = await POST(jsonRequest({ current_title: "Engineer", current_company: "Acme" }));
+    expect(res.status).toBe(409);
+    expect(saveSessionMock).not.toHaveBeenCalled();
+  });
+
   it("never calls the Anthropic client or records a ledger row (zero-LLM stage)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     hasClaimedInviteMock.mockResolvedValue(true);

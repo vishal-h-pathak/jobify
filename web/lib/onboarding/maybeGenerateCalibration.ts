@@ -36,6 +36,15 @@ export interface MaybeGenerateCalibrationResult {
  * from GET /api/onboarding/state (a lazy side effect, same pattern as that
  * route's existing getOrCreateSession write) so the frontend never has to
  * drive a separate "generate now" action.
+ *
+ * Known race (accepted, not fixed here): this is a plain read-then-write
+ * with no compare-and-swap, so two GET /state calls landing concurrently on
+ * the same freshly-anchored session (a duplicate tab, a client retry) can
+ * both pass the "no prompts yet" check, both pay for a generation call, and
+ * both write a ledger row — last saveSession wins. A conditional update
+ * (e.g. an UPDATE ... WHERE extracted->calibration->prompts IS NULL) would
+ * close this, but needs db/onboardingSession.ts (not this session's file)
+ * to support a predicate; tracked as a follow-up, not blocking ONB-A.
  */
 export async function maybeGenerateCalibrationPrompts(
   deps: MaybeGenerateCalibrationDeps

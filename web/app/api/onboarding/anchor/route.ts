@@ -46,6 +46,16 @@ export async function POST(request: Request) {
   }
 
   const session = await getOrCreateSession(supabase, user.id);
+
+  // Replay/resubmit guard: a stray second tab, a browser back-button
+  // resubmit, or a client retry must never rewind an in-progress or
+  // completed session back to 'calibration' — saveSession is a partial
+  // column update, so doing so would silently strand the row's
+  // messages/extracted from every later stage while resetting `stage`.
+  if (session.stage !== "anchor") {
+    return NextResponse.json({ error: "onboarding has already moved past the anchor stage" }, { status: 409 });
+  }
+
   const anchor = freeText
     ? { free_text: freeText }
     : {
