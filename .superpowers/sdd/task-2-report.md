@@ -1,82 +1,118 @@
-# Task 2 report — dossier change-log: parse learned-insights.md insight lines
+# Task 2 report: `dispatchTailor.ts` + `POST /api/tailor/run`
 
 ## What I implemented
 
-In `web/lib/dossier/derive.ts`:
+- `web/lib/tailor/dispatchTailor.ts` — `dispatchTailor(deps)`, the
+  dependency-injected core dispatch logic (`admin`/`fetchImpl`/`now`
+  injected, no `NextResponse` inside the file), mirroring
+  `web/lib/hunt/dispatchHunt.ts`'s shape. Sequence exactly per the task
+  brief: config check (before any DB work) → pool-budget gate (BYO-exempt)
+  → 5/day counter (uniform, filtered on the literal `mode = 'tailor'`, not
+  the deps' `mode` param — see judgment note below) → insert with
+  unique-violation (`23505`) caught as `cooldown` → GitHub Actions
+  `workflow_dispatch` POST to `hosted-tailor.yml` → on non-204, synchronous
+  `UPDATE tailor_runs SET status='failed', error='dispatch failed (status
+  <n>)'` via the admin client, then `dispatch_failed` → on 204, `ok`.
+- `web/app/api/tailor/run/route.ts` — auth gate identical to
+  `hunt/run/route.ts` (`getUser` → 401 → `isAdmin || hasClaimedInvite` →
+  403), body validation (`posting_id` required/400, `mode` defaults to
+  `"tailor"`/validated as one of the two allowed values/400), looks up
+  `isByo`/`monthToDateSpend`/`budgetCap` via `getApiKeyInfo`/
+  `getMonthToDateSpend`/`getBudgetCap` on the authed client, `dailyLimit =
+  5`, `githubRepo`/`githubToken` from `GITHUB_REPO`/
+  `GITHUB_DISPATCH_TOKEN`, then the exact `DispatchTailorResult` → HTTP
+  switch from the brief (503/429×3/502/200).
+- `web/lib/tailor/dispatchTailor.test.ts` — 10 tests mirroring
+  `dispatchHunt.test.ts`'s structure (`fakeAdmin`, `baseDeps`, `FIXED_NOW`,
+  real `Response` objects, no fake timers).
 
-1. Widened `ChangeLogEvent.moduleKey` from `ModuleKey` to `ModuleKey | \`learning-${number}\`` (a
-   template-literal type). `moduleRegistry.ts`'s `ModuleKey` union was not touched.
-2. Added `INSIGHT_LINE_RE` and `deriveInsightEvents(learnedInsightsMd: string): ChangeLogEvent[]`,
-   exactly per the brief: splits on `\n`, regex-matches `^- (\d{4}-\d{2}-\d{2}): (.+)$` against each
-   trimmed line, filters non-matches, and maps each match to a `ChangeLogEvent` with
-   `label = "${formatMonthDay(date+midnight-UTC)} — ${text}"`, `moduleKey = "learning-${i}"`,
-   `completedAt = "${date}T00:00:00.000Z"`. The `<!-- last-processed: ... -->` watermark line never
-   matches the regex, so it's dropped with no special-casing. The text after `: ` is passed through
-   verbatim — never re-derived or reformatted.
-3. Changed `deriveEvents(modules, learnedInsightsMd)` to take the raw markdown string as a second
-   param, kept the existing module-completion `.map()` body byte-identical (just de-inlined from the
-   chained `.sort()`), and merged `[...moduleEvents, ...deriveInsightEvents(learnedInsightsMd)]` before
-   sorting ascending by `completedAt.localeCompare`.
-4. Updated the one call site in `deriveDossier`: `events: deriveEvents(modules, doc["learned-insights.md"] ?? "")`.
-   No change to `DerivedDossierInput` — `doc` already carries this key (confirmed via
-   `buildMinimalDoc`/`emptyDoc` in `incrementalDoc.ts`, which seeds every `DOC_FILENAMES` key,
-   including `"learned-insights.md"`, to `""`).
+## Judgment calls made (both explicitly left open by the brief)
 
-In `web/lib/dossier/derive.test.ts`, added a new `describe("deriveDossier — learned-insights.md
-change-log rows", ...)` block with three tests:
-- **Parsing**: a watermark line + 2 dated bullets → 2 events, `moduleKey` `"learning-0"`/`"learning-1"`,
-  labels in `"Mon Day — <text>"` shape, watermark produces no event.
-- **Empty state preserved**: rebuilds the phase-1-only 4-module fixture with
-  `"learned-insights.md": ""` → `dossier.events` still has length 4 (this is a fresh, equivalent
-  assertion alongside the pre-existing one at derive.test.ts:277-279, which I left untouched and
-  unweakened).
-- **Interleaving**: 2 completed modules (Jul 10, Jul 15) + 3 insight lines (Jul 09, Jul 12, Jul 16)
-  → asserts the exact `moduleKey` order: `["learning-0", "anchor", "learning-1", "values",
-  "learning-2"]`, proving strict chronological interleaving of both row kinds.
+1. **Null template → GHA input**: send `template: ""` (never omit the key).
+   Chosen for payload-shape uniformity and simpler test assertions; GitHub
+   Actions `workflow_dispatch` string inputs reject `null`. Documented in a
+   comment at the fetch call site.
+2. **Daily-limit counter's `mode` filter**: the brief's step 3 literally
+   reads `mode = 'tailor'` (a fixed string), not "the `mode` this call
+   carries" — I implemented it as a hardcoded `.eq("mode", "tailor")`,
+   independent of `deps.mode`. In practice this task's route only ever
+   passes `mode: "tailor"` so the two are behaviorally identical today; the
+   hardcoded version means a future `render` dispatch (if ever wired)
+   wouldn't count against the tailor-generation daily cap. Documented in a
+   comment above the count query. Flagging this explicitly in case the
+   intent was actually "count whatever mode this call is" — the brief's
+   literal wording is what I went with.
 
-## Test commands run and output
+## Testing
 
+- `npx vitest run lib/tailor/dispatchTailor.test.ts` — 10/10 passed.
+- `npx tsc --noEmit` — clean (zero errors).
+- `npm run lint` — zero errors/warnings in any file I touched (pre-existing
+  errors/warnings in unrelated files, confirmed via `git status --short`
+  showing only my 3 new files).
+- `npm test` (full suite) — 100 files / 899 tests passed, including the new
+  10.
+- `bash scripts/scrub_gate.sh` — PASS.
+
+### TDD evidence
+
+RED: wrote `dispatchTailor.test.ts` importing `./dispatchTailor` before
+that file existed.
 ```
-$ cd web && npx vitest run lib/dossier/derive.test.ts
- ✓ lib/dossier/derive.test.ts (27 tests) 3ms
+FAIL  lib/tailor/dispatchTailor.test.ts [ lib/tailor/dispatchTailor.test.ts ]
+Error: Cannot find module './dispatchTailor' imported from
+'.../web/lib/tailor/dispatchTailor.test.ts'
+ Test Files  1 failed (1)
+      Tests  no tests
+```
+
+GREEN: after writing `dispatchTailor.ts`:
+```
+✓ lib/tailor/dispatchTailor.test.ts (10 tests) 5ms
  Test Files  1 passed (1)
-      Tests  27 passed (27)
+      Tests  10 passed (10)
 ```
-(Note: `web/node_modules` was not yet installed in this worktree; ran `npm install` first — no
-package.json/lockfile changes, node_modules is gitignored.)
 
-```
-$ cd web && npx tsc --noEmit
-(no output — clean)
-```
+### Test cases covered
+
+- not_configured (no fetch call, no `admin.from` call)
+- budget_exceeded when spend ≥ cap and not BYO
+- budget_exceeded skipped when BYO even if spend ≥ cap
+- daily_limit at exactly 5 existing today-rows
+- dispatches when count is one below the limit (boundary sanity check)
+- cooldown on a unique-violation (`23505`) insert error, fetch never called
+- non-unique-violation insert error throws (doesn't swallow real DB errors)
+- ok on 204 with the exact documented dispatch payload shape asserted
+- template `null` → sent as `""` in the GHA payload
+- dispatch_failed on non-204, asserts the admin update was called with
+  `{ status: "failed", error: "dispatch failed (status 500)" }`
+- anti-leak `expect(JSON.stringify(result)).not.toContain("gh-secret-token")`
+  on both the `ok` and `dispatch_failed` paths
 
 ## Files changed
 
-- `/Users/jarvis/dev/jarvis/jobify-wt/liv1-learning/web/lib/dossier/derive.ts`
-- `/Users/jarvis/dev/jarvis/jobify-wt/liv1-learning/web/lib/dossier/derive.test.ts`
-
-Commit: `89d6fee` — "LIV-1 task 2: dossier change-log — parse learned-insights.md insight lines"
+- `web/lib/tailor/dispatchTailor.ts` (new)
+- `web/lib/tailor/dispatchTailor.test.ts` (new)
+- `web/app/api/tailor/run/route.ts` (new)
 
 ## Self-review findings
 
-- Regex/parsing/merge logic matches the brief's exact code, including the "byte-identical map body"
-  note for the module-completion branch.
-- The pre-existing "phase-1-only profile has exactly 4 change-log events" test
-  (`derive.test.ts:277-279`) was left completely unmodified and still passes.
-- `tsc --noEmit` is clean with the widened `ChangeLogEvent.moduleKey` type across the whole `web/`
-  project (confirms `ChangeLog.tsx`'s `key={event.moduleKey}` usage is satisfied without editing
-  that file — React's `key` prop accepts any string, and the template-literal type is a subtype of
-  `string`).
-- Confirmed via `git diff --stat` that `web/components/dossier/ChangeLog.tsx` and
-  `web/lib/onboarding/moduleRegistry.ts` have zero diff — neither was touched.
-- Scrub gate: all test fixture text is generic placeholder text lifted from the plan's own example
-  ("agency work", "platform ownership", "unpaid overtime") — no operator-identifying strings.
+None outstanding. Verified against every numbered step in the brief's
+dispatch sequence, the exact HTTP status mapping table, no
+`NextResponse`/HTTP-mapping logic inside `dispatchTailor.ts`, no dead code,
+no extra features (no admin "run for user" override — brief/route contract
+doesn't call for one on tailor, unlike hunt), never-log-token discipline
+verified by the anti-leak test assertions, ownership fence respected
+(`web/lib/hunt/**` untouched — confirmed via `git status`).
 
 ## Concerns
 
-- None. One pre-existing, pre-task uncommitted change (`.superpowers/sdd/task-1-report.md`) and one
-  untracked file (`docs/superpowers/plans/2026-07-16-liv1-learning.md`) were present in the working
-  tree before I started and are unrelated to Task 2 — I did not stage or commit them.
-- `.superpowers/sdd/task-2-report.md` (this file) previously contained an unrelated report from a
-  different task/project ("Global discovery + embeddings (H4 hosted worker)"), evidently a stray
-  leftover in this worktree — overwritten with this task's actual report.
+Only the daily-limit `mode` literal-vs-variable judgment call above is
+worth a second pair of eyes — it's a real behavioral fork, just one that's
+unobservable under this task's actual usage (route only ever sends
+`mode: "tailor"`). No blocking concerns.
+
+Note: this report file previously contained an unrelated, stale report
+("dossier change-log: parse learned-insights.md insight lines") — evidently
+a leftover from a different task/worktree — overwritten with this task's
+actual report.
