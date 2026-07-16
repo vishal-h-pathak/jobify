@@ -35,6 +35,9 @@ import { EnergyPanel } from "@/components/onboarding/EnergyPanel";
 import { EnvironmentPanel, type EnvironmentScenarioDef } from "@/components/onboarding/EnvironmentPanel";
 import { TrajectoryPanel } from "@/components/onboarding/TrajectoryPanel";
 import { CheckpointInterstitial } from "@/components/onboarding/CheckpointInterstitial";
+import { VoicePanel } from "@/components/onboarding/VoicePanel";
+import { MetricsPanel } from "@/components/onboarding/MetricsPanel";
+import { MirrorPanel } from "@/components/onboarding/MirrorPanel";
 import { RunHuntButton } from "@/app/(app)/feed/RunHuntButton";
 
 export interface Validation {
@@ -153,6 +156,17 @@ const REDOABLE_MODULE_KEYS: readonly ModuleKey[] = [
   "environment",
   "trajectory",
 ];
+
+/**
+ * Pure and DI'd exactly like `submitTurn`/`submitAnchor` above, so mirror's
+ * terminal redirect is directly unit-testable without jsdom (this repo's
+ * vitest config runs in the `node` environment — `window` doesn't exist
+ * there, so a real `window.location.assign` call can only be exercised
+ * through injection, not by stubbing `window` in a test).
+ */
+export function navigateToProfile(assignImpl: (url: string) => void = (url) => window.location.assign(url)): void {
+  assignImpl("/profile");
+}
 
 /** V3A_DESIGN.md §1.6 — the ambient re-rank surface: only ever states things
  * true in the DB (checkpoint_hunt.fired_at, or a real match count). */
@@ -454,19 +468,19 @@ export function ChatStageView({ state, scrollRef, onInputChange, onSend, onRetry
 }
 
 /**
- * V3A_DESIGN.md §4 build item 6 — pre-mirror terminal screen: B2 hasn't
- * shipped voice/metrics/mirror this wave, so once the interview block
- * finishes there's nowhere further to route. Manual "Run my hunt" (owner
+ * V3A_DESIGN.md §4 build item 6 — the fallback screen for once every
+ * canonical module (including B2's voice/metrics/mirror) is complete.
+ * Unreachable in the normal guided flow: mirror's own completion redirects
+ * straight to /profile (`handleMirrorComplete`) before `deriveNextModule`
+ * would ever return null here. Kept as the honest fallback for a stray
+ * revisit of /onboarding after completion. Manual "Run my hunt" (owner
  * decision, 2026-07-06: no automatic hunt #2) plus the feed CTA.
  */
 export function DoneForNowView({ matchCount }: { matchCount: number }) {
   return (
     <Card variant="elevated" className="flex flex-col gap-4">
-      <h2 className="text-2xl font-semibold tracking-tight text-ink">Phase two, done for now.</h2>
-      <p className="text-ink-muted">
-        The rest of your profile (voice, metric honesty, the mirror moment) is coming soon. Your feed is already
-        live from what you&apos;ve told us so far.
-      </p>
+      <h2 className="text-2xl font-semibold tracking-tight text-ink">Your profile is complete.</h2>
+      <p className="text-ink-muted">Your feed is already live from what you&apos;ve told us.</p>
       <div className="flex flex-wrap items-center gap-3">
         <a
           href="/feed"
@@ -496,6 +510,7 @@ export interface OnboardingViewProps {
   onCalibrationAnswerChange: (index: number, value: string) => void;
   onCalibrationSubmit: () => void;
   onModuleComplete: (key: ModuleKey) => void;
+  onMirrorComplete: () => void;
   onCheckpointContinue: () => void;
 }
 
@@ -528,6 +543,7 @@ function renderActivePanel(props: OnboardingViewProps) {
     onCalibrationAnswerChange,
     onCalibrationSubmit,
     onModuleComplete,
+    onMirrorComplete,
   } = props;
 
   const activeModule: ModuleKey | null =
@@ -609,11 +625,14 @@ function renderActivePanel(props: OnboardingViewProps) {
       );
     case "trajectory":
       return <TrajectoryPanel onComplete={() => onModuleComplete("trajectory")} />;
+    case "voice":
+      return <VoicePanel onComplete={() => onModuleComplete("voice")} />;
+    case "metrics":
+      return <MetricsPanel onComplete={() => onModuleComplete("metrics")} />;
+    case "mirror":
+      return <MirrorPanel onComplete={onMirrorComplete} />;
     case "range":
     case "evidence":
-    case "voice":
-    case "metrics":
-    case "mirror":
     default:
       return <DoneForNowView matchCount={state.matchCount} />;
   }
@@ -744,6 +763,19 @@ export default function OnboardingPage() {
     if (key === "dealbreakers") dispatch({ type: "checkpoint_interstitial_shown" });
   }
 
+  /**
+   * Mirror is the last module in CANONICAL_MODULE_ORDER and its completion
+   * is terminal (V3A_DESIGN.md §4 build item 4) — route straight to the
+   * dossier rather than `handleModuleComplete`'s re-fetch-then-render-
+   * DoneForNowView path, which would flash before any redirect. A hard
+   * navigation (not next/navigation's useRouter) is fine here: onboarding
+   * is finished, and this file already avoids next/navigation (see the
+   * `?module=` comment above).
+   */
+  async function handleMirrorComplete() {
+    navigateToProfile();
+  }
+
   async function handleSend() {
     const message = state.input.trim();
     if (!message || state.sending) return;
@@ -842,6 +874,7 @@ export default function OnboardingPage() {
       onCalibrationAnswerChange={(index, value) => dispatch({ type: "calibration_answer_changed", index, value })}
       onCalibrationSubmit={handleCalibrationSubmit}
       onModuleComplete={handleModuleComplete}
+      onMirrorComplete={handleMirrorComplete}
       onCheckpointContinue={() => dispatch({ type: "checkpoint_interstitial_dismissed" })}
     />
   );
