@@ -5,6 +5,23 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock } })),
 }));
 
+// Task 0 (phase1CheckpointIntegration.test.ts) fixed this route to call
+// maybeFireCheckpoint after saveSession, same pattern as every other
+// module-completion route — see reactions/route.test.ts and
+// [key]/route.test.ts for why both of these need mocking: checkpointDeps.ts
+// isn't mocked here (buildCheckpointDeps runs for real), so its own
+// createSupabaseAdminClient() import needs a dummy client; checkpoint.ts's
+// maybeFireCheckpoint is mocked away wholesale so this file doesn't also
+// have to fake the admin-client chain checkpoint.ts's real logic calls.
+vi.mock("@/lib/supabase/admin", () => ({
+  createSupabaseAdminClient: vi.fn(() => ({ __admin: true })),
+}));
+
+const maybeFireCheckpointMock = vi.fn(async (_deps: unknown, _session: unknown, _user: unknown) => {});
+vi.mock("@/lib/onboarding/checkpoint", () => ({
+  maybeFireCheckpoint: maybeFireCheckpointMock,
+}));
+
 const hasClaimedInviteMock = vi.fn();
 vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
 
@@ -43,6 +60,7 @@ describe("POST /api/onboarding/anchor", () => {
       status: "in_progress",
     });
     saveSessionMock.mockReset();
+    maybeFireCheckpointMock.mockClear();
   });
 
   it("401s when not signed in", async () => {
@@ -182,6 +200,19 @@ describe("POST /api/onboarding/anchor", () => {
     const res = await POST(jsonRequest({ current_title: "Engineer", current_company: "Acme" }));
     expect(res.status).toBe(409);
     expect(saveSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("calls maybeFireCheckpoint after saveSession (Task 0 fix — anchor can be the last phase-1 module to complete)", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasClaimedInviteMock.mockResolvedValue(true);
+    await POST(jsonRequest({ current_title: "Engineer", current_company: "Acme" }));
+    expect(maybeFireCheckpointMock).toHaveBeenCalledTimes(1);
+    const [, session, user] = maybeFireCheckpointMock.mock.calls[0];
+    expect((session as { extracted: Record<string, unknown> }).extracted.anchor).toEqual({
+      current_title: "Engineer",
+      current_company: "Acme",
+    });
+    expect(user).toEqual({ id: "user-1" });
   });
 
   it("never calls the Anthropic client or records a ledger row (zero-LLM stage)", async () => {
