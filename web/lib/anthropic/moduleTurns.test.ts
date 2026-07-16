@@ -176,6 +176,24 @@ describe("runMetricsExtractionTurn", () => {
     const result = await runMetricsExtractionTurn("input text");
     expect(result).toEqual({ claims: [], usage: { inputTokens: 111, outputTokens: 22 } });
   });
+
+  it("caps claims at 12 even when the model returns more well-formed claims than the schema allows", async () => {
+    const wellFormedClaims = Array.from({ length: 15 }, (_, i) => ({
+      id: `claim_${i + 1}`,
+      text: `claim number ${i + 1}`,
+      source: "cv" as const,
+      has_number: true,
+    }));
+    createMock.mockResolvedValue(
+      usageResponse([
+        { type: "tool_use", name: "record_metric_claims", input: { claims: wellFormedClaims } },
+      ])
+    );
+
+    const result = await runMetricsExtractionTurn("input text");
+    expect(result.claims).toHaveLength(12);
+    expect(result.claims).toEqual(wellFormedClaims.slice(0, 12));
+  });
 });
 
 describe("runMirrorGenerationTurn", () => {

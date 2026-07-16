@@ -222,7 +222,7 @@ export async function runMetricsExtractionTurn(searchableText: string): Promise<
     if (block.type === "tool_use" && block.name === "record_metric_claims") {
       const input = block.input as { claims?: unknown };
       if (Array.isArray(input.claims)) {
-        claims = input.claims.filter(isMetricClaim);
+        claims = input.claims.filter(isMetricClaim).slice(0, 12);
       }
     }
   }
@@ -263,9 +263,10 @@ what they actually do, not what kind of person that makes them.
 HARD RULE — NEVER STATE A FACT ABSENT FROM THE INPUTS: everything you write must be traceable to something in the \
 summary you were given. Never invent a detail, a number, a company, or an outcome that isn't already there.
 
-HARD RULE — TONE: no exclamation marks anywhere. End the second paragraph declaratively — a statement, never a \
-question. This text is never shown to the model again for a follow-up turn, so there is nothing to ask; asking a \
-question here is always wrong.
+HARD RULE — TONE: no exclamation marks anywhere, and no question marks anywhere — not as rhetorical devices, not \
+mid-paragraph, not at the end. Every sentence in both paragraphs is a statement; end the second paragraph \
+declaratively too. This text is never shown to the model again for a follow-up turn, so there is nothing to ask; \
+asking a question here, anywhere in either paragraph, is always wrong.
 
 Call record_mirror with exactly two fields:
 - paragraphs: an array of exactly two strings, the two paragraphs in order.

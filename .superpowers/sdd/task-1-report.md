@@ -1,240 +1,221 @@
-# Task 1 — INT-1: resume-first interview redesign — report
+# Task 1 report — moduleTurns.ts + verbatim helper + targeting trim
 
 ## What I implemented
 
-### `web/lib/anthropic/interview.ts`
+### 1. `web/lib/onboarding/verbatim.ts` (new)
 
-- **`SEEDED_GREETING`**: replaced the old "what do you do, and what kind of
-  work actually sounds fun right now?" opener with the resume-first ask:
-  "Welcome. Paste your resume (or upload a .txt/.md) and we'll get through
-  this fast — a few pointed questions after, about five minutes total."
-  (verbatim, per brief).
-- **`INTERVIEW_SYSTEM_PROMPT`**: rewritten.
-  - Deleted stage "0. OPENING" entirely — no pre-resume interest exchange.
-  - Added a literal tone ban-list ("passion", "dream", "journey",
-    "fulfilling", "lights you up", "calling", "purpose"), no exclamation
-    marks, one-short-message-answerable questions.
-  - Stage 1 (RESUME INGESTION): states there is no pre-resume exchange,
-    then REFLECT BACK a compact summary (current/last role, years,
-    3-4 core skills, location if present) ending with the exact string
-    "— anything wrong or missing?", bounded to one correction turn max.
-  - Stage 2 (IDENTITY & LOGISTICS): ONE batched logistics turn with the
-    exact wording from the brief ("Logistics, all in one go: where are you
-    based, remote-only or is some onsite fine (and where), and what's the
-    salary floor below which you won't even look?"); name confirmed/asked
-    only if unclear from resume; phone/LinkedIn/website/GitHub explicitly
-    volunteer-only, never asked; CRITICAL RULE (work authorization, visa
-    sponsorship, start date, relocation/in-person-for-forms, AI-policy,
-    prior interviews) preserved and still asserted by tests.
-  - Stage 3 (TARGETING): exactly five questions, one per turn, each with
-    the field it feeds spelled out (tiers / thesis_summary / thesis_summary
-    / hard_disqualifiers / dream_companies), using the brief's exact
-    question wording (direction, trade-off, more-of/done-with,
-    dealbreakers, optional companies seed).
-  - Wrap-up: unchanged CTA string `Head to your feed and hit "Run my hunt"
-    to get your first results.` (HNT-1 pin, untouched).
-  - `INTERVIEW_TOOLS`, `ExtractedState`-adjacent types, `applyToolCalls`
-    stage-transition logic — **not touched** (verified below).
-- Updated the doc-comments above both exports to reflect the new design
-  and cross-reference (INT-1, 2026-07-05).
+```ts
+export function isVerbatimSubstring(needle: string, haystack: string): boolean
+export function filterVerbatim<T>(items: T[], getText: (item: T) => string, haystack: string): T[]
+```
 
-### `web/lib/anthropic/interview.test.ts`
+- `isVerbatimSubstring`: trims both sides, case-sensitive `haystack.trim().includes(needle.trim())`.
+  Empty/whitespace-only needle → `false` unconditionally (even against an empty haystack).
+- `filterVerbatim`: keeps items whose `getText(item)` verifies, preserving order, dropping the
+  rest silently (never throws).
 
-Fully rewritten with 18 tests covering: SEEDED_GREETING exact text + "no
-'sounds fun'"; old opener/OPENING-stage/interest-follow-up gone; ban-list
-words literally present; no-exclamation-marks + one-short-message rule;
-reflect-back instruction + exact correction question + one-correction-max;
-batched-logistics exact wording + volunteer-only phone/LinkedIn/etc;
-CRITICAL RULE (work authorization/visa/start date/AI-policy/prior
-interviews) still forbidden; all five targeting questions' instructions
-(direction/tiers, trade-off/thesis_summary, more-of-done-with/thesis
-energy, dealbreakers/hard_disqualifiers, optional seed/dream_companies);
-and the exact `Head to your feed and hit "Run my hunt"` CTA string.
+### 2. `web/lib/anthropic/moduleTurns.ts` (new)
 
-### `web/app/(app)/onboarding/page.tsx`
+Three LLM-turn functions, same shape/style as `interview.ts` (`anthropicClient()` +
+`ONBOARDING_MODEL`, walk `response.content` for `tool_use`, return `{...fields, usage}`):
 
-- `RAIL_LABELS` changed from the 5-label `["About you", "Resume", "Basics",
-  "Targeting", "Done"]` to the 4-label `["Resume", "Basics", "What you
-  want", "Done"]`.
-- `computeRailSteps` simplified: dropped the `assistantMessageCount`
-  parameter (the message-count heuristic that split `resume` into two rail
-  states is gone, since there's no longer a pre-resume interest exchange to
-  represent). New signature: `computeRailSteps(stage: InterviewStage):
-  RailStep[]`, doing a direct 1:1 index lookup via a `STAGE_ORDER` array
-  (`resume`→0, `identity`→1, `targeting`→2, `done`→3).
-- Updated the one call site in `OnboardingPage` (dropped the now-unused
-  `assistantMessageCount` local and the second argument).
+```ts
+export async function runVoiceIngestTurn(sample: string): Promise<VoiceTurnResult>
+// VoiceTurnResult = { register, rhythm, words_used, words_avoided, signature_phrases, usage }
 
-### `web/app/(app)/onboarding/page.test.tsx`
+export async function runMetricsExtractionTurn(searchableText: string): Promise<MetricsExtractionResult>
+// MetricsExtractionResult = { claims: MetricClaim[], usage }
+// MetricClaim = { id, text, source: "cv"|"range"|"energy"|"anchor", has_number }
 
-- Rewrote the `computeRailSteps` describe block for the 4-label direct
-  mapping (4 tests: resume/identity/targeting/done).
-- Rewrote the `OnboardingView — progress rail active label per state`
-  `it.each` block to the 4 stage→label pairs (dropped
-  `assistantMessageCount` from the table).
-- Updated the `fetchInitialState` "restores a resumed session" test's rail
-  assertions to check "What you want" (was "Targeting").
-- Updated all remaining `computeRailSteps(state.stage, 1)` call sites (3 of
-  them, in the failed-turn / rejected-upload / OnboardingView-greeting
-  tests) to the new single-argument signature.
-- Left the resilience tests (seeded-greeting rendering/dedup,
-  retry-preserves-draft, upload accept/reject, resumed-session restore)
-  behaviorally untouched — only touched where the `computeRailSteps` call
-  signature rippled in.
-- Lightly reworded one stale comment (referenced the now-removed
-  message-count rail heuristic) in the "regression: seeded greeting still
-  displayed" test; the assertion itself (assistantCount === 2) is
-  unchanged.
+export async function runMirrorGenerationTurn(inputs: MirrorGenerationInput): Promise<MirrorGenerationResult>
+// MirrorGenerationInput = { extractedSummary: string }
+// MirrorGenerationResult = { paragraphs: [string, string], quoted_phrases: string[], usage }
+```
 
-## Verified NOT changed (per brief's hard constraints)
+Also exported: `VOICE_INGEST_SYSTEM_PROMPT`, `VOICE_INGEST_TOOLS`,
+`METRICS_EXTRACTION_SYSTEM_PROMPT`, `METRICS_EXTRACTION_TOOLS`,
+`MIRROR_GENERATION_SYSTEM_PROMPT`, `MIRROR_GENERATION_TOOLS` (mirroring `interview.ts`'s pattern
+of exporting the constant alongside the runner, for test assertions and potential route reuse).
 
-- `web/lib/onboarding/handleTurn.ts` and `applyToolCalls.ts` — read both in
-  full; stage-transition logic (`record_resume`→identity,
-  `record_identity`→targeting, `finish_interview`→done) is untouched and
-  needed zero changes. Their test files were not touched.
-- `web/lib/profile/buildDoc.ts` / `ExtractedState` — not touched.
-- `INTERVIEW_TOOLS` schema — not touched (still the same 4 tools/fields).
+None of the three functions verbatim-filter their own output — that's explicitly left to the
+route layer (Task 5), per the brief, because only the route has the raw source text
+(`sample`, `searchableText`, the user's free-text answers) in scope.
 
-## Tests run
+Defensive extraction: a missing tool call or malformed field returns typed empty defaults
+(`""`, `[]`, or `["", ""]` for the mirror's tuple) rather than throwing. `runMetricsExtractionTurn`
+additionally filters out individual malformed claim entries (bad `source` enum, missing fields)
+while keeping well-formed ones in the same array.
 
-- `npx vitest run` (from `web/`): **38 test files, 233 tests, all passed**,
-  clean output, no stray warnings.
-- `npx tsc --noEmit` (from `web/`): clean, no output.
-- `npm run build` (from `web/`): succeeded — `✓ Compiled successfully`,
-  `✓ Generating static pages using 9 workers (11/11)`.
-- `bash scripts/scrub_gate.sh` (repo root): `scrub gate: PASS` (both the
-  identifier scan and the binary-document scan passed).
-- `npx tsx web/scripts/gen-h3-fixture.ts` then `git diff --stat --
-  tests/fixtures/h3_profile_doc.json` (repo root): **no diff** — confirms
-  `ExtractedState`/`buildProfileDoc` truly weren't touched.
-- `python -m pytest tests/test_h3_onboarding_doc_fixture.py -q` (repo root,
-  in a scratch venv since none was pre-provisioned in this worktree):
-  `1 passed`.
+### 3. `interview.ts` targeting trim
+
+- Targeting-stage archetype checklist: five archetypes → four (`a` DIRECTION, `b` TRADE-OFF,
+  `c` MORE-OF/DONE-WITH, `d` OPTIONAL SEED); `(d) DEALBREAKERS` removed entirely, with an
+  explicit new sentence "Dealbreakers are no longer asked here — the dealbreakers module owns
+  that ground now."
+- "Generation freedom never excuses a missing field" sentence: required-fields list trimmed from
+  `tiers, hard_disqualifiers, soft_concerns, and thesis_summary` to `tiers and thesis_summary`.
+- `record_targeting` tool schema: `required` trimmed from
+  `["tiers", "hard_disqualifiers", "soft_concerns", "thesis_summary"]` to
+  `["tiers", "thesis_summary"]`. The two fields remain as optional schema properties (harmless
+  if the model still emits empty arrays) — `applyToolCalls.ts` was not touched, per the brief's
+  explicit out-of-scope note (it already treats them as optional-with-empty-array-fallback).
+- Judgment call (brief explicitly grants this): "ask 3-5 pointed questions" / "dropping the
+  count as low as 3" no longer made sense against 4 archetypes (max achievable is 4, one
+  question per archetype), so I changed both to "2-4" / "as low as 2" for internal coherence.
+
+## Test results
+
+```
+web/lib/onboarding/verbatim.test.ts     13 tests — pass
+web/lib/anthropic/moduleTurns.test.ts   10 tests — pass
+web/lib/anthropic/interview.test.ts     38 tests — pass (7 new/adjusted)
+```
+
+Full suite: `npx vitest run` → **88 test files, 756 tests, all pass.**
+`npx tsc --noEmit -p tsconfig.json` → clean, no errors.
+`npx eslint <all touched files>` → clean, no output.
+`bash scripts/scrub_gate.sh` → PASS (scans the whole working tree, not just tracked files, so
+the new untracked files were covered before the first commit).
+
+`moduleTurns.test.ts` mocks at the `./client` boundary (`vi.mock("./client", () => ({
+anthropicClient: () => ({ messages: { create: createMock } }), ONBOARDING_MODEL: "..." }))`),
+the same boundary style used elsewhere in the repo for testing consumers of `interview.ts`
+(`app/api/settings/resume/route.test.ts` mocks `@/lib/anthropic/client`'s `ONBOARDING_MODEL`
+alongside mocking `interview.ts` itself). Note: `interview.test.ts` itself never actually
+exercises `runInterviewTurn`/`runCalibrationGeneration`/`runResumeExtractionTurn` end-to-end —
+it only asserts on the exported prompt/tool constants; there was no existing precedent for a
+direct unit test of a turn function's `response.content` extraction logic. I built the mocking
+pattern by analogy from how consumer routes mock `interview.ts` and `@/lib/anthropic/client`
+together — it generalized cleanly to three functions, no escalation needed.
+
+Each `moduleTurns.test.ts` describe block asserts: the model call arguments (model, system
+prompt identity, tools identity, message shape), the full extracted return shape including
+`usage` passthrough, and a missing/malformed-tool-call case returning defaults instead of
+throwing — plus one metrics-specific test that malformed individual claim entries are dropped
+while well-formed ones survive, and one voice-specific test that `signature_phrases` is
+returned un-filtered (confirming the route owns verbatim-filtering, not this function).
 
 ## Files changed
 
-- `web/lib/anthropic/interview.ts`
-- `web/lib/anthropic/interview.test.ts`
-- `web/app/(app)/onboarding/page.tsx`
-- `web/app/(app)/onboarding/page.test.tsx`
+- `web/lib/onboarding/verbatim.ts` (new)
+- `web/lib/onboarding/verbatim.test.ts` (new)
+- `web/lib/anthropic/moduleTurns.ts` (new)
+- `web/lib/anthropic/moduleTurns.test.ts` (new)
+- `web/lib/anthropic/interview.ts` (edited: targeting-stage prompt + `record_targeting.required`)
+- `web/lib/anthropic/interview.test.ts` (edited: 2 assertions updated for 2-4/four-archetype
+  language, `record_targeting.required` updated, 2 new describe blocks added — one for the
+  dealbreakers removal, one for the optional-but-not-required schema fields)
 
-`git diff --stat` against pre-task HEAD (`7e3d635`) touches exactly these
-4 files — nothing under `admin/`, `auth/`, `invite/`, `lib/admin/`,
-`jobify/hosted/`, migrations, or `components/ui/`.
+Commits:
+- `469a06e` — verbatim helper + moduleTurns.ts
+- `e3a5106` — interview.ts targeting trim + test updates
 
-## Self-review findings
+(Note: this file previously held a stale report from an earlier/different task-numbering plan
+iteration — an INT-1 resume-first interview redesign — dated before the current
+`task-1-brief.md`. That content has been fully replaced with this task's actual report.)
 
-- All ban-list words, reflect-back, batched-logistics, all five targeting
-  questions, gone-old-opener, and the 4-label rail were implemented and are
-  each independently asserted by a test that checks the actual exported
-  string constants (not vacuous checks — verified by first dumping the
-  real computed `INTERVIEW_SYSTEM_PROMPT` string via a throwaway vitest
-  test and copying exact substrings into the assertions, rather than
-  hand-reconstructing template-literal line-continuation joins by eye).
-- No issues found requiring further fixes.
+## Self-review
 
-## Concerns
+- **Completeness vs. brief:** all three function signatures, all three tool schemas (field
+  names, types, `enum`, `maxItems`/`minItems`), and both return-shape contracts match the brief
+  verbatim. `record_targeting`'s already-optional `hard_disqualifiers`/`soft_concerns` were
+  confirmed unchanged as schema properties (brief flagged this as likely a no-op finding — it
+  was already the required-list that needed trimming, which I did).
+- **Quality / YAGNI:** kept `moduleTurns.ts` to exactly the three functions + their
+  prompts/schemas/types, no extra helpers. `verbatim.ts` has only the two specified functions.
+  No speculative abstractions (e.g. did not build a generic "tool-call extractor" helper shared
+  across the three functions — each mirrors `interview.ts`'s existing per-function inline
+  extraction style rather than introducing a new pattern this task wasn't asked to build).
+- **Test realism:** tests assert on actual extracted field values from mocked `tool_use` blocks
+  (not just "mock was called") — e.g. `runMetricsExtractionTurn`'s malformed-claim-filtering
+  test constructs three claims (one well-formed, one bad enum, one missing a field) and asserts
+  only the well-formed one survives, in place.
+- **Scrub gate:** verified explicitly (`scripts/scrub_gate.sh` → PASS) before committing; all
+  prompts use "the candidate" / "job-search targeting profile," never a name or "resume
+  application" framing.
+- **Ledger discipline:** not directly applicable to this task — `moduleTurns.ts` functions are
+  pure LLM-turn wrappers with no DB access; `recordOnboardingTurn` ledger calls belong to the
+  route layer (Task 5), consistent with how `runResumeExtractionTurn` (same shape, existing
+  code) is ledgered by its caller rather than internally.
 
-- `node_modules` was not installed in this worktree checkout; I ran
-  `npm install` in `web/` to run the verification commands. This did not
-  modify `package.json`/`package-lock.json` (verified via `git status`).
-  No Python venv existed either; I created a throwaway one in the
-  scratchpad dir to run the pytest check — nothing related to it was
-  committed.
-- This report file (`.superpowers/sdd/task-1-report.md`) previously
-  contained unrelated content from a different task ("Foundational infra
-  for H4 (hosted worker)") — I overwrote it with this task's report per
-  the instructions to write the report to this exact path. Flagging in
-  case that prior content needs to be preserved/relocated elsewhere.
+## Concerns / deviations
 
-## Fix: email wiring
+- **Judgment call flagged above:** changed "3-5 pointed questions" / "as low as 3" to "2-4" /
+  "as low as 2" for coherence against the new 4-archetype checklist. The brief only explicitly
+  called out adjusting the "dropping the count" phrase, not the "3-5" opening sentence, but
+  leaving "3-5" in place would have been internally inconsistent (max achievable is now 4
+  questions from 4 archetypes, one per archetype). Flagging this since it's a step beyond the
+  brief's literal instruction, though within the judgment it explicitly grants.
+- **`MirrorGenerationResult.paragraphs` typed as a strict `[string, string]` tuple** (not
+  `string[]`), with `["", ""]` as the empty-default fallback, so Task 5's route gets a type-safe
+  guarantee of exactly two paragraphs to index into. This is slightly more specific than the
+  brief's inline shorthand `paragraphs: [string, string] (exactly 2 items)` might have left
+  ambiguous (tuple type vs. just an array) — I read "exactly 2 items" as intent for a real tuple
+  type, not just a runtime-shape comment.
+- No other deviations from the brief's exact schemas/signatures noted.
 
-Task review on the INT-1 commit (`eaef33b`) caught a closed-loop break:
-removing the old "ask for email in chat" instruction (per the plan's
-"email from auth" line) left nothing actually forwarding the
-authenticated user's real email into `record_identity` — the model would
-have had to fabricate a value for a still-required schema field. Fix
-brief: `.superpowers/sdd/task-1-fix-brief.md`. Human decision: make the
-real auth email authoritative, overwriting whatever (if anything) the
-model supplies, unconditionally, every turn.
+## Review-fix addendum (commits after 469a06e/e3a5106)
 
-### What I implemented
+Fixed two findings from a task-scoped review of the above work.
 
-1. **`web/lib/onboarding/handleTurn.ts`** — added `userEmail: string` to
-   `HandleTurnDeps`. After `applyToolCalls` produces `extracted`, if
-   `extracted.identity` exists, its `email` field is overwritten with
-   `userEmail` unconditionally (`extracted.identity = { ...extracted.identity,
-   email: userEmail }`), before the `extractedForStorage` widen/persist.
-   This runs every turn `identity` is present — including turns where
-   `record_identity` fired in a *prior* turn and this turn's tool calls
-   don't touch it — so the auth email always wins, whether the model
-   omitted email, echoed it correctly, or fabricated a completely
-   different one.
-2. **`web/app/api/onboarding/turn/route.ts`** (approved exception to the
-   owned-file list) — now passes `userEmail: user.email ?? ""` into the
-   `handleOnboardingTurn({...})` call, sourced from the already-fetched
-   `supabase.auth.getUser()` result.
-3. **`web/lib/anthropic/interview.ts`** — relaxed `record_identity`'s
-   `input_schema.required` from `["name", "email"]` to `["name"]`. `email`
-   remains a valid optional property on the schema (harmless if the model
-   includes one, since step 1 overwrites it regardless). No system prompt
-   wording changes — the batched-logistics instruction already correctly
-   omits asking for email.
+### 1. Mirror system prompt — incomplete question-mark ban (main finding)
 
-### Tests updated/added
+`MIRROR_GENERATION_SYSTEM_PROMPT`'s TONE hard-rule previously read: "no exclamation marks
+anywhere. End the second paragraph declaratively — a statement, never a question." That only
+constrains how paragraph 2 *ends* — it does not ban a question mark occurring mid-paragraph or
+anywhere in paragraph 1. The brief (`docs/superpowers/plans/2026-07-16-v3a-b2-llm-modules.md`,
+Task 1, `runMirrorGenerationTurn` prompt spec) calls for "no exclamation marks; ends
+declaratively, no question mark anywhere," with an explicit note that this text never passes
+through `/turn`'s ends-with-a-question post-check — so for mirror the ban must be complete and
+prompt-only (nothing in code validates it).
 
-- `web/lib/onboarding/handleTurn.test.ts`: added `userEmail` to every
-  existing `handleOnboardingTurn(...)` call (now a required field), plus a
-  new test — "overwrites a model-supplied (bogus) record_identity email
-  with deps.userEmail, unconditionally" — that has the mocked model return
-  a tool call with a deliberately bogus email
-  (`totally-made-up@nowhere.invalid`), asserts the bogus string genuinely
-  reached `runTurn`'s history (so the test can't pass by accident), and
-  then asserts the `saveSession` payload's `extracted.identity.email` is
-  the auth email (`real-auth-email@example.com`) and explicitly is **not**
-  the bogus one. This is stronger than the pre-existing "omitted email"
-  coverage implicit elsewhere — it proves overwrite-wins-even-when-supplied,
-  not just fill-in-when-absent.
-- `web/app/api/onboarding/turn/route.test.ts`: added `email:
-  "user-1@example.com"` to the "succeeds with a claimed invite" test's
-  `getUserMock` fixture (which previously omitted email), and added an
-  assertion that `handleOnboardingTurnMock` was called with
-  `expect.objectContaining({ userEmail: "user-1@example.com" })`.
-- `web/lib/anthropic/interview.test.ts`: added a new describe block
-  asserting `INTERVIEW_TOOLS.find(t => t.name === "record_identity")
-  .input_schema.required` equals `["name"]` (not `["name", "email"]`), and
-  that `email` is still present as an optional schema property.
+Changed the HARD RULE — TONE paragraph in `web/lib/anthropic/moduleTurns.ts` to:
 
-### Verification
+> HARD RULE — TONE: no exclamation marks anywhere, and no question marks anywhere — not as
+> rhetorical devices, not mid-paragraph, not at the end. Every sentence in both paragraphs is a
+> statement; end the second paragraph declaratively too. This text is never shown to the model
+> again for a follow-up turn, so there is nothing to ask; asking a question here, anywhere in
+> either paragraph, is always wrong.
 
-- `npx vitest run` (from `web/`): **38 test files, 236 tests, all passed**
-  (233 pre-existing + 1 new in `handleTurn.test.ts` + 2 new in
-  `interview.test.ts`), pristine output.
-- `npx tsc --noEmit` (from `web/`): clean after one fix — the new
-  `handleTurn.test.ts` test's `runTurn` mock initially had no declared
-  parameter, so TS inferred `Parameters<typeof runTurn>` as `[]` and
-  `runTurn.mock.calls[0][0]` came back `undefined`/out-of-bounds; typed the
-  mock as `async (_history: ChatMessage[]) => ...` to match the pattern
-  already used by the other history-asserting tests in that file.
-- `bash scripts/scrub_gate.sh` (repo root): `scrub gate: PASS` — both the
-  identifier scan and binary-document scan passed; no new strings
-  introduced by this fix trip it.
+No test previously asserted on this exact substring (tests reference the exported
+`MIRROR_GENERATION_SYSTEM_PROMPT` constant by identity, not by content match), so no test
+updates were required for this change.
 
-### Self-review
+### 2. `runMetricsExtractionTurn` — server-side cap at 12 claims (minor, fixed)
 
-- All 4 required changes from the fix brief are implemented exactly as
-  specified: `handleTurn.ts` deps + unconditional overwrite,
-  `route.ts` wiring, `interview.ts` schema relaxation, and all three
-  named test files updated.
-- The new `handleTurn.test.ts` test specifically proves the
-  overwrite-wins-even-when-the-model-supplied-a-bogus-value case (not just
-  the omitted-email case) by asserting both on the bogus value actually
-  reaching `runTurn`'s history and on the auth email being what ultimately
-  lands in the `saveSession` payload.
-- File scope respected: only the 4 code/test files named in the brief
-  plus the one approved-exception route file/its test were touched; no
-  other files under `admin/`, `auth/`, `invite/`, `jobify/hosted/`, or
-  migrations were touched.
-- No concerns beyond what's already flagged above (task-1's own report
-  content having been uncommitted at fix-brief handoff time — folded into
-  this same commit since amending `eaef33b` is out of scope).
+The tool schema advertised `maxItems: 12` on `claims`, but nothing in
+`runMetricsExtractionTurn` enforced that cap server-side if a model ignored the schema hint and
+returned more than 12 well-formed claims. Added `.slice(0, 12)` after the existing
+`isMetricClaim` filter:
+
+```ts
+if (Array.isArray(input.claims)) {
+  claims = input.claims.filter(isMetricClaim).slice(0, 12);
+}
+```
+
+Added a new test in `moduleTurns.test.ts` (`runMetricsExtractionTurn` describe block): 15
+well-formed claims in → asserts `result.claims` has length 12 and equals the first 12 of the
+input array.
+
+### Test results
+
+```
+npx vitest run lib/anthropic/moduleTurns.test.ts
+✓ lib/anthropic/moduleTurns.test.ts (11 tests) — 11 passed (was 10; +1 new cap test)
+
+npx vitest run lib/anthropic/moduleTurns.test.ts lib/anthropic/interview.test.ts
+✓ lib/anthropic/moduleTurns.test.ts (11 tests)
+✓ lib/anthropic/interview.test.ts (38 tests)
+Test Files  2 passed (2)
+     Tests  49 passed (49)
+```
+
+### Files changed
+
+- `web/lib/anthropic/moduleTurns.ts` — mirror TONE hard-rule reworded; `.slice(0, 12)` added to
+  `runMetricsExtractionTurn`.
+- `web/lib/anthropic/moduleTurns.test.ts` — new test: caps claims at 12 given 15 well-formed
+  inputs.
+
+Commit: review-fix commit on `feat/v3a-b2-llm` (separate from 469a06e/e3a5106, not an amend).
