@@ -1,13 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "@/lib/anthropic/interview";
+import type { ModulesState } from "@/lib/onboarding/moduleRegistry";
 import { RESUME_SKIP_MESSAGE } from "@/lib/onboarding/handleTurn";
 import { AnchorForm } from "@/components/onboarding/AnchorForm";
-import { CalibrationGeneratingSkeleton, CalibrationPanel } from "@/components/onboarding/CalibrationPanel";
-import { deriveSpineSteps } from "@/components/onboarding/StepSpine";
+import { CalibrationGeneratingSkeleton } from "@/components/onboarding/CalibrationPanel";
+import { PhaseRail } from "@/components/onboarding/PhaseRail";
+import { ReactionDeck } from "@/components/onboarding/ReactionDeck";
+import { ValuePairsPanel } from "@/components/onboarding/ValuePairsPanel";
+import { DealbreakersPanel } from "@/components/onboarding/DealbreakersPanel";
+import { EnergyPanel } from "@/components/onboarding/EnergyPanel";
+import { EnvironmentPanel } from "@/components/onboarding/EnvironmentPanel";
+import { TrajectoryPanel } from "@/components/onboarding/TrajectoryPanel";
+import { CheckpointInterstitial } from "@/components/onboarding/CheckpointInterstitial";
 import {
   ChatStageView,
-  DoneView,
+  DoneForNowView,
   OnboardingView,
+  deriveHuntStatusLabel,
   fetchInitialState,
   handleUpload,
   initialOnboardingState,
@@ -23,9 +32,9 @@ import {
  * jsdom/@testing-library/react installed — every stateful/hook-bearing test
  * extracts business logic into plain, dependency-injected functions and a
  * pure reducer, then tests those directly (see lib/onboarding/handleTurn.test.ts).
- * Hook-free presentational views (`OnboardingView`, `ChatStageView`,
- * `DoneView`) are exercised by *directly invoking* them as plain functions
- * and inspecting the returned element tree, same as FileButton.test.tsx.
+ * Hook-free presentational views (`OnboardingView`, `ChatStageView`) are
+ * exercised by *directly invoking* them as plain functions and inspecting
+ * the returned element tree, same as FileButton.test.tsx.
  */
 
 function fakeResponse(body: unknown, ok = true): Response {
@@ -49,20 +58,70 @@ const baseViewProps = {
   onAnchorSubmit: noop,
   onCalibrationAnswerChange: noop,
   onCalibrationSubmit: noop,
+  onModuleComplete: noop,
+  onCheckpointContinue: noop,
+};
+
+function completion(receipt: string, completedAt = "2026-07-16T00:00:00.000Z") {
+  return { completed_at: completedAt, receipt };
+}
+
+const PHASE_ONE_DONE: ModulesState = {
+  anchor: completion("Engineer · Acme"),
+  reactions: completion("6 reactions (4 interested)"),
+  values: completion("7 trade-offs answered"),
+  dealbreakers: completion("2 dealbreakers"),
+};
+
+const PHASE_TWO_STRUCTURED_DONE: ModulesState = {
+  ...PHASE_ONE_DONE,
+  energy: completion("2 energy signals"),
+  environment: completion("4 scenarios chosen"),
+  trajectory: completion("trajectory: climb"),
 };
 
 describe("fetchInitialState — GET /api/onboarding/state", () => {
-  it("defaults a brand-new session to the anchor stage", async () => {
-    const fetchMock = vi.fn(async () => fakeResponse({ stage: undefined, messages: [], status: "in_progress" }));
+  it("defaults a brand-new session and extends with modules/matchCount/valuePairs/environmentScenarios", async () => {
+    const fetchMock = vi.fn(async () =>
+      fakeResponse({
+        stage: undefined,
+        messages: [],
+        status: "in_progress",
+        modules: {},
+        match_count: 0,
+        value_pairs: [{ pair_id: "mission_prestige", a: "Mission", b: "Prestige" }],
+        environment_scenarios: [{ key: "team_size", a: "Small", b: "Large" }],
+      })
+    );
     const result = await fetchInitialState(fetchMock as unknown as typeof fetch);
-    expect(result).toEqual({ messages: [], stage: "anchor", done: false });
+    expect(result).toEqual({
+      messages: [],
+      stage: "anchor",
+      done: false,
+      modules: {},
+      matchCount: 0,
+      valuePairs: [{ pair_id: "mission_prestige", a: "Mission", b: "Prestige" }],
+      environmentScenarios: [{ key: "team_size", a: "Small", b: "Large" }],
+    });
   });
 
-  it("restores a resumed session's stage and messages", async () => {
+  it("restores a resumed session's stage, messages, and modules", async () => {
     const persisted: ChatMessage[] = [{ role: "assistant", content: "Show your range…" }];
-    const fetchMock = vi.fn(async () => fakeResponse({ stage: "calibration", messages: persisted, status: "in_progress" }));
+    const fetchMock = vi.fn(async () =>
+      fakeResponse({
+        stage: "calibration",
+        messages: persisted,
+        status: "in_progress",
+        modules: PHASE_ONE_DONE,
+        match_count: 3,
+        value_pairs: [],
+        environment_scenarios: [],
+      })
+    );
     const result = await fetchInitialState(fetchMock as unknown as typeof fetch);
-    expect(result).toEqual({ messages: persisted, stage: "calibration", done: false });
+    expect(result.stage).toBe("calibration");
+    expect(result.modules).toEqual(PHASE_ONE_DONE);
+    expect(result.matchCount).toBe(3);
   });
 
   it("rejects when the request fails", async () => {
@@ -123,6 +182,27 @@ describe("handleUpload / validateUploadName", () => {
   });
 });
 
+describe("deriveHuntStatusLabel", () => {
+  it("null before the checkpoint has fired", () => {
+    expect(deriveHuntStatusLabel({}, 0)).toBeNull();
+  });
+
+  it("hunt #1 running · HH:MM before any matches exist", () => {
+    const modules: ModulesState = { checkpoint_hunt: { fired_at: "2026-07-16T14:32:00.000Z" } };
+    expect(deriveHuntStatusLabel(modules, 0)).toMatch(/^hunt #1 running · \d{2}:\d{2}$/);
+  });
+
+  it("swaps to 'N matches waiting' once matches exist", () => {
+    const modules: ModulesState = { checkpoint_hunt: { fired_at: "2026-07-16T14:32:00.000Z" } };
+    expect(deriveHuntStatusLabel(modules, 4)).toBe("4 matches waiting");
+  });
+
+  it("singular 'match' for exactly 1", () => {
+    const modules: ModulesState = { checkpoint_hunt: { fired_at: "2026-07-16T14:32:00.000Z" } };
+    expect(deriveHuntStatusLabel(modules, 1)).toBe("1 match waiting");
+  });
+});
+
 describe("onboardingReducer — anchor stage transitions", () => {
   it("anchor_field_changed updates one field and clears anchorError", () => {
     const withError = { ...initialOnboardingState, anchorError: "provide current_title + current_company, or free_text" };
@@ -146,15 +226,6 @@ describe("onboardingReducer — anchor stage transitions", () => {
     expect(next.anchorError).toBe("");
   });
 
-  it("anchor_submit_succeeded advances to calibration, flags generation in flight, and records the Role receipt", () => {
-    const started = onboardingReducer(initialOnboardingState, { type: "anchor_submit_started" });
-    const next = onboardingReducer(started, { type: "anchor_submit_succeeded", receipt: "PM · Foo" });
-    expect(next.stage).toBe("calibration");
-    expect(next.calibrationGenerating).toBe(true);
-    expect(next.anchorSubmitting).toBe(false);
-    expect(next.receipts.anchor).toBe("PM · Foo");
-  });
-
   it("anchor_submit_failed preserves the typed form values (draft preserved on failure)", () => {
     const typed = onboardingReducer(initialOnboardingState, {
       type: "anchor_field_changed",
@@ -168,16 +239,37 @@ describe("onboardingReducer — anchor stage transitions", () => {
     expect(failed.anchorError).toBe("Something went wrong.");
   });
 
-  it("state_loaded (the follow-up fetch after anchor submit) clears calibrationGenerating", () => {
+  it("state_loaded (the follow-up fetch after anchor submit) clears calibrationGenerating and carries modules/matchCount", () => {
     const generating = { ...initialOnboardingState, calibrationGenerating: true, stage: "calibration" as const };
     const loaded = onboardingReducer(generating, {
       type: "state_loaded",
       messages: [{ role: "assistant", content: "Four short prompts…" }],
       stage: "calibration",
       done: false,
+      modules: { anchor: completion("PM · Foo") },
+      matchCount: 0,
+      valuePairs: [],
+      environmentScenarios: [],
     });
     expect(loaded.calibrationGenerating).toBe(false);
     expect(loaded.loading).toBe(false);
+    expect(loaded.modules).toEqual({ anchor: completion("PM · Foo") });
+  });
+});
+
+describe("onboardingReducer — checkpoint interstitial + redo", () => {
+  it("checkpoint_interstitial_shown / dismissed toggle interstitialPending", () => {
+    const shown = onboardingReducer(initialOnboardingState, { type: "checkpoint_interstitial_shown" });
+    expect(shown.interstitialPending).toBe(true);
+    const dismissed = onboardingReducer(shown, { type: "checkpoint_interstitial_dismissed" });
+    expect(dismissed.interstitialPending).toBe(false);
+  });
+
+  it("redo_requested / redo_cleared set and clear redoModule", () => {
+    const requested = onboardingReducer(initialOnboardingState, { type: "redo_requested", key: "values" });
+    expect(requested.redoModule).toBe("values");
+    const cleared = onboardingReducer(requested, { type: "redo_cleared" });
+    expect(cleared.redoModule).toBeNull();
   });
 });
 
@@ -187,7 +279,7 @@ describe("onboardingReducer — calibration stage transitions", () => {
     expect(first.calibrationAnswers).toEqual(["", "", "range answer", ""]);
   });
 
-  it("turn_succeeded with a calibration receiptUpdate merges it into receipts and advances stage", () => {
+  it("turn_succeeded advances stage and appends messages", () => {
     const started = onboardingReducer(initialOnboardingState, { type: "turn_started" });
     const succeeded = onboardingReducer(started, {
       type: "turn_succeeded",
@@ -195,10 +287,9 @@ describe("onboardingReducer — calibration stage transitions", () => {
       assistantText: "Have a resume handy?",
       stage: "resume",
       done: false,
-      receiptUpdate: { calibration: "4 answers" },
     });
     expect(succeeded.stage).toBe("resume");
-    expect(succeeded.receipts).toEqual({ calibration: "4 answers" });
+    expect(succeeded.messages).toHaveLength(2);
   });
 
   it("turn_failed after a calibration submit preserves the four answers (draft preserved on failed turn)", () => {
@@ -211,40 +302,6 @@ describe("onboardingReducer — calibration stage transitions", () => {
     expect(failed.calibrationAnswers).toEqual(["a", "b", "c", "d"]);
     expect(failed.turnError).toBe("model overloaded");
     expect(failed.sending).toBe(false);
-  });
-});
-
-describe("onboardingReducer — resume stage receipts (skip vs provided)", () => {
-  it("a normal send in the resume stage records 'resume added'", () => {
-    const state: OnboardingState = { ...initialOnboardingState, stage: "resume", input: "here is my resume" };
-    const started = onboardingReducer(state, { type: "turn_started" });
-    const succeeded = onboardingReducer(started, {
-      type: "turn_succeeded",
-      userMessage: "here is my resume",
-      assistantText: "Logistics, all in one go: …",
-      stage: "targeting",
-      done: false,
-      receiptUpdate: { resume: "resume added" },
-    });
-    expect(succeeded.receipts.resume).toBe("resume added");
-  });
-
-  it("the skip path records the skipped receipt with its own display text", () => {
-    const state: OnboardingState = { ...initialOnboardingState, stage: "resume" };
-    const started = onboardingReducer(state, { type: "turn_started" });
-    const succeeded = onboardingReducer(started, {
-      type: "turn_succeeded",
-      userMessage: "Skipped — using the anchor and range answers instead.",
-      assistantText: "Logistics, all in one go: …",
-      stage: "targeting",
-      done: false,
-      receiptUpdate: { resume: "skipped — built from your answers" },
-    });
-    expect(succeeded.messages[0]).toEqual({
-      role: "user",
-      content: "Skipped — using the anchor and range answers instead.",
-    });
-    expect(succeeded.receipts.resume).toBe("skipped — built from your answers");
   });
 });
 
@@ -273,7 +330,7 @@ describe("onboardingReducer — turn_failed keeps the composer draft (regression
 });
 
 describe("OnboardingView — loading and error states", () => {
-  it("renders a spine+panel skeleton, not a centered spinner, while loading", () => {
+  it("renders a rail+panel skeleton, not a centered spinner, while loading", () => {
     const view = OnboardingView({ state: { ...initialOnboardingState, loading: true }, ...baseViewProps });
     expect(view.props.children).toHaveLength(3);
     expect(view.props.children.every((c: { props: { className: string } }) => c.props.className.includes("animate-pulse"))).toBe(
@@ -291,73 +348,219 @@ describe("OnboardingView — loading and error states", () => {
   });
 });
 
-describe("OnboardingView — stage panel swap", () => {
-  function panelOf(state: OnboardingState, calibrationPrompts: string[] = []) {
-    const view = OnboardingView({ state, ...baseViewProps, calibrationPrompts });
+describe("OnboardingView — PhaseRail + hunt status chip wiring", () => {
+  function header(state: OnboardingState) {
+    const view = OnboardingView({ state, ...baseViewProps });
+    const [, contentDiv] = view.props.children;
+    const [headerRow] = contentDiv.props.children;
+    return headerRow;
+  }
+
+  it("passes modules/stage/sweeping through to PhaseRail", () => {
+    const state: OnboardingState = { ...initialOnboardingState, loading: false, modules: PHASE_ONE_DONE, stage: "calibration" };
+    const [railWrapper] = header(state).props.children;
+    const rail = railWrapper.props.children;
+    expect(rail.type).toBe(PhaseRail);
+    expect(rail.props.modules).toEqual(PHASE_ONE_DONE);
+    expect(rail.props.stage).toBe("calibration");
+    expect(rail.props.sweeping).toBe(false);
+  });
+
+  it("sweeping mirrors interstitialPending", () => {
+    const state: OnboardingState = { ...initialOnboardingState, loading: false, interstitialPending: true, modules: PHASE_ONE_DONE };
+    const [railWrapper] = header(state).props.children;
+    expect(railWrapper.props.children.props.sweeping).toBe(true);
+  });
+
+  it("no status chip before the checkpoint fires", () => {
+    const state: OnboardingState = { ...initialOnboardingState, loading: false };
+    const [, chip] = header(state).props.children;
+    expect(chip).toBeFalsy();
+  });
+
+  it("shows the status chip once checkpoint_hunt exists", () => {
+    const modules: ModulesState = { ...PHASE_ONE_DONE, checkpoint_hunt: { fired_at: "2026-07-16T14:32:00.000Z" } };
+    const state: OnboardingState = { ...initialOnboardingState, loading: false, modules, matchCount: 2 };
+    const [, chip] = header(state).props.children;
+    expect(chip.props.children).toBe("2 matches waiting");
+  });
+});
+
+describe("OnboardingView — checkpoint interstitial takes over the panel slot", () => {
+  it("renders CheckpointInterstitial, honestly branched, while interstitialPending", () => {
+    const modules: ModulesState = { ...PHASE_ONE_DONE, checkpoint_hunt: { fired_at: "2026-07-16T14:32:00.000Z" } };
+    const state: OnboardingState = { ...initialOnboardingState, loading: false, interstitialPending: true, modules, matchCount: 5 };
+    const view = OnboardingView({ state, ...baseViewProps });
+    const [, contentDiv] = view.props.children;
+    const [, panelWrapper] = contentDiv.props.children;
+    const interstitial = panelWrapper.props.children;
+    expect(interstitial.type).toBe(CheckpointInterstitial);
+    expect(interstitial.props.fired).toBe(true);
+    expect(interstitial.props.matchCount).toBe(5);
+  });
+
+  it("branches honestly to fired=false when checkpoint_hunt never landed", () => {
+    const state: OnboardingState = { ...initialOnboardingState, loading: false, interstitialPending: true, modules: PHASE_ONE_DONE };
+    const view = OnboardingView({ state, ...baseViewProps });
+    const [, contentDiv] = view.props.children;
+    const [, panelWrapper] = contentDiv.props.children;
+    expect(panelWrapper.props.children.props.fired).toBe(false);
+  });
+
+  it("the continue button dismisses the interstitial via onCheckpointContinue", () => {
+    const onCheckpointContinue = vi.fn();
+    const state: OnboardingState = { ...initialOnboardingState, loading: false, interstitialPending: true, modules: PHASE_ONE_DONE };
+    const view = OnboardingView({ state, ...baseViewProps, onCheckpointContinue });
+    const [, contentDiv] = view.props.children;
+    const [, panelWrapper] = contentDiv.props.children;
+    panelWrapper.props.children.props.onContinue();
+    expect(onCheckpointContinue).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("OnboardingView — module panel routing (V3A_DESIGN.md §1.2 canonical order)", () => {
+  function panelOf(state: OnboardingState, calibrationPrompts: string[] = [], extraProps: Record<string, unknown> = {}) {
+    const view = OnboardingView({ state, ...baseViewProps, ...extraProps, calibrationPrompts });
     const [, contentDiv] = view.props.children;
     const [, panelWrapper] = contentDiv.props.children;
     return panelWrapper.props.children;
   }
 
-  it("anchor stage renders AnchorForm plus the beta disclosure line (ONB-D handoff)", () => {
-    const panel = panelOf({ ...initialOnboardingState, loading: false, stage: "anchor" });
-    // The anchor panel is a fragment: [AnchorForm, disclosure <p>].
+  it("a brand-new session (empty modules) renders AnchorForm plus the beta disclosure line", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, modules: {}, stage: "anchor" });
     const [form, disclosure] = panel.props.children;
     expect(form.type).toBe(AnchorForm);
     expect(disclosure.type).toBe("p");
-    expect(typeof disclosure.props.children).toBe("string");
-    expect(disclosure.props.children.length).toBeGreaterThan(10);
   });
 
-  it("calibration stage while generating renders the loading skeleton, not CalibrationPanel", () => {
-    const panel = panelOf({ ...initialOnboardingState, loading: false, stage: "calibration", calibrationGenerating: true });
+  it("anchor done -> reactions: ReactionDeck with the intro copy above it", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, modules: { anchor: completion("a") }, stage: "calibration" });
+    const [, deck] = panel.props.children;
+    expect(deck.type).toBe(ReactionDeck);
+  });
+
+  it("phase 1 done -> energy: EnergyPanel (dealbreakers just completed, not yet checkpointed in this test)", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, modules: PHASE_ONE_DONE, stage: "calibration" });
+    expect(panel.type).toBe(EnergyPanel);
+  });
+
+  it("energy done -> environment: EnvironmentPanel gets the scenarios prop", () => {
+    const scenarios = [{ key: "team_size" as const, a: "Small", b: "Large" }];
+    const panel = panelOf(
+      {
+        ...initialOnboardingState,
+        loading: false,
+        modules: { ...PHASE_ONE_DONE, energy: completion("e") },
+        environmentScenarios: scenarios,
+        stage: "calibration",
+      },
+      []
+    );
+    expect(panel.type).toBe(EnvironmentPanel);
+    expect(panel.props.scenarios).toEqual(scenarios);
+  });
+
+  it("values module gets the valuePairs prop from state", () => {
+    const valuePairs = [{ pair_id: "mission_prestige", a: "Mission", b: "Prestige" }];
+    const panel = panelOf({
+      ...initialOnboardingState,
+      loading: false,
+      modules: { anchor: completion("a"), reactions: completion("r") },
+      valuePairs,
+      stage: "calibration",
+    });
+    expect(panel.type).toBe(ValuePairsPanel);
+    expect(panel.props.valuePairs).toEqual(valuePairs);
+  });
+
+  it("dealbreakers is the last phase-1 module", () => {
+    const panel = panelOf({
+      ...initialOnboardingState,
+      loading: false,
+      modules: { anchor: completion("a"), reactions: completion("r"), values: completion("v") },
+      stage: "calibration",
+    });
+    expect(panel.type).toBe(DealbreakersPanel);
+  });
+
+  it("trajectory is the last of the phase-2 structured modules", () => {
+    const panel = panelOf({
+      ...initialOnboardingState,
+      loading: false,
+      modules: { ...PHASE_ONE_DONE, energy: completion("e"), environment: completion("en") },
+      stage: "calibration",
+    });
+    expect(panel.type).toBe(TrajectoryPanel);
+  });
+
+  it("phase-2 structured modules done, chat stage still 'calibration' -> the interview block's calibration panel, not skipped past", () => {
+    const panel = panelOf({
+      ...initialOnboardingState,
+      loading: false,
+      modules: PHASE_TWO_STRUCTURED_DONE,
+      stage: "calibration",
+      calibrationGenerating: true,
+    });
     expect(panel.type).toBe(CalibrationGeneratingSkeleton);
   });
 
-  it("calibration stage once generated renders CalibrationPanel with the parsed prompts", () => {
-    const panel = panelOf(
-      { ...initialOnboardingState, loading: false, stage: "calibration", calibrationGenerating: false },
-      ["depth", "breadth", "range", "evidence"]
-    );
-    expect(panel.type).toBe(CalibrationPanel);
-    expect(panel.props.prompts).toEqual(["depth", "breadth", "range", "evidence"]);
+  it("mid-targeting: even though evidence derives complete at stage>=targeting, the chat stays active (not Done-for-now) until stage is literally 'done'", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, modules: PHASE_TWO_STRUCTURED_DONE, stage: "targeting" });
+    expect(panel.type).toBe(ChatStageView);
   });
 
-  it("resume stage renders ChatStageView with upload + skip reachable", () => {
-    const panel = panelOf({ ...initialOnboardingState, loading: false, stage: "resume" });
+  it("resume sub-stage renders ChatStageView with upload+skip reachable", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, modules: PHASE_TWO_STRUCTURED_DONE, stage: "resume" });
     expect(panel.type).toBe(ChatStageView);
     const rendered = ChatStageView(panel.props);
     const composerChildren = rendered.props.children[rendered.props.children.length - 1].props.children;
-    const uploadSkipSlot = composerChildren[0];
-    expect(uploadSkipSlot.props.children).toBeTruthy();
+    expect(composerChildren[0].props.children).toBeTruthy();
   });
 
-  it("targeting stage renders ChatStageView with upload + skip NOT reachable", () => {
-    const panel = panelOf({ ...initialOnboardingState, loading: false, stage: "targeting" });
-    expect(panel.type).toBe(ChatStageView);
-    const rendered = ChatStageView(panel.props);
-    const composerChildren = rendered.props.children[rendered.props.children.length - 1].props.children;
-    const uploadSkipSlot = composerChildren[0];
-    // A plain empty <div /> placeholder, not the FileButton+Skip cluster.
-    expect(uploadSkipSlot.props.children).toBeUndefined();
+  it("interview block finished (stage 'done') -> Done-for-now, since B2's voice/metrics/mirror don't exist yet", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, modules: PHASE_TWO_STRUCTURED_DONE, stage: "done" });
+    expect(panel.type).toBe(DoneForNowView);
   });
 
-  it("done stage renders DoneView", () => {
-    const panel = panelOf({ ...initialOnboardingState, loading: false, stage: "done", done: true });
-    expect(panel.type).toBe(DoneView);
-  });
-
-  it("wires the spine from deriveSpineSteps(stage, receipts)", () => {
-    const state: OnboardingState = {
+  it("redoModule overrides the guided next_module entirely", () => {
+    const panel = panelOf({
       ...initialOnboardingState,
       loading: false,
-      stage: "resume",
-      receipts: { anchor: "PM · Foo", calibration: "4 answers" },
-    };
-    const view = OnboardingView({ state, ...baseViewProps });
-    const [, contentDiv] = view.props.children;
-    const [spine] = contentDiv.props.children;
-    expect(spine.props.steps).toEqual(deriveSpineSteps("resume", state.receipts));
+      modules: PHASE_TWO_STRUCTURED_DONE, // guided next would be the interview block
+      stage: "done",
+      redoModule: "values",
+      valuePairs: [],
+    });
+    expect(panel.type).toBe(ValuePairsPanel);
+  });
+
+  it("module onComplete callbacks are wired with the correct module key", () => {
+    const onModuleComplete = vi.fn();
+    const panel = panelOf(
+      { ...initialOnboardingState, loading: false, modules: { ...PHASE_ONE_DONE }, stage: "calibration" },
+      [],
+      { onModuleComplete }
+    );
+    expect(panel.type).toBe(EnergyPanel);
+    panel.props.onComplete();
+    expect(onModuleComplete).toHaveBeenCalledWith("energy");
+  });
+});
+
+describe("DoneForNowView", () => {
+  it("links to /feed and includes a manual Run-my-hunt control", () => {
+    const view = DoneForNowView({ matchCount: 0 });
+    const [, , actionsRow] = view.props.children;
+    const [feedLink, runHuntButton] = actionsRow.props.children;
+    expect(feedLink.props.href).toBe("/feed");
+    expect(runHuntButton).toBeTruthy();
+  });
+
+  it("shows the match count only when > 0 (never claims a count that isn't true)", () => {
+    const withMatches = DoneForNowView({ matchCount: 3 });
+    expect(withMatches.props.children[3].props.children).toEqual([3, " matches waiting now."]);
+    const withoutMatches = DoneForNowView({ matchCount: 0 });
+    expect(withoutMatches.props.children[3]).toBeFalsy();
   });
 });
 
@@ -366,6 +569,7 @@ describe("ChatStageView — motion classes wired to ONB-C's utilities", () => {
     const state: OnboardingState = {
       ...initialOnboardingState,
       loading: false,
+      modules: PHASE_TWO_STRUCTURED_DONE,
       stage: "targeting",
       messages: [{ role: "assistant", content: "Logistics, all in one go: …" }],
     };
@@ -491,47 +695,6 @@ describe("ChatStageView — Skip button sends the reserved sentinel via onSkip",
     const [, skipButton] = composerChildren[0].props.children;
     skipButton.props.onClick();
     expect(onSkip).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("DoneView — the summary moment", () => {
-  it("renders the three recap sections (rank-up / never-show / logistics) as separate paragraphs", () => {
-    const messages: ChatMessage[] = [
-      { role: "user", content: "confirmed" },
-      {
-        role: "assistant",
-        content: [
-          "Here's what I built: you'll rank up senior backend roles at seed-to-series-B startups.",
-          "You'll never see anything requiring a security clearance or on-call-heavy SRE work.",
-          "Logistics: Atlanta-based, remote-first, $180k floor.",
-          'Head to your feed and hit "Run my hunt" to get your first results.',
-        ].join("\n\n"),
-      },
-    ];
-    const view = DoneView({ messages });
-    const [, , recapSection] = view.props.children;
-    const paragraphs = recapSection.props.children;
-    expect(paragraphs).toHaveLength(4);
-    expect(paragraphs[0].props.children).toContain("rank up");
-    expect(paragraphs[1].props.children).toContain("never see");
-    expect(paragraphs[2].props.children).toContain("Logistics");
-  });
-
-  it("shows the fix-needed heading and error list when validation is invalid", () => {
-    const view = DoneView({
-      messages: [{ role: "assistant", content: "Summary." }],
-      validation: { status: "invalid", errors: ["tiers must be non-empty"] },
-    });
-    const [heading, errorList] = view.props.children;
-    expect(heading.props.children).toBe("Profile saved, but needs a fix:");
-    expect(errorList.props.children[0].props.children).toBe("tiers must be non-empty");
-  });
-
-  it("links to /feed with the primary 'Run my first hunt' action", () => {
-    const view = DoneView({ messages: [{ role: "assistant", content: "Summary." }] });
-    const [, , , link] = view.props.children;
-    expect(link.props.href).toBe("/feed");
-    expect(link.props.children).toBe("Run my first hunt");
   });
 });
 

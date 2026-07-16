@@ -63,17 +63,6 @@ export function buildAnchorPayload(values: AnchorFormValues): Record<string, str
   return payload;
 }
 
-/** The spine's one-line "Role" receipt for a just-submitted anchor — built
- * client-side from the form's own values at submit time (see StepSpine.tsx
- * for why: the wire contract never echoes `extracted` back to the browser). */
-export function anchorReceiptFor(values: AnchorFormValues): string {
-  const payload = buildAnchorPayload(values);
-  if (payload.current_title && payload.current_company) {
-    return `${payload.current_title} · ${payload.current_company}`;
-  }
-  return payload.free_text ?? "";
-}
-
 export interface AnchorFormProps {
   values: AnchorFormValues;
   submitting: boolean;

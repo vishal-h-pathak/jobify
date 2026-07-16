@@ -6,6 +6,9 @@ import { hasClaimedInvite } from "@/lib/db/invites";
 import { isAdmin } from "@/lib/admin/isAdmin";
 import { runCalibrationGeneration } from "@/lib/anthropic/interview";
 import { maybeGenerateCalibrationPrompts } from "@/lib/onboarding/maybeGenerateCalibration";
+import type { ModulesState } from "@/lib/onboarding/moduleRegistry";
+import { VALUE_PAIRS, ENVIRONMENT_SCENARIOS } from "@/lib/onboarding/moduleWriters";
+import { deriveNextModule, type InterviewStage } from "@/components/onboarding/moduleOrder";
 
 export async function GET() {
   const supabase = await createSupabaseServerClient();
@@ -40,5 +43,31 @@ export async function GET() {
     runGeneration: runCalibrationGeneration,
   });
 
-  return NextResponse.json(withCalibration);
+  // V3A-B1 (V3A_DESIGN.md §1.2): resumability — the client's PhaseRail and
+  // panel router are driven by `modules`/`next_module`, not `stage`, so a
+  // returning user lands directly on their next incomplete module with the
+  // rail already filled, no replay or summary screen.
+  const modules = (session.modules ?? {}) as ModulesState;
+  const stage = session.stage as InterviewStage;
+  const nextModule = deriveNextModule(modules, stage);
+  const checkpointFired = Boolean(modules.checkpoint_hunt);
+
+  // Cheap exact count, not a full row fetch — powers the ambient status
+  // chip ("N matches waiting"). RLS + the explicit filter both scope this
+  // to the caller's own rows.
+  const { count: matchCount, error: matchCountError } = await supabase
+    .from("matches")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
+  if (matchCountError) throw matchCountError;
+
+  return NextResponse.json({
+    ...withCalibration,
+    modules,
+    next_module: nextModule,
+    checkpoint_fired: checkpointFired,
+    match_count: matchCount ?? 0,
+    value_pairs: VALUE_PAIRS,
+    environment_scenarios: ENVIRONMENT_SCENARIOS,
+  });
 }

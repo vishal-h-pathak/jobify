@@ -15,12 +15,15 @@ export interface DispatchHuntDeps {
   /** Admins bypass the per-user cooldown (see 21_user_triggered_hunts.md task 4). */
   bypassCooldown: boolean;
   /**
-   * V3A-1: set by `checkpoint.ts` for the onboarding background-hunt
-   * checkpoint. Skips the cooldown CHECK exactly like `bypassCooldown` —
-   * a brand-new user can't yet be in a cooldown they've never triggered,
-   * but the flag exists as its own semantic (system-fired, not admin-
-   * triggered) rather than overloading `bypassCooldown`'s meaning. Still
-   * stamps `last_hunt_requested_at` on success, same as every other path.
+   * V3A-1/B1: set by `checkpoint.ts` for the onboarding background-hunt
+   * checkpoint — the ONLY hunt that fires without the user pressing a
+   * button. Skips the cooldown CHECK exactly like `bypassCooldown`, and
+   * (owner decision, 2026-07-06) ALSO skips stamping
+   * `last_hunt_requested_at`: this hunt fires mid-intake, minutes before
+   * the user reaches the "Run my hunt" button at the end of the flow — if
+   * it stamped, that first real button press would be cooldown-blocked by
+   * a hunt the user never asked for. Every other path (including admin
+   * `bypassCooldown`) still stamps.
    */
   systemInitiated?: boolean;
   cooldownHours: number;
@@ -85,11 +88,13 @@ export async function dispatchHunt(deps: DispatchHuntDeps): Promise<DispatchHunt
   }
 
   const nowIso = now().toISOString();
-  const { error: updateError } = await admin
-    .from("profiles")
-    .update({ last_hunt_requested_at: nowIso })
-    .eq("user_id", targetUserId);
-  if (updateError) throw updateError;
+  if (!systemInitiated) {
+    const { error: updateError } = await admin
+      .from("profiles")
+      .update({ last_hunt_requested_at: nowIso })
+      .eq("user_id", targetUserId);
+    if (updateError) throw updateError;
+  }
 
   return { kind: "ok", cooldownUntil: addHours(new Date(nowIso), cooldownHours).toISOString() };
 }

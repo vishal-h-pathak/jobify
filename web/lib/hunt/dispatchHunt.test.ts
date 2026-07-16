@@ -94,15 +94,16 @@ describe("dispatchHunt", () => {
     expect(result.kind).toBe("ok");
   });
 
-  it("systemInitiated still stamps last_hunt_requested_at on success", async () => {
+  it("V3A-B1: systemInitiated does NOT stamp last_hunt_requested_at on success — the background checkpoint hunt must not cooldown-block the user's own first button press minutes later", async () => {
     const lastRequested = "2026-07-05T11:00:00.000Z";
     const { admin, update } = fakeAdmin({
       user_id: "user-1",
       validation_status: null,
       last_hunt_requested_at: lastRequested,
     });
-    await dispatchHunt(baseDeps({ admin: admin as never, systemInitiated: true }));
-    expect(update).toHaveBeenCalledWith({ last_hunt_requested_at: FIXED_NOW.toISOString() });
+    const result = await dispatchHunt(baseDeps({ admin: admin as never, systemInitiated: true }));
+    expect(result.kind).toBe("ok");
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("the default path (no systemInitiated, no bypassCooldown) is unchanged: cooldown still applies", async () => {
