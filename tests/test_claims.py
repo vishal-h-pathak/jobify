@@ -428,6 +428,54 @@ def test_entity_lexicon_is_built_from_cv_skills_section() -> None:
     assert "snowflake" not in lexicon
 
 
+def test_entity_lexicon_is_built_from_cv_technical_skills_section() -> None:
+    # Both shipped reference personas (profile.example/cv.md,
+    # onboarding/examples/profile/cv.md) head their skills section
+    # "## Technical Skills", not "## Skills" — the lexicon builder must
+    # resolve that heading too, not just the shorter fixture-only spelling
+    # used by CV_TEXT above.
+    cv_text = """# CV
+
+## Technical Skills
+
+- Snowflake, dbt, Airflow
+
+## Experience
+
+### Northwind Robotics — Senior Platform Engineer
+Atlanta, GA | 2021—Present
+
+- Migrated the warehouse to Snowflake for faster analytics.
+"""
+    lexicon = claims.build_entity_lexicon(cv_text)
+    assert "snowflake" in lexicon
+    assert "dbt" in lexicon
+    assert "airflow" in lexicon
+
+    # End-to-end: a claim citing "Snowflake" against a resolving cv.md
+    # quote must be recognized as a known entity (from the lexicon) and
+    # survive, rather than being dropped as REASON_NEW_ENTITY the way the
+    # ## Skills-lexicon-miss regression would have caused.
+    unit = _bullet(
+        "r.exp0.b7",
+        "Migrated the warehouse to Snowflake for faster analytics",
+        sources=[
+            {
+                "file": "cv.md",
+                "quote": "Migrated the warehouse to Snowflake for faster analytics.",
+            }
+        ],
+    )
+    result = claims.verify_claims(
+        [unit],
+        cv_text=cv_text,
+        article_digest_text=DIGEST_TEXT,
+        doc_sha256=DOC_SHA,
+    )
+    assert {u["id"] for u in result["units"]} == {"r.exp0.b7"}
+    assert result["dropped"] == []
+
+
 # ── Output shape ──────────────────────────────────────────────────────────
 
 

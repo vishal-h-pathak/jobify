@@ -255,7 +255,40 @@ def parse_metrics_sections(article_digest_text: str) -> tuple[str, str]:
 
 
 def _extract_skills_section(cv_text: str) -> str:
-    return _extract_markdown_section(cv_text or "", "Skills")
+    """Return the body of the CV's skills section.
+
+    cv.md's skills heading isn't fully standardized across personas: both
+    shipped reference CVs (``profile.example/cv.md``,
+    ``onboarding/examples/profile/cv.md``) use ``## Technical Skills``,
+    while other fixtures/personas may use the shorter ``## Skills``. Try
+    the known literal headings first (exact match, via
+    ``_extract_markdown_section``), then fall back to a case-insensitive
+    scan for any ``## ...`` heading whose text contains "skill" so
+    unanticipated variants still resolve instead of silently returning an
+    empty lexicon.
+    """
+    text = cv_text or ""
+    for heading in ("Technical Skills", "Skills"):
+        section = _extract_markdown_section(text, heading)
+        if section:
+            return section
+
+    lines = text.split("\n")
+    start_idx = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.lower().startswith("## ") and "skill" in stripped.lower():
+            start_idx = i
+            break
+    if start_idx is None:
+        return ""
+    rest = lines[start_idx + 1 :]
+    end_idx = None
+    for i, line in enumerate(rest):
+        if _HEADING_RE.match(line):
+            end_idx = i
+            break
+    return "\n".join(rest if end_idx is None else rest[:end_idx])
 
 
 def build_entity_lexicon(cv_text: str) -> set[str]:
