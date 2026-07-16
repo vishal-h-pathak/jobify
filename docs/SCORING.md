@@ -131,11 +131,11 @@ recompiles, cheaply:
   `[FEEDBACK_WEIGHT_MIN, FEEDBACK_WEIGHT_MAX]` (0.1-10.0) so no amount of
   feedback can zero out or dominate a group. Returns a new rubric; the
   input is never mutated.
-- `needs_recompile(events)` — the yes/no heuristic a nightly job (wiring
-  is H4/H6's job, not this module's) uses to decide whether incremental
-  nudging is enough or a fresh `compile_rubric` pass is warranted: true
-  once `NEEDS_RECOMPILE_MIN_EVENTS` (20) events have accumulated, or once
-  dismissals exceed `NEEDS_RECOMPILE_DISMISS_RATIO` (60%) of events.
+- `needs_recompile(events)` — the yes/no heuristic a nightly job uses to
+  decide whether incremental nudging is enough or a fresh `compile_rubric`
+  pass is warranted: true once `NEEDS_RECOMPILE_MIN_EVENTS` (20) events
+  have accumulated, or once dismissals exceed `NEEDS_RECOMPILE_DISMISS_RATIO`
+  (60%) of events. See "## Learning loop" below for the actual wiring.
 
 ## Stage 3 — embedding rerank
 
@@ -183,6 +183,45 @@ embedding currently reflects (fixed in commit `e7573f4`; see
 Posting embeddings need no equivalent mechanism — a posting's text never
 changes after first sight, so `get_posting_embedding` reusing an existing
 vector is always correct.
+
+## Learning loop
+
+`jobify/hosted/learning.py::run_learning_pass(user_id, profile_dir, *, api_key=None,
+counters=None)` runs once per user at the end of `jobify/hosted/fanout.py::_run_user_ladder`,
+after stage 4 — the piece `rubric.py`'s own module docstring flagged as "scheduled elsewhere"
+(see Stage 2's "Feedback and recompiling" above). Zero LLM calls except the rare full-recompile
+branch.
+
+**Watermark.** `learned-insights.md` opens with an HTML-comment header line,
+`<!-- last-processed: <ISO> -->`, so each pass only looks at `posting_reactions` / `matches`
+rows newer than the last run — no new migration/column needed. A fresh profile's file has no
+watermark, so the first-ever pass processes every existing row.
+
+**Events.** For every `posting_reactions` row and every `matches` row in `{saved, dismissed,
+applied}` state, changed since the watermark, the pass re-runs `rubric.score_posting(current_rubric,
+posting)` — the group-match breakdown was never persisted at score time, only the final score —
+to recover `matched_groups`, then maps `reaction=interested` / `state=saved` -> `action="save"`;
+`reaction=not_interested` / `state=dismissed` -> `action="dismiss"`; `state=applied` ->
+`action="save"` (a stronger positive signal than a save; `apply_feedback` has no separate
+multiplier for it).
+
+**Reweight vs. recompile.** `needs_recompile(events)` picks exactly one branch, never both:
+below threshold, `apply_feedback(rubric, events)` nudges weights and the result is persisted via
+`db.set_compiled_rubric`; at/above threshold, a fresh `compile_rubric_with_usage` call replaces
+the rubric wholesale (one `budget_ledger` row, `event="rubric_recompile"`, mirroring
+`_ensure_rubric`'s own cost-tracking pattern).
+
+**Insights.** After a reweight, any term-group whose weight moved more than 5% gets a dated,
+human-readable line appended to `learned-insights.md` (append-only — prior entries are never
+rewritten), e.g. `- 2026-07-16: downweighted "agency work" after 3 dismissals; upweighted
+"platform ownership" after 2 saves`. A recompile gets its own line instead (`- 2026-07-16: rubric
+recompiled from scratch after 24 feedback events`) — group names aren't guaranteed stable across
+a full recompile, so no per-group delta is attempted on that branch. The dossier's change-log
+(`web/lib/dossier/derive.ts::deriveEvents`) parses these same dated lines back out, interleaved
+chronologically with module-completion rows.
+
+**Failure isolation.** `run_learning_pass` catches every exception internally and logs — a broken
+learning pass degrades to "no learning happened this cycle," never to a broken scoring cycle.
 
 ## Profile source: directory or DB row
 
