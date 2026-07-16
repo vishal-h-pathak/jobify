@@ -236,31 +236,6 @@ export interface Database {
         };
         Relationships: [];
       };
-      // V3A-1 contract (session-prompts/31_v3a_modules.md, pinned block):
-      // anticipates session 30's migration 0011 — PK(user_id, posting_id),
-      // authed own-row select/insert/update RLS. Typed here (same rationale
-      // as onboarding_sessions.modules above) so this session's own reaction-
-      // calibration code typechecks without depending on 30's migration.
-      posting_reactions: {
-        Row: {
-          user_id: string;
-          posting_id: string;
-          reaction: "interested" | "not_interested";
-          note: string | null;
-          created_at: string;
-        };
-        Insert: {
-          user_id: string;
-          posting_id: string;
-          reaction: "interested" | "not_interested";
-          note?: string | null;
-        };
-        Update: {
-          reaction?: "interested" | "not_interested";
-          note?: string | null;
-        };
-        Relationships: [];
-      };
       // ADM-2 (0008_hunt_cycles.sql): one row per fanout/discovery
       // invocation, written by the Python worker (service-role) —
       // read-only from the web side, so Insert/Update stay minimal like
