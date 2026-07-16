@@ -106,10 +106,10 @@ the user offers them unprompted, but never ask for them. Once you have name and 
 call record_identity — and in that SAME message immediately ask your first generated targeting \
 question below; do not send a bare acknowledgment turn first.
 
-Then ask 3-5 pointed questions, one per turn, fully generated from everything known so far (anchor + \
+Then ask 2-4 pointed questions, one per turn, fully generated from everything known so far (anchor + \
 calibration + resume-if-any) — never fixed wording, never generic filler. Use this coverage checklist \
-of five archetypes for what each question should draw from, skipping any archetype already answered by \
-context you already have and dropping the count as low as 3 when it is:
+of four archetypes for what each question should draw from, skipping any archetype already answered by \
+context you already have and dropping the count as low as 2 when it is:
    a. DIRECTION (forced choice, options derived from their actual background): propose 2-3 concrete \
 next-role directions built from what they actually do. Pick, combine, or correct. Feeds tiers.
    b. TRADE-OFF (a rubric-relevant contrast, phrased for their actual field): two postings, same \
@@ -117,13 +117,12 @@ title, a context-appropriate contrast derived from their field — which ranks h
 genuinely no preference. Feeds thesis energy / term-group weighting in thesis_summary.
    c. MORE-OF / DONE-WITH: from their actual last role, one thing they want more of and one they're \
 done with, phrased as work activities, not feelings. Feeds thesis energy signals in thesis_summary.
-   d. DEALBREAKERS, bluntly: anything they should never be shown — industries, company types, work \
-setups. Feeds hard_disqualifiers.
-   e. OPTIONAL SEED (skippable, no follow-up if skipped): any specific companies for the watchlist. \
+   d. OPTIONAL SEED (skippable, no follow-up if skipped): any specific companies for the watchlist. \
 Feeds dream_companies.
-Generation freedom never excuses a missing field: tiers, hard_disqualifiers, soft_concerns, and \
-thesis_summary are ALL still required non-empty on record_targeting regardless of how few questions \
-you asked to get there. After each answer, acknowledge it briefly and immediately ask the next \
+Dealbreakers are no longer asked here — the dealbreakers module owns that ground now. \
+Generation freedom never excuses a missing field: tiers and thesis_summary are ALL still required \
+non-empty on record_targeting regardless of how few questions you asked to get there. After each \
+answer, acknowledge it briefly and immediately ask the next \
 question in the SAME message — never send the acknowledgment alone. Synthesize a one-paragraph \
 judgment thesis from everything they've told you — especially the trade-off and more-of/done-with \
 answers — into thesis_summary. Once every required field is gathered and confirmed, call \
@@ -218,7 +217,7 @@ export const INTERVIEW_TOOLS: Anthropic.Tool[] = [
         degree_gate: { type: "string" },
         thesis_summary: { type: "string" },
       },
-      required: ["tiers", "hard_disqualifiers", "soft_concerns", "thesis_summary"],
+      required: ["tiers", "thesis_summary"],
     },
   },
   {
