@@ -26,4 +26,10 @@ describe("globals.css — ONB redesign motion + type-ramp utilities", () => {
     expect(css).toMatch(/\.amber-radial-glow/);
     expect(css).toMatch(/color-mix\(in srgb, var\(--color-amber\) 6%, transparent\)/);
   });
+
+  it("V3A-B1: defines the checkpoint rail-sweep beat and disables it under reduced motion", () => {
+    expect(css).toMatch(/@keyframes rail-sweep/);
+    expect(css).toMatch(/\.rail-sweep\s*{\s*animation:\s*rail-sweep 600ms ease-in-out 1;/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) {\s*\.rail-sweep {\s*animation: none;/);
+  });
 });

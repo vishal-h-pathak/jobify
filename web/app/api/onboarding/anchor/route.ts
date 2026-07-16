@@ -3,6 +3,9 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getOrCreateSession, saveSession } from "@/lib/db/onboardingSession";
 import { hasClaimedInvite } from "@/lib/db/invites";
 import { isAdmin } from "@/lib/admin/isAdmin";
+import { MODULE_REGISTRY, markModuleComplete } from "@/lib/onboarding/moduleRegistry";
+import { buildCheckpointDeps } from "@/lib/onboarding/checkpointDeps";
+import { maybeFireCheckpoint } from "@/lib/onboarding/checkpoint";
 
 interface AnchorRequestBody {
   current_title?: unknown;
@@ -64,10 +67,25 @@ export async function POST(request: Request) {
         ...(yearsInRole ? { years_in_role: yearsInRole } : {}),
       };
 
+  // V3A-B1: this route predates the module-progress model (moduleRegistry.ts)
+  // and never marked `modules.anchor` complete, so `phaseOneComplete` (which
+  // requires anchor) could never flip true and the background-hunt
+  // checkpoint could never fire. Mark it here, same pattern as the other
+  // module routes.
+  const receipt = MODULE_REGISTRY.anchor.receipt(anchor) ?? "";
+  const modules = markModuleComplete(session, "anchor", receipt);
+  const extracted = { ...session.extracted, anchor };
+
   await saveSession(supabase, user.id, {
-    extracted: { ...session.extracted, anchor },
+    extracted,
     stage: "calibration",
+    modules,
   });
+
+  // anchor can be the module that completes phase 1 last (e.g. a user who
+  // reacts/values/dealbreakers before filling in the anchor form) — same
+  // checkpoint call every other module-completion route already makes.
+  await maybeFireCheckpoint(buildCheckpointDeps(), { ...session, extracted, modules }, user);
 
   return NextResponse.json({ stage: "calibration" });
 }

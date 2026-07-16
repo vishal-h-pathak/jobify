@@ -14,6 +14,18 @@ export interface DispatchHuntDeps {
   targetUserId: string;
   /** Admins bypass the per-user cooldown (see 21_user_triggered_hunts.md task 4). */
   bypassCooldown: boolean;
+  /**
+   * V3A-1/B1: set by `checkpoint.ts` for the onboarding background-hunt
+   * checkpoint — the ONLY hunt that fires without the user pressing a
+   * button. Skips the cooldown CHECK exactly like `bypassCooldown`, and
+   * (owner decision, 2026-07-06) ALSO skips stamping
+   * `last_hunt_requested_at`: this hunt fires mid-intake, minutes before
+   * the user reaches the "Run my hunt" button at the end of the flow — if
+   * it stamped, that first real button press would be cooldown-blocked by
+   * a hunt the user never asked for. Every other path (including admin
+   * `bypassCooldown`) still stamps.
+   */
+  systemInitiated?: boolean;
   cooldownHours: number;
   githubRepo: string | undefined;
   githubToken: string | undefined;
@@ -34,7 +46,8 @@ export interface DispatchHuntDeps {
  * service-role update of `last_hunt_requested_at`.
  */
 export async function dispatchHunt(deps: DispatchHuntDeps): Promise<DispatchHuntResult> {
-  const { admin, targetUserId, bypassCooldown, cooldownHours, githubRepo, githubToken, fetchImpl, now } = deps;
+  const { admin, targetUserId, bypassCooldown, systemInitiated, cooldownHours, githubRepo, githubToken, fetchImpl, now } =
+    deps;
 
   const { data: profile, error: profileError } = await admin
     .from("profiles")
@@ -45,7 +58,7 @@ export async function dispatchHunt(deps: DispatchHuntDeps): Promise<DispatchHunt
   if (!profile) return { kind: "no_profile" };
   if (profile.validation_status?.status === "invalid") return { kind: "invalid_profile" };
 
-  if (!bypassCooldown && profile.last_hunt_requested_at) {
+  if (!bypassCooldown && !systemInitiated && profile.last_hunt_requested_at) {
     const cooldownUntil = addHours(new Date(profile.last_hunt_requested_at), cooldownHours);
     if (cooldownUntil.getTime() > now().getTime()) {
       return { kind: "cooldown", cooldownUntil: cooldownUntil.toISOString() };
@@ -75,11 +88,13 @@ export async function dispatchHunt(deps: DispatchHuntDeps): Promise<DispatchHunt
   }
 
   const nowIso = now().toISOString();
-  const { error: updateError } = await admin
-    .from("profiles")
-    .update({ last_hunt_requested_at: nowIso })
-    .eq("user_id", targetUserId);
-  if (updateError) throw updateError;
+  if (!systemInitiated) {
+    const { error: updateError } = await admin
+      .from("profiles")
+      .update({ last_hunt_requested_at: nowIso })
+      .eq("user_id", targetUserId);
+    if (updateError) throw updateError;
+  }
 
   return { kind: "ok", cooldownUntil: addHours(new Date(nowIso), cooldownHours).toISOString() };
 }

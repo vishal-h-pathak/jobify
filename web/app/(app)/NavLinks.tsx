@@ -5,10 +5,17 @@ import { usePathname } from "next/navigation";
 
 const LINKS = [
   { href: "/feed", label: "Feed" },
+  { href: "/profile", label: "Profile" },
   { href: "/settings", label: "Settings" },
 ];
 
 const ADMIN_LINK = { href: "/admin", label: "Admin" };
+
+/** Pure — the (app) shell's nav order (V3A-B3: Feed · Profile · Settings
+ * [· Admin]), extracted so it's testable without rendering `usePathname`. */
+export function visibleNavLinks(isAdmin: boolean): typeof LINKS {
+  return isAdmin ? [...LINKS, ADMIN_LINK] : LINKS;
+}
 
 /**
  * `isAdmin` is computed server-side (the (app) layout) and only crosses
@@ -17,7 +24,7 @@ const ADMIN_LINK = { href: "/admin", label: "Admin" };
  */
 export function NavLinks({ isAdmin = false }: { isAdmin?: boolean }) {
   const pathname = usePathname();
-  const links = isAdmin ? [...LINKS, ADMIN_LINK] : LINKS;
+  const links = visibleNavLinks(isAdmin);
 
   return (
     <div className="flex items-center gap-6 text-sm font-medium">

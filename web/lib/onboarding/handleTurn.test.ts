@@ -22,6 +22,7 @@ function baseSession(overrides: Partial<Parameters<typeof handleOnboardingTurn>[
     messages: [],
     extracted: {},
     status: "in_progress" as const,
+    modules: {},
     ...overrides,
   };
 }
@@ -419,5 +420,102 @@ describe("handleOnboardingTurn", () => {
     });
 
     expect(result.assistantText).toBe("Tell me about a hard bug.");
+  });
+
+  describe("V3A-B2: module-completion glue", () => {
+    it("marks range complete with receipt '4 answers' when record_calibration fires", async () => {
+      const runTurn = vi.fn(async () => ({
+        assistantText: "Got it — have a resume handy?",
+        toolCalls: [
+          {
+            name: "record_calibration",
+            input: { skills: ["a"], evidence: ["b"], range_statement: "c", background_summary: "d" },
+          },
+        ],
+        usage: { inputTokens: 10, outputTokens: 10 },
+      }));
+
+      await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "here are my four answers",
+        session: baseSession({ stage: "calibration" }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(saveSessionMock).toHaveBeenCalledWith(
+        fakeClient,
+        "user-1",
+        expect.objectContaining({
+          modules: expect.objectContaining({ range: expect.objectContaining({ receipt: "4 answers" }) }),
+        })
+      );
+    });
+
+    it("marks evidence complete with receipt 'resume added' when record_resume fires", async () => {
+      const runTurn = vi.fn(async () => ({
+        assistantText: "Got it — logistics next.",
+        toolCalls: [{ name: "record_resume", input: { cv_markdown: "# CV" } }],
+        usage: { inputTokens: 10, outputTokens: 10 },
+      }));
+
+      await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "here is my resume",
+        session: baseSession({ stage: "resume" }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      const savedArg = saveSessionMock.mock.calls[0][2] as { modules: Record<string, { receipt: string }> };
+      expect(savedArg.modules.evidence?.receipt).toBe("resume added");
+    });
+
+    it("resume-skip path marks evidence complete with receipt 'built from your answers'", async () => {
+      const runTurn = vi.fn();
+
+      await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: RESUME_SKIP_MESSAGE,
+        session: baseSession({ stage: "resume" }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      const savedArg = saveSessionMock.mock.calls[0][2] as { modules: Record<string, { receipt: string }> };
+      expect(savedArg.modules.evidence?.receipt).toBe("built from your answers");
+    });
+
+    it("preserves session.modules unchanged in saveSession when a turn fires neither record_calibration nor record_resume", async () => {
+      const runTurn = vi.fn(async () => ({
+        assistantText: "Got it — what's your target comp?",
+        toolCalls: [{ name: "record_identity", input: { name: "Alex", email: "alex@example.com" } }],
+        usage: { inputTokens: 10, outputTokens: 10 },
+      }));
+
+      const existingModules = { anchor: { completed_at: "2026-01-01T00:00:00.000Z", receipt: "SWE · Acme" } };
+
+      await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "Alex, alex@example.com",
+        session: baseSession({ stage: "targeting", modules: existingModules }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(saveSessionMock).toHaveBeenCalledWith(
+        fakeClient,
+        "user-1",
+        expect.objectContaining({ modules: existingModules })
+      );
+    });
   });
 });

@@ -108,27 +108,37 @@ describe("INTERVIEW_SYSTEM_PROMPT — targeting stage: batched logistics + PII b
   });
 });
 
-describe("INTERVIEW_SYSTEM_PROMPT — ONB-A decision #4: fully-generated 3-5 targeting questions", () => {
-  it("instructs 3-5 fully-generated questions, never fixed wording", () => {
-    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/3-5 pointed questions/i);
+describe("INTERVIEW_SYSTEM_PROMPT — ONB-A decision #4: fully-generated 2-4 targeting questions", () => {
+  it("instructs 2-4 fully-generated questions, never fixed wording", () => {
+    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/2-4 pointed questions/i);
     expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/never fixed wording/i);
   });
 
-  it("keeps the five archetypes as a coverage checklist by name", () => {
+  it("keeps the four archetypes as a coverage checklist by name", () => {
     expect(INTERVIEW_SYSTEM_PROMPT).toContain("DIRECTION");
     expect(INTERVIEW_SYSTEM_PROMPT).toContain("TRADE-OFF");
     expect(INTERVIEW_SYSTEM_PROMPT).toContain("MORE-OF / DONE-WITH");
-    expect(INTERVIEW_SYSTEM_PROMPT).toContain("DEALBREAKERS");
     expect(INTERVIEW_SYSTEM_PROMPT).toContain("OPTIONAL SEED");
   });
 
   it("states generation freedom never excuses a missing required field", () => {
     expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/generation freedom never excuses a missing field/i);
-    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/tiers, hard_disqualifiers, soft_concerns, and.{0,5}thesis_summary/i);
+    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/tiers and thesis_summary are ALL still required/i);
   });
 
   it("instructs skipping archetypes already answered by known context", () => {
     expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/skipping any archetype already answered/i);
+  });
+});
+
+describe("INTERVIEW_SYSTEM_PROMPT — V3A-B2 §1.7: dealbreakers module owns filters now", () => {
+  it("no longer asks about dealbreakers in the targeting archetype checklist", () => {
+    expect(INTERVIEW_SYSTEM_PROMPT).not.toMatch(/dealbreakers.{0,40}(bluntly|industries)/i);
+    expect(INTERVIEW_SYSTEM_PROMPT).not.toContain("DEALBREAKERS");
+  });
+
+  it("explicitly states dealbreakers are no longer asked here", () => {
+    expect(INTERVIEW_SYSTEM_PROMPT).toMatch(/dealbreakers are no longer asked here/i);
   });
 });
 
@@ -156,11 +166,18 @@ describe("INTERVIEW_TOOLS", () => {
     expect(tool?.input_schema.required).toEqual(["name"]);
   });
 
-  it("keeps record_targeting's required fields unchanged", () => {
+  it("record_targeting requires only tiers + thesis_summary now (dealbreakers module owns hard_disqualifiers/soft_concerns)", () => {
     const tool = INTERVIEW_TOOLS.find((t) => t.name === "record_targeting");
-    expect(tool?.input_schema.required).toEqual(
-      expect.arrayContaining(["tiers", "hard_disqualifiers", "soft_concerns", "thesis_summary"])
-    );
+    expect(tool?.input_schema.required).toEqual(["tiers", "thesis_summary"]);
+  });
+
+  it("still accepts hard_disqualifiers/soft_concerns as optional schema fields (harmless empty-array fallback)", () => {
+    const tool = INTERVIEW_TOOLS.find((t) => t.name === "record_targeting");
+    const props = tool?.input_schema.properties as Record<string, unknown>;
+    expect(props).toHaveProperty("hard_disqualifiers");
+    expect(props).toHaveProperty("soft_concerns");
+    expect(tool?.input_schema.required).not.toContain("hard_disqualifiers");
+    expect(tool?.input_schema.required).not.toContain("soft_concerns");
   });
 
   it("keeps finish_interview", () => {

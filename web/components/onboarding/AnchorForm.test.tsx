@@ -3,7 +3,6 @@ import {
   AnchorForm,
   anchorFormErrors,
   anchorFormValid,
-  anchorReceiptFor,
   buildAnchorPayload,
   initialAnchorFormValues,
   type AnchorFormValues,
@@ -84,18 +83,6 @@ describe("buildAnchorPayload — matches POST /api/onboarding/anchor's own prece
       currentCompany: "OldCo",
     };
     expect(buildAnchorPayload(values)).toEqual({ current_title: "Backend Engineer", current_company: "OldCo" });
-  });
-});
-
-describe("anchorReceiptFor — StepSpine's Role receipt, derived from the submitted form", () => {
-  it("formats title · company", () => {
-    const values: AnchorFormValues = { ...initialAnchorFormValues, currentTitle: "PM", currentCompany: "Foo" };
-    expect(anchorReceiptFor(values)).toBe("PM · Foo");
-  });
-
-  it("falls back to the free text when no title/company pair was sent", () => {
-    const values: AnchorFormValues = { ...initialAnchorFormValues, mode: "situation", freeText: "A student, no work history yet." };
-    expect(anchorReceiptFor(values)).toBe("A student, no work history yet.");
   });
 });
 
