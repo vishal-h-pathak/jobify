@@ -62,11 +62,21 @@ export interface Database {
         // session's ownership) keeps compiling against its old literal
         // "identity" stage usages; v2 code never writes it — migration
         // 0010 remaps every existing 'identity' row to 'targeting'.
+        // V3A-1 contract (session-prompts/31_v3a_modules.md, pinned block):
+        // `modules` anticipates session 30's migration 0011 —
+        // { [key: ModuleKey]: { completed_at: string, receipt: string } },
+        // widened with a `{ fired_at: string }` variant to match 30's real
+        // `moduleRegistry.ts::ModulesState` (`checkpoint_hunt`'s own
+        // idempotency marker, not a module completion) after reading it
+        // directly from the sibling feat/v3a-spine worktree mid-build.
+        // Typed here (additive, optional) so this session's own code
+        // typechecks without depending on 30's migration landing first.
         Row: {
           user_id: string;
           stage: "anchor" | "calibration" | "resume" | "identity" | "targeting" | "done";
           messages: Array<{ role: "user" | "assistant"; content: string }>;
           extracted: Record<string, unknown>;
+          modules: Record<string, { completed_at: string; receipt: string } | { fired_at: string }>;
           status: "in_progress" | "complete";
           created_at: string;
           updated_at: string;
@@ -76,12 +86,14 @@ export interface Database {
           stage?: "anchor" | "calibration" | "resume" | "identity" | "targeting" | "done";
           messages?: Array<{ role: "user" | "assistant"; content: string }>;
           extracted?: Record<string, unknown>;
+          modules?: Record<string, { completed_at: string; receipt: string } | { fired_at: string }>;
           status?: "in_progress" | "complete";
         };
         Update: {
           stage?: "anchor" | "calibration" | "resume" | "identity" | "targeting" | "done";
           messages?: Array<{ role: "user" | "assistant"; content: string }>;
           extracted?: Record<string, unknown>;
+          modules?: Record<string, { completed_at: string; receipt: string } | { fired_at: string }>;
           status?: "in_progress" | "complete";
           updated_at?: string;
         };
@@ -217,6 +229,31 @@ export interface Database {
         Update: {
           state?: "new" | "seen" | "saved" | "dismissed" | "applied";
           state_changed_at?: string;
+        };
+        Relationships: [];
+      };
+      // V3A-1 contract (session-prompts/31_v3a_modules.md, pinned block):
+      // anticipates session 30's migration 0011 — PK(user_id, posting_id),
+      // authed own-row select/insert/update RLS. Typed here (same rationale
+      // as onboarding_sessions.modules above) so this session's own reaction-
+      // calibration code typechecks without depending on 30's migration.
+      posting_reactions: {
+        Row: {
+          user_id: string;
+          posting_id: string;
+          reaction: "interested" | "not_interested";
+          note: string | null;
+          created_at: string;
+        };
+        Insert: {
+          user_id: string;
+          posting_id: string;
+          reaction: "interested" | "not_interested";
+          note?: string | null;
+        };
+        Update: {
+          reaction?: "interested" | "not_interested";
+          note?: string | null;
         };
         Relationships: [];
       };
