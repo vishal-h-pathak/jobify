@@ -165,6 +165,51 @@ def test_matched_groups_recovers_only_the_hit_group(tmp_path, monkeypatch):
     assert "other" not in captured[0]["matched_groups"]
 
 
+def test_scoring_failure_on_one_posting_does_not_drop_the_batch(tmp_path, monkeypatch, caplog):
+    """A malformed posting that makes `score_posting` raise must not sink
+    the whole event batch — the offending posting falls back to
+    `matched_groups: []` (same shape as "posting not found") and every
+    other event in the batch still gets processed."""
+    (tmp_path / "learned-insights.md").write_text("", encoding="utf-8")
+    rubric = _rubric(groups=[("core", 1.0, ["unique_engineer_term"])])
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: rubric)
+    monkeypatch.setattr(db, "get_posting_reactions", lambda uid: [
+        {"posting_id": "p-bad", "reaction": "interested", "created_at": "2020-01-01T00:00:00Z"},
+        {"posting_id": "p-good", "reaction": "interested", "created_at": "2020-01-01T00:00:01Z"},
+    ])
+    monkeypatch.setattr(db, "get_matches_by_states", lambda uid, states: [])
+    monkeypatch.setattr(
+        db, "get_postings_by_ids",
+        lambda ids: [
+            _posting("p-bad", description="a posting about the unique_engineer_term role"),
+            _posting("p-good", description="a posting about the unique_engineer_term role"),
+        ],
+    )
+    monkeypatch.setattr(db, "set_compiled_rubric", lambda uid, r: None)
+    monkeypatch.setattr(db, "update_profile_doc_file", lambda uid, fname, content: None)
+
+    real_score_posting = rubric_module.score_posting
+
+    def _flaky_score_posting(rubric, posting):
+        if posting["id"] == "p-bad":
+            raise ValueError("malformed posting")
+        return real_score_posting(rubric, posting)
+
+    monkeypatch.setattr(rubric_module, "score_posting", _flaky_score_posting)
+
+    captured: list[dict] = []
+    _wrap_apply_feedback(monkeypatch, captured)
+
+    with caplog.at_level("WARNING", logger="jobify.hosted.learning"):
+        learning.run_learning_pass("user-a", tmp_path)
+
+    assert len(captured) == 2  # the whole batch survived, not just the good posting
+    by_action_order = captured
+    assert by_action_order[0]["matched_groups"] == []  # p-bad: scoring raised, fell back to []
+    assert by_action_order[1]["matched_groups"] == ["core"]  # p-good: scored normally
+    assert "p-bad" in caplog.text
+
+
 # ── 5. Reweight persisted ────────────────────────────────────────────────
 
 

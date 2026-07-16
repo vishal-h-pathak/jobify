@@ -98,7 +98,12 @@ def _collect_events(
     `posting_reactions` + qualifying `matches` row newer than
     `watermark_iso` (or every row that exists, if `watermark_iso` is
     `None` — the first-ever pass). `new_watermark_iso` is the max
-    timestamp actually processed (unchanged/empty if nothing qualified)."""
+    timestamp actually processed (unchanged/empty if nothing qualified).
+
+    Note: the timestamp comparisons below (`ts <= watermark_iso`) are a
+    lexical string comparison, not a parsed-datetime comparison — this
+    assumes `posting_reactions.created_at` / `matches.state_changed_at`
+    are homogeneously-serialized ISO-8601 timestamps from PostgREST."""
     reactions = db.get_posting_reactions(user_id)
     matches = db.get_matches_by_states(user_id, list(FEEDBACK_MATCH_STATES))
 
@@ -124,13 +129,15 @@ def _collect_events(
     posting_ids = [pid for _, pid, _ in candidates if pid]
     postings_by_id = {p["id"]: p for p in db.get_postings_by_ids(posting_ids)}
 
-    events = [
-        {
-            "action": action,
-            "matched_groups": _matched_groups(rubric, postings_by_id[pid]) if pid in postings_by_id else [],
-        }
-        for _, pid, action in candidates
-    ]
+    events = []
+    for _, pid, action in candidates:
+        matched_groups: list[str] = []
+        if pid in postings_by_id:
+            try:
+                matched_groups = _matched_groups(rubric, postings_by_id[pid])
+            except Exception as exc:  # noqa: BLE001 — one bad posting must not sink the batch
+                logger.warning("learning: scoring failed for posting_id=%s: %s", pid, exc)
+        events.append({"action": action, "matched_groups": matched_groups})
     new_watermark = max(ts for ts, _, _ in candidates)
     return events, new_watermark
 
@@ -192,6 +199,17 @@ def _run_learning_pass_inner(
     watermark_iso, body = _parse_watermark(content)
 
     events, new_watermark = _collect_events(user_id, rubric, watermark_iso)
+    if events and not (new_watermark or "").strip():
+        # Defensive only: `new_watermark` can only be falsy when `candidates`
+        # was empty in `_collect_events`, which already short-circuits with
+        # `events=[]` — so this should be unreachable in practice. Guard it
+        # anyway rather than persist a blank watermark that would fail to
+        # re-parse via `_WATERMARK_RE` next pass and re-fetch/re-fail forever.
+        logger.warning(
+            "learning: pass for user_id=%s collected %d events but produced an "
+            "empty watermark; skipping write", user_id, len(events),
+        )
+        return
     if not events:
         return  # nothing new since the last pass — cheap no-op, no writes at all
 
