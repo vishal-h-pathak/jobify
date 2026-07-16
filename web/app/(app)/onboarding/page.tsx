@@ -68,21 +68,41 @@ interface InitialState {
 /* repo's convention (see lib/onboarding/handleTurn.test.ts).           */
 /* ------------------------------------------------------------------ */
 
-const ALLOWED_UPLOAD_EXTENSIONS = [".txt", ".md"];
+const ALLOWED_UPLOAD_EXTENSIONS = [".pdf", ".txt", ".md"];
 
 /** Returns a friendly rejection message, or null if the filename is allowed. */
 export function validateUploadName(fileName: string): string | null {
   const lower = fileName.toLowerCase();
   const ok = ALLOWED_UPLOAD_EXTENSIONS.some((ext) => lower.endsWith(ext));
-  return ok ? null : "Please upload a .txt or .md file.";
+  return ok ? null : "Please upload a .pdf, .txt, or .md file.";
 }
 
 export type UploadResult = { ok: true; text: string } | { ok: false; error: string };
 
-/** Validates the extension, then reads the file's text client-side. */
-export async function handleUpload(file: File): Promise<UploadResult> {
+/**
+ * Validates the extension, then extracts the file's text. `.txt`/`.md`
+ * still read client-side via `file.text()`, unchanged (judgment call #8);
+ * `.pdf` POSTs to the new server-side `/api/resume/extract` route (the
+ * PDF library never runs in the browser) and maps its JSON response onto
+ * the same `UploadResult` shape. `fetchImpl` defaults to global `fetch`,
+ * matching this file's existing DI convention (see `fetchInitialState`/
+ * `submitTurn` above).
+ */
+export async function handleUpload(file: File, fetchImpl: typeof fetch = fetch): Promise<UploadResult> {
   const error = validateUploadName(file.name);
   if (error) return { ok: false, error };
+
+  if (file.name.toLowerCase().endsWith(".pdf")) {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetchImpl("/api/resume/extract", { method: "POST", body: formData });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.ok !== true) {
+      return { ok: false, error: typeof data?.error === "string" ? data.error : "Something went wrong." };
+    }
+    return { ok: true, text: data.text };
+  }
+
   const text = await file.text();
   return { ok: true, text };
 }
@@ -449,8 +469,8 @@ export function ChatStageView({ state, scrollRef, onInputChange, onSend, onRetry
               id="onboarding-resume-upload"
               fileName={state.fileName}
               onFileChange={onFileChange}
-              accept=".txt,.md"
-              label="Upload resume (.txt/.md)"
+              accept=".pdf,.txt,.md"
+              label="Upload resume (.pdf/.txt/.md)"
             />
             <Button variant="ghost" onClick={onSkip} disabled={state.sending}>
               Skip — use my answers instead
