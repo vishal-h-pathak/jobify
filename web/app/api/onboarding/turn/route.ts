@@ -6,6 +6,7 @@ import { hasClaimedInvite } from "@/lib/db/invites";
 import { isAdmin } from "@/lib/admin/isAdmin";
 import { runInterviewTurn } from "@/lib/anthropic/interview";
 import { handleOnboardingTurn } from "@/lib/onboarding/handleTurn";
+import type { ModulesState } from "@/lib/onboarding/moduleRegistry";
 
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
@@ -39,6 +40,7 @@ export async function POST(request: Request) {
       messages: session.messages,
       extracted: session.extracted,
       status: session.status,
+      modules: (session.modules ?? {}) as ModulesState,
     },
     supabase,
     admin: createSupabaseAdminClient(),

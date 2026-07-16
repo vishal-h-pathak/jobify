@@ -12,6 +12,9 @@ import { EnergyPanel } from "@/components/onboarding/EnergyPanel";
 import { EnvironmentPanel } from "@/components/onboarding/EnvironmentPanel";
 import { TrajectoryPanel } from "@/components/onboarding/TrajectoryPanel";
 import { CheckpointInterstitial } from "@/components/onboarding/CheckpointInterstitial";
+import { VoicePanel } from "@/components/onboarding/VoicePanel";
+import { MetricsPanel } from "@/components/onboarding/MetricsPanel";
+import { MirrorPanel } from "@/components/onboarding/MirrorPanel";
 import {
   ChatStageView,
   DoneForNowView,
@@ -20,6 +23,7 @@ import {
   fetchInitialState,
   handleUpload,
   initialOnboardingState,
+  navigateToProfile,
   onboardingReducer,
   submitAnchor,
   submitTurn,
@@ -59,6 +63,7 @@ const baseViewProps = {
   onCalibrationAnswerChange: noop,
   onCalibrationSubmit: noop,
   onModuleComplete: noop,
+  onMirrorComplete: noop,
   onCheckpointContinue: noop,
 };
 
@@ -79,6 +84,16 @@ const PHASE_TWO_STRUCTURED_DONE: ModulesState = {
   environment: completion("4 scenarios chosen"),
   trajectory: completion("trajectory: climb"),
 };
+
+// range/evidence derive complete from `stage: "done"` alone (moduleOrder.ts),
+// so `stage: "done"` + PHASE_TWO_STRUCTURED_DONE is enough to make "voice"
+// the next canonical module without an explicit modules.range/evidence entry.
+const PHASE_THREE_VOICE_DONE: ModulesState = { ...PHASE_TWO_STRUCTURED_DONE, voice: completion("voice: dry, compressed") };
+const PHASE_THREE_METRICS_DONE: ModulesState = {
+  ...PHASE_THREE_VOICE_DONE,
+  metrics: completion("2 confirmed · 1 held back"),
+};
+const ALL_MODULES_DONE: ModulesState = { ...PHASE_THREE_METRICS_DONE, mirror: completion("mirror accepted") };
 
 describe("fetchInitialState — GET /api/onboarding/state", () => {
   it("defaults a brand-new session and extends with modules/matchCount/valuePairs/environmentScenarios", async () => {
@@ -517,8 +532,23 @@ describe("OnboardingView — module panel routing (V3A_DESIGN.md §1.2 canonical
     expect(composerChildren[0].props.children).toBeTruthy();
   });
 
-  it("interview block finished (stage 'done') -> Done-for-now, since B2's voice/metrics/mirror don't exist yet", () => {
+  it("interview block finished (stage 'done') -> VoicePanel, the first of B2's LLM modules", () => {
     const panel = panelOf({ ...initialOnboardingState, loading: false, modules: PHASE_TWO_STRUCTURED_DONE, stage: "done" });
+    expect(panel.type).toBe(VoicePanel);
+  });
+
+  it("voice done -> MetricsPanel", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, modules: PHASE_THREE_VOICE_DONE, stage: "done" });
+    expect(panel.type).toBe(MetricsPanel);
+  });
+
+  it("metrics done -> MirrorPanel, the last canonical module", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, modules: PHASE_THREE_METRICS_DONE, stage: "done" });
+    expect(panel.type).toBe(MirrorPanel);
+  });
+
+  it("every canonical module complete (a stray post-completion revisit) -> Done-for-now", () => {
+    const panel = panelOf({ ...initialOnboardingState, loading: false, modules: ALL_MODULES_DONE, stage: "done" });
     expect(panel.type).toBe(DoneForNowView);
   });
 
@@ -544,6 +574,48 @@ describe("OnboardingView — module panel routing (V3A_DESIGN.md §1.2 canonical
     expect(panel.type).toBe(EnergyPanel);
     panel.props.onComplete();
     expect(onModuleComplete).toHaveBeenCalledWith("energy");
+  });
+
+  it("voice/metrics onComplete callbacks are wired through onModuleComplete like every other structured module", () => {
+    const onModuleComplete = vi.fn();
+    const voicePanel = panelOf(
+      { ...initialOnboardingState, loading: false, modules: PHASE_TWO_STRUCTURED_DONE, stage: "done" },
+      [],
+      { onModuleComplete }
+    );
+    voicePanel.props.onComplete();
+    expect(onModuleComplete).toHaveBeenCalledWith("voice");
+
+    const metricsPanel = panelOf(
+      { ...initialOnboardingState, loading: false, modules: PHASE_THREE_VOICE_DONE, stage: "done" },
+      [],
+      { onModuleComplete }
+    );
+    metricsPanel.props.onComplete();
+    expect(onModuleComplete).toHaveBeenCalledWith("metrics");
+  });
+
+  it("mirror wires onComplete directly to onMirrorComplete, never through onModuleComplete", () => {
+    const onModuleComplete = vi.fn();
+    const onMirrorComplete = vi.fn();
+    const panel = panelOf(
+      { ...initialOnboardingState, loading: false, modules: PHASE_THREE_METRICS_DONE, stage: "done" },
+      [],
+      { onModuleComplete, onMirrorComplete }
+    );
+    expect(panel.type).toBe(MirrorPanel);
+    panel.props.onComplete();
+    expect(onMirrorComplete).toHaveBeenCalledTimes(1);
+    expect(onModuleComplete).not.toHaveBeenCalled();
+  });
+});
+
+describe("navigateToProfile — mirror's terminal redirect (V3A_DESIGN.md §4 build item 4)", () => {
+  it("assigns /profile through the injected assign function", () => {
+    const assign = vi.fn();
+    navigateToProfile(assign);
+    expect(assign).toHaveBeenCalledWith("/profile");
+    expect(assign).toHaveBeenCalledTimes(1);
   });
 });
 

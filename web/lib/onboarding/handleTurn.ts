@@ -7,12 +7,14 @@ import { buildProfileDoc, type ExtractedState } from "../profile/buildDoc";
 import { saveSession } from "../db/onboardingSession";
 import { upsertProfileDoc } from "../db/profiles";
 import { recordOnboardingTurn } from "../db/ledger";
+import { markModuleComplete, MODULE_REGISTRY, type ModulesState } from "./moduleRegistry";
 
 export interface SessionSnapshot {
   stage: InterviewStage;
   messages: ChatMessage[];
   extracted: ExtractedState;
   status: "in_progress" | "complete";
+  modules: ModulesState;
 }
 
 export interface HandleTurnDeps {
@@ -101,11 +103,18 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
       { role: "user", content: RESUME_SKIP_DISPLAY_TEXT },
       { role: "assistant", content: assistantText },
     ];
+    // extracted.resume is never set on this path — evidenceReceipt falls
+    // through to the calibration-present branch and returns "built from
+    // your answers" — so mark evidence complete unconditionally; skipping
+    // the resume upload is always a valid completion of the evidence
+    // module (cv.md is synthesized from anchor + calibration later).
+    const modules = markModuleComplete({ modules: session.modules }, "evidence", "built from your answers");
     await saveSession(supabase, userId, {
       messages: newMessages,
       extracted: session.extracted as unknown as Record<string, unknown>,
       stage: "targeting",
       status: "in_progress",
+      modules,
     });
     return { assistantText, stage: "targeting", done: false };
   }
@@ -128,6 +137,24 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
   }
 
   const { extracted, stage, done } = applyToolCalls(turnResult.toolCalls, session.extracted, session.stage);
+
+  // V3A-B2: mark range/evidence complete when their tool calls land this
+  // turn. `{ modules }` matches markModuleComplete's `{ modules: ModulesState
+  // }` signature (it only reads `.modules`) — chain by threading the local
+  // variable through, same pattern as every existing module route. Left
+  // untouched (== session.modules) on a turn that fires neither tool, so a
+  // later read via getOrCreateSession stays accurate.
+  let modules: ModulesState = session.modules;
+  const firedCalibration = turnResult.toolCalls.some((c) => c.name === "record_calibration");
+  const firedResume = turnResult.toolCalls.some((c) => c.name === "record_resume");
+  if (firedCalibration) {
+    const receipt = MODULE_REGISTRY.range.receipt(extracted as unknown as Record<string, unknown>);
+    if (receipt) modules = markModuleComplete({ modules }, "range", receipt);
+  }
+  if (firedResume) {
+    const receipt = MODULE_REGISTRY.evidence.receipt(extracted as unknown as Record<string, unknown>);
+    if (receipt) modules = markModuleComplete({ modules }, "evidence", receipt);
+  }
 
   let assistantText = turnResult.assistantText.trim();
   if (assistantText === "") {
@@ -175,6 +202,7 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
       extracted: extractedForStorage,
       stage,
       status: "complete",
+      modules,
     });
   } else {
     await saveSession(supabase, userId, {
@@ -182,6 +210,7 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
       extracted: extractedForStorage,
       stage,
       status: "in_progress",
+      modules,
     });
   }
 

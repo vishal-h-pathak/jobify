@@ -1,259 +1,98 @@
-# Task 4 report — Entry point + schedule + final verification (H4)
+# Task 4 report — handleTurn.ts module-completion glue
 
-## What I implemented
+## Summary
 
-### Part A — `jobify-hosted-hunt` console script
+Wired `range`/`evidence` module completion into `handleOnboardingTurn`, per the brief's exact
+logic. `SessionSnapshot` gained a required `modules: ModulesState` field; the one call site
+(`web/app/api/onboarding/turn/route.ts`) supplies it via `(session.modules ?? {}) as ModulesState`.
+All existing tests pass unmodified; 4 new test cases added. `tsc --noEmit` clean.
 
-- New module `jobify/hosted/worker.py`:
-  - `_execute() -> dict` — runs one hosted-worker cycle: calls
-    `jobify.hosted.discovery.run_discovery_cycle()`, then
-    `jobify.hosted.fanout.run_fanout_cycle()`, logs both summaries, prints
-    a combined one-line summary (`_summary_line`), and returns
-    `{"discovery": ..., "fanout": ...}`.
-  - `run() -> None` — the console-script target. `argparse` with a
-    documented no-op `--once` flag (mirrors `jobify-hunt`'s own no-op
-    flag), then calls `_execute()`. Single-shot, no internal loop —
-    matches `jobify.hunt.agent.run()`'s pattern exactly.
-  - **Failure-isolation policy (documented in the module docstring and
-    `_execute()`'s docstring):** `run_discovery_cycle()` is NOT wrapped in
-    a try/except in this module. A whole-phase discovery failure
-    propagates and aborts the cycle before fan-out runs. Rationale: I
-    read `jobify.hunt.agent`'s error-handling posture — `iter_all_jobs()`
-    isolates failures **per source** (a try/except inside the loop over
-    `SOURCES`), but `_execute()` itself has no top-level try/except
-    around the sweep as a whole; anything that survives the per-item
-    guards is allowed to propagate and crash the run. I applied the same
-    philosophy one level up, at the phase boundary, for this task:
-    discovery's own per-source resilience (Task 2) and fan-out's own
-    per-user resilience (Task 3) already isolate failures *within* each
-    phase. A failure at the *whole-phase* level here (not one item inside
-    it) is treated the same way `jobify.hunt.agent` treats a whole-phase
-    failure — it propagates rather than being silently swallowed. Running
-    fan-out against a stale/partial `postings` pool left by a crashed
-    discovery phase would silently score users against incomplete data
-    with no signal anything went wrong; aborting loudly (non-zero exit,
-    visible in cron/GHA logs) was the safer, more consistent choice.
-- `pyproject.toml`: added
-  `jobify-hosted-hunt = "jobify.hosted.worker:run"` under
-  `[project.scripts]`, with a comment explaining the composition.
-  Reinstalled the package (`uv pip install -e . --python .venv/bin/python`
-  — `pip` itself isn't on this venv's PATH, `uv` resolved from its local
-  cache with no network) and confirmed
-  `jobify.egg-info/entry_points.txt` now lists `jobify-hosted-hunt`, and
-  `.venv/bin/jobify-hosted-hunt --help` runs and prints the expected
-  usage.
+## What was implemented
 
-### Part B — `.github/workflows/hosted-hunt.yml`
+1. **`web/lib/onboarding/handleTurn.ts`**
+   - Added `import { markModuleComplete, MODULE_REGISTRY, type ModulesState } from "./moduleRegistry"`.
+   - `SessionSnapshot` gained `modules: ModulesState`.
+   - Resume-skip branch (`session.stage === "resume" && userMessage === RESUME_SKIP_MESSAGE`):
+     computes `const modules = markModuleComplete({ modules: session.modules }, "evidence", "built
+     from your answers")` unconditionally, and passes `modules` into that branch's `saveSession`
+     call.
+   - After `const { extracted, stage, done } = applyToolCalls(...)`: computes `let modules:
+     ModulesState = session.modules`, checks whether `record_calibration` / `record_resume` fired
+     this turn via `turnResult.toolCalls.some(...)`, and — if fired and the corresponding
+     `MODULE_REGISTRY.range.receipt` / `MODULE_REGISTRY.evidence.receipt` returns non-null — calls
+     `markModuleComplete({ modules }, "range"|"evidence", receipt)`, threading the local `modules`
+     variable so both can fire independently in the same turn.
+   - `modules` is now passed into both `saveSession` calls at the bottom of the main function
+     (the `done` branch and the `else` branch).
+   - Did NOT call `maybeFireCheckpoint` and did NOT add a `finish_interview` module mark, per the
+     brief's constraint #5 — `finish_interview` still closes the block via `stage`/`status` only.
 
-Modeled on `.github/workflows/hunt.yml`, deliberately simplified per the
-brief (no dashboard-run-row integration — no `scripts/mark_run.py`, no
-`run_id` input):
+2. **`web/app/api/onboarding/turn/route.ts`**
+   - Added `import type { ModulesState } from "@/lib/onboarding/moduleRegistry"`.
+   - Added `modules: (session.modules ?? {}) as ModulesState` to the `session: {...}` object
+     literal passed into `handleOnboardingTurn`.
 
-- `workflow_dispatch` trigger (no inputs needed — no `mode`, since the
-  hosted worker takes none).
-- `schedule:` block present but commented out, exactly like `hunt.yml`'s
-  disabled-by-default posture.
-- Steps: checkout, setup-python (3.11), setup-node (20), install Claude
-  Code CLI (OAuth fallback — same reason `hunt.yml` documents:
-  `jobify.shared.llm` falls back to the Agent SDK under
-  `CLAUDE_CODE_OAUTH_TOKEN`, which is what both fan-out's rubric-compile
-  and stage-4 verdict calls route through), `pip install -e .`, then run
-  `jobify-hosted-hunt --once`.
-- Env vars, read straight from `jobify/config.py` per the brief rather
-  than guessed: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-  `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `VOYAGE_API_KEY`. Also
-  included `SERPAPI_KEY` / `JSEARCH_API_KEY` — per the brief's explicit
-  instruction, Task 2 wired all nine `jobify.hunt.sources` fetchers
-  (including the two paid keyword-search sources) into hosted discovery,
-  so this workflow needs those secrets too; I confirmed this by reading
-  `jobify/hosted/discovery.py`'s `_FIXED_SOURCES` tuple, which includes
-  `jsearch` and `serpapi`.
-- Did not carry over `hunt.yml`'s `tee ... | PIPESTATUS` /
-  `mark_run.py` plumbing — nothing in this workflow consumes an exit-code
-  output, so I ran `jobify-hosted-hunt --once` directly; GHA's own step
-  log already captures stdout/stderr.
-- Validated with `python -c "import yaml; yaml.safe_load(...)"` — parses
-  cleanly.
+3. **`web/lib/onboarding/handleTurn.test.ts`**
+   - `baseSession()` now defaults `modules: {}` (required by the widened `SessionSnapshot` type;
+     purely a fixture addition, does not touch any existing assertion).
+   - Added a new `describe("V3A-B2: module-completion glue", ...)` block with the four cases the
+     brief specifies:
+     (a) `record_calibration` fires → `saveSession` called with
+     `modules: expect.objectContaining({ range: expect.objectContaining({ receipt: "4 answers" }) })`.
+     (b) `record_resume` fires → `modules.evidence.receipt === "resume added"`.
+     (c) resume-skip path → `modules.evidence.receipt === "built from your answers"`.
+     (d) a turn firing neither tool (fires `record_identity` instead) → `session.modules` fixture
+     (a non-empty `{ anchor: {...} }`) round-trips unchanged into the `saveSession` call.
 
-### Part C — final verification (see walkthrough below)
+## Verification
 
-## What I tested
+- Confirmed the brief's assumed receipt semantics against the actual
+  `web/lib/onboarding/moduleRegistry.ts` before writing code: `rangeReceipt` returns `"4 answers"`
+  when `extracted.calibration` is truthy else `null`; `evidenceReceipt` returns `"resume added"`
+  when `extracted.resume?.cv_markdown` is a non-blank string, else `"built from your answers"`
+  when `extracted.calibration` is truthy, else `null`. Both matched the brief exactly.
+- Confirmed `web/lib/onboarding/maybeGenerateCalibration.ts` has its own separate
+  `CalibrationSessionSnapshot` type (no `modules` field) and never calls `handleOnboardingTurn` —
+  correctly out of scope, untouched.
+- Confirmed `web/app/api/onboarding/turn/route.test.ts` (pre-existing) mocks
+  `getOrCreateSession`/`handleOnboardingTurn` entirely and asserts nothing about `modules`, so no
+  changes were needed there; it still passes.
+- `cd web && npx vitest run lib/onboarding/handleTurn.test.ts app/api/onboarding/turn/route.test.ts`
+  → **2 files, 23 tests, all green** (19 in handleTurn.test.ts incl. 4 new; 4 in route.test.ts).
+- `cd web && npx vitest run` (full suite) → **91 files, 788 tests, all green**.
+- `cd web && npx tsc --noEmit` → clean, no output.
+- No pre-existing assertion in `handleTurn.test.ts` was removed or weakened — diff is purely
+  additive except for the one-line `modules: {}` default added to the `baseSession()` fixture
+  builder (required because `SessionSnapshot.modules` is now non-optional).
 
-New file `tests/test_hosted_worker.py`, three tests (fakes both
-`run_discovery_cycle`/`run_fanout_cycle` — no real discovery/fan-out
-execution, per the brief):
+## Files changed
 
-1. `test_execute_calls_discovery_then_fanout` — asserts call order
-   (`["discovery", "fanout"]`), asserts `_execute()`'s return value
-   matches both fakes' summaries, and asserts the printed summary line
-   contains fields drawn directly from each cycle's own return-dict
-   names (`fetched=`, `upserted=`, `dead=`, `processed=`,
-   `matches_written=`, `stage4_calls=`, `budget_stopped=`).
-2. `test_execute_aborts_cycle_when_discovery_raises` — discovery fake
-   raises `RuntimeError`; asserts the exception propagates out of
-   `_execute()` (`pytest.raises`) and that the fan-out fake was never
-   called — verifying the documented failure-isolation policy.
-3. `test_run_parses_once_flag_and_executes_one_cycle` — monkeypatches
-   `sys.argv` to `["jobify-hosted-hunt", "--once"]` and `worker._execute`,
-   confirms `run()` parses cleanly and calls `_execute()` exactly once.
+- `/Users/jarvis/dev/jarvis/jobify-wt/v3a-b2-llm/web/lib/onboarding/handleTurn.ts`
+- `/Users/jarvis/dev/jarvis/jobify-wt/v3a-b2-llm/web/lib/onboarding/handleTurn.test.ts`
+- `/Users/jarvis/dev/jarvis/jobify-wt/v3a-b2-llm/web/app/api/onboarding/turn/route.ts`
 
-### Test results
-
-```
-$ python -m pytest tests/test_hosted_worker.py -q
-...
-3 passed in 0.18s
-
-$ python -m pytest -q          # full suite
-........................................................................ [ 12%]
-........................................................................ [ 24%]
-........................................................................ [ 36%]
-........................................................................ [ 49%]
-........................................................................ [ 61%]
-........................................................................ [ 73%]
-........................................................................ [ 85%]
-........................................................................ [ 98%]
-...........                                                              [100%]
-587 passed, 1 skipped, 26 deselected in 24.87s
-
-$ ruff check jobify/hosted/
-All checks passed!
-```
-
-No network calls anywhere (discovery/fan-out are fully faked in this
-task's own tests; the rest of the suite was already network-free before
-this task).
-
-## Part C exit-criteria walkthrough
-
-1. **Full suite green, no network.**
-   `python -m pytest -q` → `587 passed, 1 skipped, 26 deselected` — clean.
-   The 1 skip and 26 deselected are pre-existing (the `legacy` marker
-   exclusion and one environment-gated skip elsewhere in the suite; not
-   introduced by this task). PASS.
-
-2. **`jobify-hunt` (single-user path) behavior unchanged.**
-   Ran every `hunt`-prefixed test file plus a `-k hunt` sweep:
-   `python -m pytest tests/ -q -k "hunt"` → `68 passed, 1 skipped, 545
-   deselected`. This task touched zero files under `jobify/hunt/`,
-   `jobify/hosted/discovery.py`, or `jobify/hosted/fanout.py` — only added
-   a new module (`jobify/hosted/worker.py`), a new workflow file, and one
-   new `pyproject.toml` `[project.scripts]` line. PASS.
-
-3. **The `lru_cache` regression test exists and passes.**
-   `tests/test_profile_loader_db.py::test_fan_out_does_not_touch_global_profile_dir_cache`
-   (Task 1's regression test, guarding `profile_dir()`'s
-   `@lru_cache(maxsize=1)` against cross-user leakage) is present and
-   green:
-   `python -m pytest tests/test_profile_loader_db.py::test_fan_out_does_not_touch_global_profile_dir_cache -q`
-   → `1 passed`. Not re-added — confirmed as-is. PASS.
-
-4. **`git diff --stat main...HEAD`: no forbidden paths touched anywhere
-   on the branch.**
-
-   ```
-   $ git diff --stat main...HEAD
-    .github/workflows/hosted-hunt.yml |  68 ++++
-    .superpowers/sdd/task-1-report.md | 329 +++++++++++++++++++
-    .superpowers/sdd/task-2-report.md | 324 +++++++++++++++++++
-    .superpowers/sdd/task-3-report.md | 342 ++++++++++++++++++++
-    docs/SCORING.md                   |  37 +++
-    jobify/config.py                  |  19 ++
-    jobify/db.py                      | 313 +++++++++++++++++++
-    jobify/hosted/__init__.py         |  24 ++
-    jobify/hosted/discovery.py        | 243 ++++++++++++++
-    jobify/hosted/embed.py            | 196 ++++++++++++
-    jobify/hosted/fanout.py           | 507 ++++++++++++++++++++++++++++++
-    jobify/hosted/worker.py           | 118 +++++++
-    jobify/hunt/rubric.py             |  62 ++++
-    jobify/hunt/sources/_portals.py   |  42 ++-
-    jobify/hunt/sources/ashby.py      |  39 ++-
-    jobify/hunt/sources/greenhouse.py |  39 ++-
-    jobify/hunt/sources/lever.py      |  39 ++-
-    jobify/hunt/sources/workday.py    |  38 ++-
-    jobify/migrations/0004_worker.sql |  40 +++
-    jobify/migrations/README.md       |  17 +
-    jobify/profile_loader.py          | 169 +++++++---
-    jobify/shared/llm.py              | 134 ++++++--
-    onboarding/validate_profile.py    | 161 +++++-----
-    pyproject.toml                    |  12 +
-    tests/test_db_hosted.py           | 485 ++++++++++++++++++++++++++++
-    tests/test_hosted_discovery.py    | 517 ++++++++++++++++++++++++++++++
-    tests/test_hosted_embed.py        | 232 ++++++++++++++
-    tests/test_hosted_fanout.py       | 643 ++++++++++++++++++++++++++++++++++++++
-    tests/test_hosted_worker.py       | 111 +++++++
-    tests/test_hunt_rubric.py         |  70 +++++
-    tests/test_onboarding_example.py  |  32 ++
-    tests/test_portals_fanout.py      | 125 ++++++++
-    tests/test_profile_loader_db.py   | 125 +++++++-
-    tests/test_shared_llm.py          | 189 ++++++++++-
-    34 files changed, 5641 insertions(+), 200 deletions(-)
-   ```
-
-   Confirmed with a targeted diff-stat against the specific forbidden
-   paths (empty output = untouched across the whole branch):
-   `git diff --stat main...HEAD -- web/ dashboard/ jobify/tailor/
-   jobify/submit/ '*0002_multitenant.sql' '*0003_hosted_onboarding.sql'`
-   → no output. `jobify/migrations/0004_worker.sql` was added by Task 1
-   (not by this task) — it is not one of the two forbidden migration
-   files (`0002_multitenant.sql` / `0003_hosted_onboarding.sql`); this
-   task did not touch it. PASS.
-
-5. **`jobify/hosted/` passes `ruff check` cleanly.**
-   `ruff check jobify/hosted/` → `All checks passed!` (covers
-   `__init__.py`, `discovery.py`, `embed.py`, `fanout.py`, and this
-   task's new `worker.py` together). PASS.
-
-All five exit criteria pass.
-
-## Files changed (this task's own commit)
-
-- `jobify/hosted/worker.py` (new) — `_execute()` / `run()` entry point.
-- `pyproject.toml` — added `jobify-hosted-hunt` console script.
-- `.github/workflows/hosted-hunt.yml` (new) — disabled-by-default cron +
-  manual-dispatch workflow.
-- `tests/test_hosted_worker.py` (new) — 3 tests (call order + summary,
-  failure isolation, `run()`'s argparse wiring).
-
-Commit: `b2f2fae` — `H4: shared discovery + per-user scoring ladder
-fan-out (rubric/embed/LLM top-N) + budget stop` (exact message from the
-brief). (Amended once from an initial `0a3f8ba` to fold in this report
-file itself, matching the established per-task convention where
-`.superpowers/sdd/task-N-report.md` ships in the same commit — see
-`task-1-report.md`/`task-2-report.md`/`task-3-report.md` in prior
-commits. The `.superpowers/sdd/` directory has its own nested
-`.gitignore` that excludes everything by default; the report is
-force-added, same as the prior three tasks' reports.)
+(Note: `.superpowers/sdd/task-2-report.md` and `.superpowers/sdd/task-3-report.md` showed as
+modified in `git status` at the start of this session — pre-existing working-tree state from
+earlier task sessions on this branch, unrelated to Task 4. Left untouched and unstaged. This
+report file itself (`task-4-report.md`) also pre-existed with unrelated content from an earlier
+task-numbering scheme (H4 hosted-hunt entry point) — overwritten here with this task's report.)
 
 ## Self-review
 
-- **Completeness:** console script wired and verified via a real
-  `--help` invocation after an editable reinstall; workflow file created,
-  disabled-by-default (`schedule:` commented out, matching `hunt.yml`);
-  all 5 exit criteria walked through above with command output as
-  evidence.
-- **Quality:** `_execute()`/`run()`/`_summary_line()` are small,
-  single-purpose, and named consistently with `jobify.hunt.agent`'s own
-  `_execute()`/`run()` split. The failure-isolation rationale is
-  documented in three places (module docstring, `_execute()`'s
-  docstring, and the test file's docstring) so a future reader doesn't
-  have to reverse-engineer the choice.
-- **Discipline:** `worker.py` calls `discovery.run_discovery_cycle()` and
-  `fanout.run_fanout_cycle()` exactly once each, in order — no
-  reimplementation of either module's internals. No file outside this
-  task's ownership (`jobify/hosted/worker.py`,
-  `.github/workflows/hosted-hunt.yml`, `pyproject.toml`) was modified in
-  this commit.
-- **Testing:** all three new tests fail if the behavior they check
-  regresses (verified by temporarily reordering the calls / removing the
-  raise-propagation while drafting — reverted before finalizing). Ran
-  with `-q` for pristine output; no warnings emitted.
+- Every `saveSession` call site in `handleTurn.ts` now passes `modules`: resume-skip branch, the
+  `done` branch, and the `else` branch — confirmed by re-reading the final file.
+- The resume-skip branch's `evidence` mark is unconditional: `markModuleComplete(...)` is called
+  directly, not inside any `if`/receipt-null check (unlike the main-path calibration/resume marks,
+  which do guard on `receipt` being non-null — that guard is intentional there since
+  `MODULE_REGISTRY.range.receipt`/`evidence.receipt` can return `null`, but the resume-skip branch
+  passes a literal `"built from your answers"` string straight to `markModuleComplete`, which never
+  returns null).
+- `ModuleKey` union was not touched; no `"targeting"` key was invented; `checkpoint.ts` and
+  `incrementalDoc.ts` were not edited.
+- Verified via `grep -rln "SessionSnapshot\|handleOnboardingTurn"` that no other call site besides
+  `turn/route.ts` (production) and the two test files needed updating.
 
-## Issues or concerns
+## Concerns
 
-None. `pip` was not on the venv's PATH in this environment (only `pytest`
-was pre-installed); `uv pip install -e . --python .venv/bin/python`
-worked from local cache with no network access and correctly regenerated
-`jobify.egg-info/entry_points.txt` to include `jobify-hosted-hunt`. Not a
-concern for CI, since the workflow itself runs a fresh `pip install -e .`
-in a clean GHA image where `pip` is present by default.
+None. Implementation matches the brief's exact code snippets and constraints; all tests and
+typecheck are green.
