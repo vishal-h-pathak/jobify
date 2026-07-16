@@ -16,6 +16,7 @@ export interface MirrorState {
   draftParagraphs: MirrorParagraphs;
   regenUsed: boolean;
   error: string | null;
+  reloadToken: number;
 }
 
 export function initialMirrorState(): MirrorState {
@@ -26,10 +27,12 @@ export function initialMirrorState(): MirrorState {
     draftParagraphs: ["", ""],
     regenUsed: false,
     error: null,
+    reloadToken: 0,
   };
 }
 
 export type MirrorAction =
+  | { type: "generate_retried" }
   | { type: "draft_loaded"; paragraphs: MirrorParagraphs; quotedPhrases: string[] }
   | { type: "generate_failed"; error: string }
   | { type: "edit_started" }
@@ -44,6 +47,8 @@ export type MirrorAction =
 
 export function mirrorReducer(state: MirrorState, action: MirrorAction): MirrorState {
   switch (action.type) {
+    case "generate_retried":
+      return { ...state, phase: "generating", error: null, reloadToken: state.reloadToken + 1 };
     case "draft_loaded":
       return { ...state, phase: "ready", paragraphs: action.paragraphs, quotedPhrases: action.quotedPhrases, error: null };
     case "generate_failed":
@@ -233,7 +238,7 @@ export function MirrorPanel({ onComplete, fetchImpl = fetch }: MirrorPanelProps)
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [state.reloadToken]);
 
   useEffect(() => {
     if (state.phase === "finished") onComplete();
@@ -266,7 +271,14 @@ export function MirrorPanel({ onComplete, fetchImpl = fetch }: MirrorPanelProps)
   }
 
   if (state.phase === "error") {
-    return <p className="text-sm text-danger">{state.error}</p>;
+    return (
+      <div className="flex flex-col items-start gap-3">
+        <p className="text-sm text-danger">{state.error}</p>
+        <Button variant="secondary" onClick={() => dispatch({ type: "generate_retried" })}>
+          Retry
+        </Button>
+      </div>
+    );
   }
 
   return (
