@@ -36,6 +36,13 @@ describe("mirrorReducer", () => {
     expect(state.error).toBe("model overloaded");
   });
 
+  it("generate_retried resets back to generating and bumps the reload token", () => {
+    const errored = mirrorReducer(initialMirrorState(), { type: "generate_failed", error: "x" });
+    const retried = mirrorReducer(errored, { type: "generate_retried" });
+    expect(retried.phase).toBe("generating");
+    expect(retried.reloadToken).toBe(1);
+  });
+
   it("edit_started copies the accepted paragraphs into the draft", () => {
     let state = mirrorReducer(initialMirrorState(), { type: "draft_loaded", paragraphs: PARAGRAPHS, quotedPhrases: [] });
     state = mirrorReducer(state, { type: "edit_started" });
@@ -174,6 +181,50 @@ describe("highlightQuotedPhrases", () => {
     const result = highlightQuotedPhrases("the shorter path", ["short", "shorter"]) as { props: { className?: string; children: string } }[];
     const highlightedTexts = result.filter((p) => p.props?.className?.includes("decoration-amber")).map((p) => p.props.children);
     expect(highlightedTexts).toEqual(["shorter"]);
+  });
+});
+
+describe("MirrorPanel retry sequence — reject, error, retry, second call succeeds, ready", () => {
+  it("drives the exact sequence the component's useEffect performs: generateMirror rejects, generate_failed -> error, generate_retried -> generating, a genuine second generateMirror call on the same fetchImpl succeeds, draft_loaded -> ready", async () => {
+    // A fetchImpl double that fails the first invocation and succeeds the second,
+    // mirroring what MirrorPanel's useEffect does when the user clicks Retry.
+    let calls = 0;
+    const fetchImplMock = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("network error");
+      }
+      return { ok: true, json: async () => ({ paragraphs: PARAGRAPHS, quoted_phrases: ["allergic to busywork"] }) };
+    });
+    const fetchImpl = fetchImplMock as unknown as typeof fetch;
+
+    // 1. First call: generateMirror rejects.
+    let state = initialMirrorState();
+    await expect(generateMirror(fetchImpl)).rejects.toThrow("network error");
+
+    // 2. Dispatch generate_failed as the component's .catch() would.
+    state = mirrorReducer(state, { type: "generate_failed", error: "network error" });
+    expect(state.phase).toBe("error");
+    expect(state.error).toBe("network error");
+
+    // 3. Retry: dispatch generate_retried, proving the retry action itself
+    // (same assertion the reducer suite already covers — reused deliberately,
+    // not the only proof in this test).
+    state = mirrorReducer(state, { type: "generate_retried" });
+    expect(state.phase).toBe("generating");
+    expect(state.reloadToken).toBe(1);
+
+    // 4. Second call: the same fetchImpl instance, invoked again, now succeeds —
+    // this is the part a reducer-only test can't prove.
+    const draft = await generateMirror(fetchImpl);
+    expect(draft).toEqual({ paragraphs: PARAGRAPHS, quoted_phrases: ["allergic to busywork"] });
+    expect(fetchImplMock).toHaveBeenCalledTimes(2);
+
+    // 5. Dispatch draft_loaded with the second call's result, as the component would.
+    state = mirrorReducer(state, { type: "draft_loaded", paragraphs: draft.paragraphs, quotedPhrases: draft.quoted_phrases });
+    expect(state.phase).toBe("ready");
+    expect(state.paragraphs).toEqual(PARAGRAPHS);
+    expect(state.quotedPhrases).toEqual(["allergic to busywork"]);
   });
 });
 

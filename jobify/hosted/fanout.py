@@ -120,7 +120,7 @@ STAGE4_INPUT_USD_PER_MTOK = float(os.environ.get("STAGE4_INPUT_USD_PER_MTOK", "1
 STAGE4_OUTPUT_USD_PER_MTOK = float(os.environ.get("STAGE4_OUTPUT_USD_PER_MTOK", "5.0"))
 
 
-def _cost_usd(input_tokens: int, output_tokens: int, input_rate: float, output_rate: float) -> float:
+def cost_usd(input_tokens: int, output_tokens: int, input_rate: float, output_rate: float) -> float:
     return round(
         input_tokens / 1_000_000 * input_rate + output_tokens / 1_000_000 * output_rate, 6
     )
@@ -201,7 +201,7 @@ def _stage4_verdict(
     if api_key:
         call_kwargs["api_key"] = api_key
     text, usage = llm.complete_with_usage(**call_kwargs)
-    cost = _cost_usd(
+    cost = cost_usd(
         usage.input_tokens, usage.output_tokens,
         STAGE4_INPUT_USD_PER_MTOK, STAGE4_OUTPUT_USD_PER_MTOK,
     )
@@ -237,7 +237,7 @@ def _stage4_verdict(
 # ── Stage 2 support: targeting-tier text + rubric compile/cache ──────────
 
 
-def _targeting_text(profile: dict) -> str:
+def targeting_text(profile: dict) -> str:
     """Render `profile.yml`'s targeting-tier block as text for
     `compile_rubric`'s `targeting_text` input.
 
@@ -299,16 +299,21 @@ def _ensure_rubric(
 
     thesis = load_thesis(profile_dir)
     disqualifiers_text = load_disqualifiers_text(profile_dir)
-    targeting_text = _targeting_text(load_profile(profile_dir))
+    # NB: local var name intentionally differs from the module-level
+    # `targeting_text` function (renamed from `_targeting_text`) — reusing
+    # the function's own name as a local target here would shadow it for
+    # this whole function body and raise UnboundLocalError on this exact
+    # line.
+    targeting_tier_text = targeting_text(load_profile(profile_dir))
 
     compile_kwargs: dict = dict(
-        thesis=thesis, disqualifiers_text=disqualifiers_text, targeting_text=targeting_text,
+        thesis=thesis, disqualifiers_text=disqualifiers_text, targeting_text=targeting_tier_text,
     )
     if api_key:
         compile_kwargs["api_key"] = api_key
     data, usage = rubric_module.compile_rubric_with_usage(**compile_kwargs)
     db.set_compiled_rubric(user_id, data)
-    cost = _cost_usd(
+    cost = cost_usd(
         usage.input_tokens, usage.output_tokens,
         RUBRIC_COMPILE_INPUT_USD_PER_MTOK, RUBRIC_COMPILE_OUTPUT_USD_PER_MTOK,
     )
@@ -388,7 +393,7 @@ def _posting_embed_text(posting: dict) -> str:
 
 def _profile_embed_text(profile_dir: Path) -> str:
     thesis = load_thesis(profile_dir).strip()
-    targeting = _targeting_text(load_profile(profile_dir)).strip()
+    targeting = targeting_text(load_profile(profile_dir)).strip()
     return "\n\n".join(p for p in (thesis, targeting) if p)
 
 
@@ -671,6 +676,9 @@ def _run_user_ladder(
                                 user_id, i, min(len(ranked), HOSTED_STAGE4_TOP_N),
                             )
                             break
+
+    from jobify.hosted import learning  # noqa: PLC0415 — lazy, avoids a fanout<->learning import cycle
+    learning.run_learning_pass(user_id, profile_dir, api_key=byo_key, counters=counters)
 
     counters["users_processed"] += 1
 

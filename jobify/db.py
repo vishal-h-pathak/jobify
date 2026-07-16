@@ -645,6 +645,72 @@ def get_unmatched_postings(user_id: str) -> list[dict]:
     ]
 
 
+def get_posting_reactions(user_id: str) -> list[dict]:
+    """Every `posting_reactions` row for `user_id`: `{user_id, posting_id,
+    reaction, note, created_at}`. No history — the table's PK is
+    `(user_id, posting_id)`, so an upsert overwrites on a changed mind;
+    at most one row per posting ever."""
+    return (
+        _get_client().table("posting_reactions")
+        .select("*")
+        .eq("user_id", user_id)
+        .execute()
+        .data or []
+    )
+
+
+def get_matches_by_states(user_id: str, states: list[str]) -> list[dict]:
+    """Every `matches` row for `user_id` whose `state` is one of `states`
+    (e.g. `["saved", "dismissed", "applied"]`) — full rows, including
+    `state_changed_at`; caller filters by timestamp (client-side, same
+    style as `get_unmatched_postings`)."""
+    return (
+        _get_client().table("matches")
+        .select("*")
+        .eq("user_id", user_id)
+        .in_("state", states)
+        .execute()
+        .data or []
+    )
+
+
+def get_postings_by_ids(posting_ids: list[str]) -> list[dict]:
+    """Every `postings` row whose `id` is in `posting_ids` — batch lookup
+    for re-scoring a set of feedback-flagged postings. Empty list in,
+    empty list out, no query."""
+    if not posting_ids:
+        return []
+    return (
+        _get_client().table("postings")
+        .select("*")
+        .in_("id", posting_ids)
+        .execute()
+        .data or []
+    )
+
+
+def update_profile_doc_file(user_id: str, filename: str, content: str) -> None:
+    """Read-modify-write exactly one key of `profiles.doc` JSONB (e.g.
+    `'learned-insights.md'`) without disturbing any other doc key — same
+    get-then-put shape as `get_compiled_rubric`/`set_compiled_rubric`.
+    No-ops (logs nothing, raises nothing) if the profiles row or its
+    `doc` column is missing/malformed — callers only reach this after
+    already confirming a compiled rubric exists for this user, so a
+    missing row here would be a deeper, separate bug this function isn't
+    responsible for surfacing."""
+    rows = (
+        _get_client().table("profiles").select("doc").eq("user_id", user_id).execute().data or []
+    )
+    if not rows:
+        return
+    doc = rows[0].get("doc")
+    if not isinstance(doc, dict):
+        return
+    _get_client().table("profiles").update(
+        {"doc": {**doc, filename: content}}
+    ).eq("user_id", user_id).execute()
+
+
 # ══════════════════════════════════════════════════════════════════════════
 #  TAILOR — status lifecycle for the M-2/M-6 application flow
 #  (was jobify/tailor/db.py)

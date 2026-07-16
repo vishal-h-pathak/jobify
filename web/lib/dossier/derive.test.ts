@@ -348,3 +348,73 @@ describe("deriveDossier — no validation_status yet (unchecked)", () => {
     expect(dossier.validation).toEqual({ hasIssues: false, bannerText: null, issues: [] });
   });
 });
+
+describe("deriveDossier — learned-insights.md change-log rows", () => {
+  it("parses dated bullet lines into events, skipping the watermark line", () => {
+    const learnedInsightsMd = [
+      "<!-- last-processed: 2026-07-15T00:00:00Z -->",
+      '- 2026-07-14: downweighted "agency work" after 3 dismissals',
+      '- 2026-07-16: upweighted "platform ownership" after 2 saves',
+    ].join("\n");
+    const dossier = deriveDossier({
+      doc: { ...FULL_DOC, "learned-insights.md": learnedInsightsMd },
+      validationStatus: VALID_STATUS,
+      modules: {},
+      extracted: {},
+    });
+
+    expect(dossier.events).toHaveLength(2);
+    expect(dossier.events[0]).toEqual({
+      label: 'Jul 14 — downweighted "agency work" after 3 dismissals',
+      moduleKey: "learning-0",
+      completedAt: "2026-07-14T00:00:00.000Z",
+    });
+    expect(dossier.events[1]).toEqual({
+      label: 'Jul 16 — upweighted "platform ownership" after 2 saves',
+      moduleKey: "learning-1",
+      completedAt: "2026-07-16T00:00:00.000Z",
+    });
+  });
+
+  it("keeps the phase-1-only event count at 4 when learned-insights.md is empty", () => {
+    const modules: ModulesState = {
+      anchor: { completed_at: t("2026-07-10T10:00:00Z"), receipt: "Staff RF Engineer · Acme" },
+      reactions: { completed_at: t("2026-07-10T10:05:00Z"), receipt: "0 reactions (0 interested)" },
+      values: { completed_at: t("2026-07-10T10:10:00Z"), receipt: "0 trade-offs answered" },
+      dealbreakers: { completed_at: t("2026-07-10T10:15:00Z"), receipt: "no hard constraints" },
+    };
+    const dossier = deriveDossier({
+      doc: { ...FULL_DOC, "learned-insights.md": "" },
+      validationStatus: VALID_STATUS,
+      modules,
+      extracted: {},
+    });
+    expect(dossier.events).toHaveLength(4);
+  });
+
+  it("interleaves module-completion rows and insight rows in strict chronological order", () => {
+    const modules: ModulesState = {
+      anchor: { completed_at: t("2026-07-10T10:00:00Z"), receipt: "Staff RF Engineer · Acme" },
+      values: { completed_at: t("2026-07-15T10:10:00Z"), receipt: "1 trade-off answered" },
+    };
+    const learnedInsightsMd = [
+      '- 2026-07-09: downweighted "agency work" after 3 dismissals',
+      '- 2026-07-12: upweighted "platform ownership" after 2 saves',
+      '- 2026-07-16: downweighted "unpaid overtime" after 1 dismissal',
+    ].join("\n");
+    const dossier = deriveDossier({
+      doc: { ...FULL_DOC, "learned-insights.md": learnedInsightsMd },
+      validationStatus: VALID_STATUS,
+      modules,
+      extracted: {},
+    });
+
+    expect(dossier.events.map((e) => e.moduleKey)).toEqual([
+      "learning-0", // 07-09, before anchor
+      "anchor", // 07-10
+      "learning-1", // 07-12, between anchor and values
+      "values", // 07-15
+      "learning-2", // 07-16, after values
+    ]);
+  });
+});

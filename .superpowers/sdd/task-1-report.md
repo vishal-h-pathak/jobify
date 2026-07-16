@@ -1,247 +1,179 @@
-# Task 1 report — moduleTurns.ts + verbatim helper + targeting trim
+# Task 1 report — `jobify/hosted/learning.py`: the incremental learning pass
 
-## What I implemented
+## What was implemented
 
-### 1. `web/lib/onboarding/verbatim.ts` (new)
+Exactly the brief's three pieces, transcribed verbatim except one necessary correctness fix
+(see "Deviation from the brief" below):
 
-```ts
-export function isVerbatimSubstring(needle: string, haystack: string): boolean
-export function filterVerbatim<T>(items: T[], getText: (item: T) => string, haystack: string): T[]
+1. **`jobify/db.py`** — four new functions added directly after `get_unmatched_postings`:
+   `get_posting_reactions`, `get_matches_by_states`, `get_postings_by_ids`,
+   `update_profile_doc_file`. Verbatim from the brief.
+
+2. **`jobify/hosted/fanout.py`**:
+   - `_cost_usd` → `cost_usd` (def + both call sites: `_stage4_verdict`, `_ensure_rubric`).
+   - `_targeting_text` → `targeting_text` (def + **both** actual call sites — the brief said
+     "its one call site in `_ensure_rubric`", but the file as it actually stands has a *second*
+     call site in `_profile_embed_text` that the brief's prose missed; both had to be updated
+     for the rename to not break the module).
+   - New learning-pass call added at the very end of `_run_user_ladder`, right before
+     `counters["users_processed"] += 1`, exactly as specified (lazy import, `# noqa: PLC0415`).
+
+3. **`jobify/hosted/learning.py`** (new file) — the full module verbatim from the brief:
+   watermark parsing, event-action mapping, matched-group recovery via `rubric.score_posting`,
+   event collection since the watermark, weight-delta computation, insight-line rendering, and
+   the reweight-vs-recompile branch, all wrapped in `run_learning_pass`'s try/except.
+
+## Deviation from the brief (and why)
+
+Renaming `_targeting_text` → `targeting_text` collides with a **local variable of the same
+name** inside `_ensure_rubric`:
+
+```python
+targeting_text = _targeting_text(load_profile(profile_dir))   # brief's literal rename target
 ```
 
-- `isVerbatimSubstring`: trims both sides, case-sensitive `haystack.trim().includes(needle.trim())`.
-  Empty/whitespace-only needle → `false` unconditionally (even against an empty haystack).
-- `filterVerbatim`: keeps items whose `getText(item)` verifies, preserving order, dropping the
-  rest silently (never throws).
+If the function is renamed to `targeting_text` and this local variable keeps its name, the line
+becomes `targeting_text = targeting_text(load_profile(profile_dir))`. Because Python treats any
+name assigned anywhere in a function body as local for the *entire* function, the right-hand
+side reference to `targeting_text` would resolve to the (not-yet-assigned) local variable, not
+the module-level function — `UnboundLocalError` at that exact line, every time `_ensure_rubric`
+compiles a new rubric.
 
-### 2. `web/lib/anthropic/moduleTurns.ts` (new)
+Fix: renamed the local variable to `targeting_tier_text` (used only within `_ensure_rubric`;
+the `compile_kwargs` dict still passes it through as the `targeting_text=` keyword, unchanged).
+Left an inline comment explaining why. No other call site had a colliding local name (the
+`_profile_embed_text` local is already called `targeting`, and `_cost_usd`'s two call sites
+both assign to a local called `cost`, not `cost_usd`).
 
-Three LLM-turn functions, same shape/style as `interview.ts` (`anthropicClient()` +
-`ONBOARDING_MODEL`, walk `response.content` for `tool_use`, return `{...fields, usage}`):
+This is not a design decision — it's the minimum change required for the rename the brief
+specifies to actually execute without crashing. Did not stop to ask given how mechanical and
+unambiguous the fix is; flagging it here for the record per the self-review checklist.
 
-```ts
-export async function runVoiceIngestTurn(sample: string): Promise<VoiceTurnResult>
-// VoiceTurnResult = { register, rhythm, words_used, words_avoided, signature_phrases, usage }
+## Tests written / extended
 
-export async function runMetricsExtractionTurn(searchableText: string): Promise<MetricsExtractionResult>
-// MetricsExtractionResult = { claims: MetricClaim[], usage }
-// MetricClaim = { id, text, source: "cv"|"range"|"energy"|"anchor", has_number }
+- **`tests/test_db_hosted.py`**: added `.in_()` to the shared `_FakeQuery` (mirrors `.eq()`'s
+  filter-and-return-self shape). Added 8 new tests: `get_posting_reactions` (per-user
+  filtering), `get_matches_by_states` (state-list filtering), `get_postings_by_ids` (matching
+  rows + empty-input-issues-no-query), `update_profile_doc_file` (merge-preserves-other-keys,
+  no-op when profiles row missing, no-op when `doc` isn't a dict).
+- **`tests/test_hosted_fanout.py`**: existing 26 tests confirmed green unmodified. Added one new
+  test, `test_run_user_ladder_calls_learning_pass_after_scoring`, asserting
+  `learning.run_learning_pass` is called exactly once with `(user_id, profile_dir)` positionally
+  and `api_key`/`counters` as kwargs, and that call happens strictly after this cycle's
+  `db.upsert_match` calls (order asserted via one shared event list both fakes append to, not
+  just a count).
+- **`tests/test_hosted_learning.py`** (new): all ~10 scenarios from the brief:
+  1. No compiled rubric → early return, reactions/matches never queried.
+  2. Watermark incrementality (rows before/at/after the watermark; only after-rows become
+     events).
+  3. Fresh (empty) file → every existing row becomes an event.
+  4. Matched-groups recovery — a real 2-group rubric + a real `score_posting` call; the event's
+     `matched_groups` contains only the group whose term hit.
+  5. Reweight persisted — real `apply_feedback` run against a real small rubric; new weight
+     matches the multiplier.
+  6. Recompile fires at the `NEEDS_RECOMPILE_MIN_EVENTS` threshold with exactly one
+     `rubric_recompile` ledger row, and the incremental `apply_feedback` path is provably NOT
+     also taken.
+  7. Append-only insights across two passes — first pass's exact bullet line verified present
+     verbatim (byte-level substring check) after a second pass appends a second line.
+  8. Sub-threshold reweight persists with no insight line — see note below on how this had to
+     be constructed.
+  9. Failure isolation — `db.get_posting_reactions` raises; `run_learning_pass` returns
+     normally; `set_compiled_rubric`/`update_profile_doc_file` never called.
+  10. Direct `_event_action` mapping test (reaction `interested`/`not_interested`, match
+      `saved`/`applied`/`dismissed`/`new`/`seen`, plus an unrecognized value → `None`).
 
-export async function runMirrorGenerationTurn(inputs: MirrorGenerationInput): Promise<MirrorGenerationResult>
-// MirrorGenerationInput = { extractedSummary: string }
-// MirrorGenerationResult = { paragraphs: [string, string], quoted_phrases: string[], usage }
+### TDD evidence (RED → GREEN) for scenario 8
+
+Wrote the sub-threshold test first assuming a single save event (1.0 → 1.05, a nominal 5%
+nudge) would stay *at* the threshold and produce no insight line. RED:
+
+```
+assert after_lines == before_lines == []
+E   assert ['- 2020-01-0...after 1 save'] == []
 ```
 
-Also exported: `VOICE_INGEST_SYSTEM_PROMPT`, `VOICE_INGEST_TOOLS`,
-`METRICS_EXTRACTION_SYSTEM_PROMPT`, `METRICS_EXTRACTION_TOOLS`,
-`MIRROR_GENERATION_SYSTEM_PROMPT`, `MIRROR_GENERATION_TOOLS` (mirroring `interview.ts`'s pattern
-of exporting the constant alongside the runner, for test assertions and potential route reuse).
+Root cause (floating point, not a bug in `learning.py`): `1.0 * 1.05 == 1.05`, but
+`(1.05 - 1.0) / 1.0 == 0.050000000000000044` — strictly greater than
+`INSIGHT_DELTA_THRESHOLD = 0.05`, so a single save event's delta is *never* genuinely
+sub-threshold; it just barely clears it every time. Fixed the test (not the code) by starting
+the group's weight near `FEEDBACK_WEIGHT_MAX` (`10.0 - 0.2 = 9.8`) so the clamp caps the nudge
+at `10.0`, giving a real delta of `~2.04%` — genuinely below 5%. GREEN after that change; full
+run below.
 
-None of the three functions verbatim-filter their own output — that's explicitly left to the
-route layer (Task 5), per the brief, because only the route has the raw source text
-(`sample`, `searchableText`, the user's free-text answers) in scope.
-
-Defensive extraction: a missing tool call or malformed field returns typed empty defaults
-(`""`, `[]`, or `["", ""]` for the mirror's tuple) rather than throwing. `runMetricsExtractionTurn`
-additionally filters out individual malformed claim entries (bad `source` enum, missing fields)
-while keeping well-formed ones in the same array.
-
-### 3. `interview.ts` targeting trim
-
-- Targeting-stage archetype checklist: five archetypes → four (`a` DIRECTION, `b` TRADE-OFF,
-  `c` MORE-OF/DONE-WITH, `d` OPTIONAL SEED); `(d) DEALBREAKERS` removed entirely, with an
-  explicit new sentence "Dealbreakers are no longer asked here — the dealbreakers module owns
-  that ground now."
-- "Generation freedom never excuses a missing field" sentence: required-fields list trimmed from
-  `tiers, hard_disqualifiers, soft_concerns, and thesis_summary` to `tiers and thesis_summary`.
-- `record_targeting` tool schema: `required` trimmed from
-  `["tiers", "hard_disqualifiers", "soft_concerns", "thesis_summary"]` to
-  `["tiers", "thesis_summary"]`. The two fields remain as optional schema properties (harmless
-  if the model still emits empty arrays) — `applyToolCalls.ts` was not touched, per the brief's
-  explicit out-of-scope note (it already treats them as optional-with-empty-array-fallback).
-- Judgment call (brief explicitly grants this): "ask 3-5 pointed questions" / "dropping the
-  count as low as 3" no longer made sense against 4 archetypes (max achievable is 4, one
-  question per archetype), so I changed both to "2-4" / "as low as 2" for internal coherence.
-
-## Test results
+## Test commands run and output
 
 ```
-web/lib/onboarding/verbatim.test.ts     13 tests — pass
-web/lib/anthropic/moduleTurns.test.ts   10 tests — pass
-web/lib/anthropic/interview.test.ts     38 tests — pass (7 new/adjusted)
+$JOBIFY_MAIN_VENV/bin/python -m pytest tests/test_db_hosted.py tests/test_hosted_fanout.py tests/test_hosted_learning.py -q
+........................................................................ [ 84%]
+.............                                                            [100%]
+85 passed in 0.28s
 ```
 
-Full suite: `npx vitest run` → **88 test files, 756 tests, all pass.**
-`npx tsc --noEmit -p tsconfig.json` → clean, no errors.
-`npx eslint <all touched files>` → clean, no output.
-`bash scripts/scrub_gate.sh` → PASS (scans the whole working tree, not just tracked files, so
-the new untracked files were covered before the first commit).
+```
+$JOBIFY_MAIN_VENV/bin/python -m pytest -q          # full repo suite, from repo root
+........................................................................ [ 10%]
+........................................................................ [ 21%]
+........................................................................ [ 32%]
+........................................................................ [ 43%]
+........................................................................ [ 54%]
+........................................................................ [ 65%]
+........................................................................ [ 76%]
+........................................................................ [ 87%]
+........................................................................ [ 98%]
+..........                                                               [100%]
+658 passed, 1 skipped, 26 deselected in 24.97s
+```
 
-`moduleTurns.test.ts` mocks at the `./client` boundary (`vi.mock("./client", () => ({
-anthropicClient: () => ({ messages: { create: createMock } }), ONBOARDING_MODEL: "..." }))`),
-the same boundary style used elsewhere in the repo for testing consumers of `interview.ts`
-(`app/api/settings/resume/route.test.ts` mocks `@/lib/anthropic/client`'s `ONBOARDING_MODEL`
-alongside mocking `interview.ts` itself). Note: `interview.test.ts` itself never actually
-exercises `runInterviewTurn`/`runCalibrationGeneration`/`runResumeExtractionTurn` end-to-end —
-it only asserts on the exported prompt/tool constants; there was no existing precedent for a
-direct unit test of a turn function's `response.content` extraction logic. I built the mocking
-pattern by analogy from how consumer routes mock `interview.ts` and `@/lib/anthropic/client`
-together — it generalized cleanly to three functions, no escalation needed.
+Re-ran with `-rw` (warnings summary) on both the targeted files and the full suite: no warnings
+in either run — pristine output.
 
-Each `moduleTurns.test.ts` describe block asserts: the model call arguments (model, system
-prompt identity, tools identity, message shape), the full extracted return shape including
-`usage` passthrough, and a missing/malformed-tool-call case returning defaults instead of
-throwing — plus one metrics-specific test that malformed individual claim entries are dropped
-while well-formed ones survive, and one voice-specific test that `signature_phrases` is
-returned un-filtered (confirming the route owns verbatim-filtering, not this function).
+Also ran `bash scripts/scrub_gate.sh`: `scrub gate: PASS`.
+
+(Note on environment: this worktree's own `.venv` has no `pytest`/project deps installed and
+`uv sync` fails to resolve `claude-agent-sdk` offline — pre-existing environment issue,
+unrelated to this task. Ran tests via the sibling `jobify/.venv` (same repo, Python 3.11,
+pytest 9.1.0, `jobify` installed editable) with this worktree as the cwd — confirmed via `pwd`
+before each run and via `git diff --stat` only ever showing this worktree's own files.)
 
 ## Files changed
 
-- `web/lib/onboarding/verbatim.ts` (new)
-- `web/lib/onboarding/verbatim.test.ts` (new)
-- `web/lib/anthropic/moduleTurns.ts` (new)
-- `web/lib/anthropic/moduleTurns.test.ts` (new)
-- `web/lib/anthropic/interview.ts` (edited: targeting-stage prompt + `record_targeting.required`)
-- `web/lib/anthropic/interview.test.ts` (edited: 2 assertions updated for 2-4/four-archetype
-  language, `record_targeting.required` updated, 2 new describe blocks added — one for the
-  dealbreakers removal, one for the optional-but-not-required schema fields)
+- `jobify/db.py` — four new functions (`get_posting_reactions`, `get_matches_by_states`,
+  `get_postings_by_ids`, `update_profile_doc_file`).
+- `jobify/hosted/fanout.py` — `_cost_usd`→`cost_usd`, `_targeting_text`→`targeting_text` (all
+  call sites), local-variable rename in `_ensure_rubric` to avoid the shadow, new learning-pass
+  call site in `_run_user_ladder`.
+- `jobify/hosted/learning.py` (new) — the learning-pass module.
+- `tests/test_db_hosted.py` — `.in_()` on `_FakeQuery`, 8 new tests.
+- `tests/test_hosted_fanout.py` — 1 new test, `learning` import added.
+- `tests/test_hosted_learning.py` (new) — 10 tests.
 
-Commits:
-- `469a06e` — verbatim helper + moduleTurns.ts
-- `e3a5106` — interview.ts targeting trim + test updates
+## Self-review findings
 
-(Note: this file previously held a stale report from an earlier/different task-numbering plan
-iteration — an INT-1 resume-first interview redesign — dated before the current
-`task-1-brief.md`. That content has been fully replaced with this task's actual report.)
+- All ~10 scenarios from the brief are covered by a test (see list above); none skipped.
+- No budget-cap gating added to the recompile branch — confirmed the implementation only writes
+  the one `rubric_recompile` ledger row, no new `allow_new_compile`-style check, per the global
+  constraints' explicit scope decision.
+- `run_learning_pass` never raises: the entire body is delegated to `_run_learning_pass_inner`
+  inside a bare `except Exception` in `run_learning_pass` itself — confirmed by test 9 (failure
+  isolation) and by the existing `test_hosted_fanout.py` suite passing unmodified (those tests
+  don't fake the four new `db.py` reads, so `learning.run_learning_pass` hits the real
+  unpatched `_get_client()` and its own internal try/except swallows the resulting error
+  silently, exactly as the brief predicted).
+- Names are clear; the one local-variable rename (`targeting_tier_text`) is commented in place
+  explaining why it isn't just `targeting_text`.
+- Full test suite green, pristine (no warnings) both for the three targeted files and the whole
+  repo.
 
-## Self-review
+## Concerns
 
-- **Completeness vs. brief:** all three function signatures, all three tool schemas (field
-  names, types, `enum`, `maxItems`/`minItems`), and both return-shape contracts match the brief
-  verbatim. `record_targeting`'s already-optional `hard_disqualifiers`/`soft_concerns` were
-  confirmed unchanged as schema properties (brief flagged this as likely a no-op finding — it
-  was already the required-list that needed trimming, which I did).
-- **Quality / YAGNI:** kept `moduleTurns.ts` to exactly the three functions + their
-  prompts/schemas/types, no extra helpers. `verbatim.ts` has only the two specified functions.
-  No speculative abstractions (e.g. did not build a generic "tool-call extractor" helper shared
-  across the three functions — each mirrors `interview.ts`'s existing per-function inline
-  extraction style rather than introducing a new pattern this task wasn't asked to build).
-- **Test realism:** tests assert on actual extracted field values from mocked `tool_use` blocks
-  (not just "mock was called") — e.g. `runMetricsExtractionTurn`'s malformed-claim-filtering
-  test constructs three claims (one well-formed, one bad enum, one missing a field) and asserts
-  only the well-formed one survives, in place.
-- **Scrub gate:** verified explicitly (`scripts/scrub_gate.sh` → PASS) before committing; all
-  prompts use "the candidate" / "job-search targeting profile," never a name or "resume
-  application" framing.
-- **Ledger discipline:** not directly applicable to this task — `moduleTurns.ts` functions are
-  pure LLM-turn wrappers with no DB access; `recordOnboardingTurn` ledger calls belong to the
-  route layer (Task 5), consistent with how `runResumeExtractionTurn` (same shape, existing
-  code) is ledgered by its caller rather than internally.
-
-## Concerns / deviations
-
-- **Judgment call flagged above:** changed "3-5 pointed questions" / "as low as 3" to "2-4" /
-  "as low as 2" for coherence against the new 4-archetype checklist. The brief only explicitly
-  called out adjusting the "dropping the count" phrase, not the "3-5" opening sentence, but
-  leaving "3-5" in place would have been internally inconsistent (max achievable is now 4
-  questions from 4 archetypes, one per archetype). Flagging this since it's a step beyond the
-  brief's literal instruction, though within the judgment it explicitly grants.
-- **`MirrorGenerationResult.paragraphs` typed as a strict `[string, string]` tuple** (not
-  `string[]`), with `["", ""]` as the empty-default fallback, so Task 5's route gets a type-safe
-  guarantee of exactly two paragraphs to index into. This is slightly more specific than the
-  brief's inline shorthand `paragraphs: [string, string] (exactly 2 items)` might have left
-  ambiguous (tuple type vs. just an array) — I read "exactly 2 items" as intent for a real tuple
-  type, not just a runtime-shape comment.
-- No other deviations from the brief's exact schemas/signatures noted.
-
-## Review-fix addendum (commits after 469a06e/e3a5106)
-
-Fixed two findings from a task-scoped review of the above work.
-
-### 1. Mirror system prompt — incomplete question-mark ban (main finding)
-
-`MIRROR_GENERATION_SYSTEM_PROMPT`'s TONE hard-rule previously read: "no exclamation marks
-anywhere. End the second paragraph declaratively — a statement, never a question." That only
-constrains how paragraph 2 *ends* — it does not ban a question mark occurring mid-paragraph or
-anywhere in paragraph 1. The brief (`docs/superpowers/plans/2026-07-16-v3a-b2-llm-modules.md`,
-Task 1, `runMirrorGenerationTurn` prompt spec) calls for "no exclamation marks; ends
-declaratively, no question mark anywhere," with an explicit note that this text never passes
-through `/turn`'s ends-with-a-question post-check — so for mirror the ban must be complete and
-prompt-only (nothing in code validates it).
-
-Changed the HARD RULE — TONE paragraph in `web/lib/anthropic/moduleTurns.ts` to:
-
-> HARD RULE — TONE: no exclamation marks anywhere, and no question marks anywhere — not as
-> rhetorical devices, not mid-paragraph, not at the end. Every sentence in both paragraphs is a
-> statement; end the second paragraph declaratively too. This text is never shown to the model
-> again for a follow-up turn, so there is nothing to ask; asking a question here, anywhere in
-> either paragraph, is always wrong.
-
-No test previously asserted on this exact substring (tests reference the exported
-`MIRROR_GENERATION_SYSTEM_PROMPT` constant by identity, not by content match), so no test
-updates were required for this change.
-
-### 2. `runMetricsExtractionTurn` — server-side cap at 12 claims (minor, fixed)
-
-The tool schema advertised `maxItems: 12` on `claims`, but nothing in
-`runMetricsExtractionTurn` enforced that cap server-side if a model ignored the schema hint and
-returned more than 12 well-formed claims. Added `.slice(0, 12)` after the existing
-`isMetricClaim` filter:
-
-```ts
-if (Array.isArray(input.claims)) {
-  claims = input.claims.filter(isMetricClaim).slice(0, 12);
-}
-```
-
-Added a new test in `moduleTurns.test.ts` (`runMetricsExtractionTurn` describe block): 15
-well-formed claims in → asserts `result.claims` has length 12 and equals the first 12 of the
-input array.
-
-### Test results
-
-```
-npx vitest run lib/anthropic/moduleTurns.test.ts
-✓ lib/anthropic/moduleTurns.test.ts (11 tests) — 11 passed (was 10; +1 new cap test)
-
-npx vitest run lib/anthropic/moduleTurns.test.ts lib/anthropic/interview.test.ts
-✓ lib/anthropic/moduleTurns.test.ts (11 tests)
-✓ lib/anthropic/interview.test.ts (38 tests)
-Test Files  2 passed (2)
-     Tests  49 passed (49)
-```
-
-### Files changed
-
-- `web/lib/anthropic/moduleTurns.ts` — mirror TONE hard-rule reworded; `.slice(0, 12)` added to
-  `runMetricsExtractionTurn`.
-- `web/lib/anthropic/moduleTurns.test.ts` — new test: caps claims at 12 given 15 well-formed
-  inputs.
-
-Commit: review-fix commit on `feat/v3a-b2-llm` (separate from 469a06e/e3a5106, not an amend).
-
-## Follow-up: prompt-content regression coverage (post-43b053b)
-
-`43b053b` reworded `MIRROR_GENERATION_SYSTEM_PROMPT`'s TONE hard-rule to unambiguously ban
-question marks anywhere in the mirror's two generated paragraphs (not just "ends
-declaratively"). Review flagged that `moduleTurns.test.ts` never asserted on the actual
-CONTENT of this prompt string — only that it's passed by identity to the mocked Anthropic
-client. Since this constraint is prompt-only (no code validates the model's output for stray
-question marks; the mirror route is exempt from `/turn`'s ends-with-a-question post-check by
-design), a future edit could silently reintroduce ambiguous wording with nothing to catch it.
-
-Added a new `describe("MIRROR_GENERATION_SYSTEM_PROMPT content")` block in
-`web/lib/anthropic/moduleTurns.test.ts` with two regression tests:
-
-```ts
-expect(MIRROR_GENERATION_SYSTEM_PROMPT).toMatch(/no question marks anywhere/i);
-expect(MIRROR_GENERATION_SYSTEM_PROMPT).toMatch(/no exclamation marks anywhere/i);
-```
-
-```
-npx vitest run lib/anthropic/moduleTurns.test.ts
-✓ lib/anthropic/moduleTurns.test.ts (13 tests) — 13 passed (was 11; +2 new prompt-content tests)
-```
-
-Commit: `6bda6cb` — "test(moduleTurns): assert MIRROR_GENERATION_SYSTEM_PROMPT bans
-question/exclamation marks anywhere" (new commit, not an amend).
+- The brief's description of `_targeting_text`'s call sites ("its one call site in
+  `_ensure_rubric`") didn't match the file as it currently stands (a second call site exists in
+  `_profile_embed_text`, added by a later stage-3 embedding task after the brief's prose was
+  presumably written). Not a blocker — updating both was the only way to keep the module
+  importable — but flagging since the brief's text and the actual file diverged here.
+- The `_ensure_rubric` local-variable shadow (see "Deviation from the brief" above) is a latent
+  correctness issue the brief's exact-code instructions would have introduced if followed
+  completely literally; fixed via a local rename rather than raised as a blocker, since the fix
+  is unambiguous and doesn't change any observable behavior (confirmed by the full test suite,
+  including the untouched `test_hosted_fanout.py` rubric-compile tests, staying green).
