@@ -5,9 +5,42 @@ import type {
   EnergyExtracted,
   EnvironmentChoiceExtracted,
   ReactionExtracted,
-  TrajectoryExtracted,
   ValueChoiceExtracted,
 } from "../onboarding/incrementalDoc";
+import { toIncrementalDocExtracted } from "../onboarding/moduleWriters/incrementalDocShape";
+
+/**
+ * `extracted.values` / `extracted.environment` / `extracted.trajectory` are
+ * persisted in each module's own native payload shape (session 31's
+ * `moduleWriters/*.ts`), NOT the `{choices:[...]}`/`{direction,note}` shape
+ * `incrementalDoc.ts::applyModuleToDoc` expects — the two independently
+ * diverged (see `moduleWriters/incrementalDocShape.ts`'s header comment).
+ * Reusing that same converter here (rather than re-deriving the pair-id ->
+ * label / scenario-key -> label lookups a second time) guarantees the
+ * dossier reads these exactly the way the doc-writer already renders them.
+ */
+function normalizedValues(extracted: Record<string, unknown>, modules: ModulesState): { choices: ValueChoiceExtracted[] } {
+  if (!modules.values) return { choices: [] };
+  return toIncrementalDocExtracted("values", extracted.values ?? []) as { choices: ValueChoiceExtracted[] };
+}
+
+function normalizedEnvironment(
+  extracted: Record<string, unknown>,
+  modules: ModulesState
+): { choices: EnvironmentChoiceExtracted[] } {
+  if (!modules.environment) return { choices: [] };
+  return toIncrementalDocExtracted("environment", extracted.environment ?? {}) as {
+    choices: EnvironmentChoiceExtracted[];
+  };
+}
+
+function normalizedTrajectory(
+  extracted: Record<string, unknown>,
+  modules: ModulesState
+): { direction?: string; note?: string } {
+  if (!modules.trajectory) return {};
+  return toIncrementalDocExtracted("trajectory", extracted.trajectory ?? {}) as { direction?: string; note?: string };
+}
 
 /**
  * Pure mapper: (profiles.doc, profiles.validation_status, onboarding_sessions.{modules,
@@ -281,16 +314,16 @@ function deriveFacts(
 // ── wants ───────────────────────────────────────────────────────────────
 
 function deriveWants(extracted: Record<string, unknown>, modules: ModulesState): WantsBand {
-  const values = (asArray(extracted.values) as ValueChoiceExtracted[]).map((c) => ({
+  const values = normalizedValues(extracted, modules).choices.map((c) => ({
     prompt: c.prompt,
     chosen: c.chosen,
     other: c.other ?? null,
   }));
-  const environment = (asArray(extracted.environment) as EnvironmentChoiceExtracted[]).map((c) => ({
+  const environment = normalizedEnvironment(extracted, modules).choices.map((c) => ({
     scenario: c.scenario,
     chosen: c.chosen,
   }));
-  const trajectory = asRecord(extracted.trajectory) as Partial<TrajectoryExtracted>;
+  const trajectory = normalizedTrajectory(extracted, modules);
   const dealbreakers = asRecord(extracted.dealbreakers) as Partial<DealbreakersExtracted>;
   const targeting = asRecord(extracted.targeting);
   const tiers = (asArray(targeting.tiers) as Array<Record<string, unknown>>).map((tier) => ({

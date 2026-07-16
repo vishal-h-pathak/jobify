@@ -27,11 +27,16 @@ const FULL_EXTRACTED: Record<string, unknown> = {
     { posting_id: "p1", title: "RF Engineer II", company: "Beta Co", reaction: "interested", note: "great mission" },
     { posting_id: "p2", title: "Firmware Eng", company: "Gamma", reaction: "not_interested" },
   ],
-  values: [{ prompt: "Mission vs prestige", chosen: "Mission", other: "Prestige" }],
+  // Native module-writer payload shapes (lib/onboarding/moduleWriters/*.ts),
+  // NOT incrementalDoc.ts's inner `applyModuleToDoc` shape — the two
+  // diverged (see moduleWriters/incrementalDocShape.ts). This is exactly
+  // what `app/api/onboarding/modules/[key]/route.ts` persists to
+  // `onboarding_sessions.extracted`.
+  values: [{ pair_id: "mission_prestige", choice: "a" }],
   dealbreakers: { hard_disqualifiers: ["No unpaid overtime"], soft_concerns: ["Long commute"] },
   energy: { hours_disappear: "debugging RF hardware", kept_putting_off: "expense reports" },
-  environment: [{ scenario: "Structured vs ambiguous", chosen: "Structured" }],
-  trajectory: { direction: "climb", note: "want staff -> principal" },
+  environment: { team_size: "a", pace: "b", ambiguity: "a", management_appetite: "b" },
+  trajectory: { direction: "climb", free_text: "want staff -> principal" },
   voice: {
     register: "dry, compressed",
     rhythm: "short sentences",
@@ -158,10 +163,18 @@ describe("deriveDossier — full profile", () => {
     expect(dossier.facts.logistics.targetCompUsd).toBe("180000+");
   });
 
-  it("derives WANTS values/environment/trajectory/dealbreakers/tiers", () => {
-    expect(dossier.wants.values).toEqual([{ prompt: "Mission vs prestige", chosen: "Mission", other: "Prestige" }]);
-    expect(dossier.wants.environment).toEqual([{ scenario: "Structured vs ambiguous", chosen: "Structured" }]);
+  it("derives WANTS values/environment/trajectory/dealbreakers/tiers, translating pair_id/scenario picks to labels", () => {
+    expect(dossier.wants.values).toEqual([
+      { prompt: "Mission-driven work vs. Prestige / brand name", chosen: "Mission-driven work", other: "Prestige / brand name" },
+    ]);
+    expect(dossier.wants.environment).toEqual([
+      { scenario: "team_size", chosen: "Small team (fewer than 10)" },
+      { scenario: "pace", chosen: "Deliberate, high-review" },
+      { scenario: "ambiguity", chosen: "Comfortable figuring out ambiguity" },
+      { scenario: "management_appetite", chosen: "Wants to stay individual-contributor" },
+    ]);
     expect(dossier.wants.trajectory.direction).toBe("climb");
+    expect(dossier.wants.trajectory.note).toBe("want staff -> principal");
     expect(dossier.wants.dealbreakers.hard).toEqual(["No unpaid overtime"]);
     expect(dossier.wants.dealbreakers.soft).toEqual(["Long commute"]);
     expect(dossier.wants.tiers).toEqual([
