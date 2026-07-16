@@ -219,3 +219,29 @@ Test Files  2 passed (2)
   inputs.
 
 Commit: review-fix commit on `feat/v3a-b2-llm` (separate from 469a06e/e3a5106, not an amend).
+
+## Follow-up: prompt-content regression coverage (post-43b053b)
+
+`43b053b` reworded `MIRROR_GENERATION_SYSTEM_PROMPT`'s TONE hard-rule to unambiguously ban
+question marks anywhere in the mirror's two generated paragraphs (not just "ends
+declaratively"). Review flagged that `moduleTurns.test.ts` never asserted on the actual
+CONTENT of this prompt string — only that it's passed by identity to the mocked Anthropic
+client. Since this constraint is prompt-only (no code validates the model's output for stray
+question marks; the mirror route is exempt from `/turn`'s ends-with-a-question post-check by
+design), a future edit could silently reintroduce ambiguous wording with nothing to catch it.
+
+Added a new `describe("MIRROR_GENERATION_SYSTEM_PROMPT content")` block in
+`web/lib/anthropic/moduleTurns.test.ts` with two regression tests:
+
+```ts
+expect(MIRROR_GENERATION_SYSTEM_PROMPT).toMatch(/no question marks anywhere/i);
+expect(MIRROR_GENERATION_SYSTEM_PROMPT).toMatch(/no exclamation marks anywhere/i);
+```
+
+```
+npx vitest run lib/anthropic/moduleTurns.test.ts
+✓ lib/anthropic/moduleTurns.test.ts (13 tests) — 13 passed (was 11; +2 new prompt-content tests)
+```
+
+Commit: `6bda6cb` — "test(moduleTurns): assert MIRROR_GENERATION_SYSTEM_PROMPT bans
+question/exclamation marks anywhere" (new commit, not an amend).
