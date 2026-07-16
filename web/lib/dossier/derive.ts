@@ -132,7 +132,7 @@ export interface ValidationSurface {
 
 export interface ChangeLogEvent {
   label: string;
-  moduleKey: ModuleKey;
+  moduleKey: ModuleKey | `learning-${number}`;
   completedAt: string;
 }
 
@@ -428,17 +428,42 @@ function deriveValidation(validationStatus: { status: string; errors: string[] }
 
 // ── change log ──────────────────────────────────────────────────────────
 
-function deriveEvents(modules: ModulesState): ChangeLogEvent[] {
-  return MODULE_ORDER.filter((key) => modules[key])
-    .map((key) => {
-      const completion = modules[key]!;
-      return {
-        label: `${formatMonthDay(completion.completed_at)} — ${moduleLabel(key)} · ${completion.receipt}`,
-        moduleKey: key,
-        completedAt: completion.completed_at,
-      };
-    })
-    .sort((a, b) => a.completedAt.localeCompare(b.completedAt));
+/**
+ * Parses dated insight lines a Python backend process appends to
+ * `learned-insights.md`, e.g.
+ * `- 2026-07-16: downweighted "agency work" after 3 dismissals; upweighted
+ * "platform ownership" after 2 saves`. Pure text-through: the text after
+ * `: ` is never re-derived or reformatted (that's the writer's job; this
+ * parser only turns dated lines into change-log rows). The regex naturally
+ * skips the `<!-- last-processed: ... -->` watermark line, since it doesn't
+ * match the `- YYYY-MM-DD: ` prefix — no special-casing needed.
+ */
+const INSIGHT_LINE_RE = /^- (\d{4}-\d{2}-\d{2}): (.+)$/;
+
+function deriveInsightEvents(learnedInsightsMd: string): ChangeLogEvent[] {
+  return learnedInsightsMd
+    .split("\n")
+    .map((line) => INSIGHT_LINE_RE.exec(line.trim()))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m, i) => ({
+      label: `${formatMonthDay(`${m[1]}T00:00:00.000Z`)} — ${m[2]}`,
+      moduleKey: `learning-${i}` as const,
+      completedAt: `${m[1]}T00:00:00.000Z`,
+    }));
+}
+
+function deriveEvents(modules: ModulesState, learnedInsightsMd: string): ChangeLogEvent[] {
+  const moduleEvents = MODULE_ORDER.filter((key) => modules[key]).map((key) => {
+    const completion = modules[key]!;
+    return {
+      label: `${formatMonthDay(completion.completed_at)} — ${moduleLabel(key)} · ${completion.receipt}`,
+      moduleKey: key,
+      completedAt: completion.completed_at,
+    };
+  });
+  return [...moduleEvents, ...deriveInsightEvents(learnedInsightsMd)].sort((a, b) =>
+    a.completedAt.localeCompare(b.completedAt)
+  );
 }
 
 // ── top-level ───────────────────────────────────────────────────────────
@@ -456,6 +481,6 @@ export function deriveDossier(input: DerivedDossierInput): DossierViewModel {
     texture: deriveTexture(extracted, modules),
     completeness,
     validation: deriveValidation(validationStatus),
-    events: deriveEvents(modules),
+    events: deriveEvents(modules, doc["learned-insights.md"] ?? ""),
   };
 }
