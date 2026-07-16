@@ -83,6 +83,39 @@ describe("dispatchHunt", () => {
     expect(result.kind).toBe("ok");
   });
 
+  it("systemInitiated skips an active cooldown, same as bypassCooldown", async () => {
+    const lastRequested = "2026-07-05T11:00:00.000Z"; // + 6h = 17:00, now is 12:00 -> still active
+    const { admin } = fakeAdmin({
+      user_id: "user-1",
+      validation_status: null,
+      last_hunt_requested_at: lastRequested,
+    });
+    const result = await dispatchHunt(baseDeps({ admin: admin as never, systemInitiated: true }));
+    expect(result.kind).toBe("ok");
+  });
+
+  it("systemInitiated still stamps last_hunt_requested_at on success", async () => {
+    const lastRequested = "2026-07-05T11:00:00.000Z";
+    const { admin, update } = fakeAdmin({
+      user_id: "user-1",
+      validation_status: null,
+      last_hunt_requested_at: lastRequested,
+    });
+    await dispatchHunt(baseDeps({ admin: admin as never, systemInitiated: true }));
+    expect(update).toHaveBeenCalledWith({ last_hunt_requested_at: FIXED_NOW.toISOString() });
+  });
+
+  it("the default path (no systemInitiated, no bypassCooldown) is unchanged: cooldown still applies", async () => {
+    const lastRequested = "2026-07-05T11:00:00.000Z"; // + 6h = 17:00, now is 12:00 -> still active
+    const { admin } = fakeAdmin({
+      user_id: "user-1",
+      validation_status: null,
+      last_hunt_requested_at: lastRequested,
+    });
+    const result = await dispatchHunt(baseDeps({ admin: admin as never }));
+    expect(result).toEqual({ kind: "cooldown", cooldownUntil: "2026-07-05T17:00:00.000Z" });
+  });
+
   it("returns not_configured when GitHub env vars are missing, without calling fetch", async () => {
     const fetchImpl = vi.fn();
     const result = await dispatchHunt(baseDeps({ githubRepo: undefined, fetchImpl: fetchImpl as never }));

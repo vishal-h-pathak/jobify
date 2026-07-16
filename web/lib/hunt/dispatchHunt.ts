@@ -14,6 +14,15 @@ export interface DispatchHuntDeps {
   targetUserId: string;
   /** Admins bypass the per-user cooldown (see 21_user_triggered_hunts.md task 4). */
   bypassCooldown: boolean;
+  /**
+   * V3A-1: set by `checkpoint.ts` for the onboarding background-hunt
+   * checkpoint. Skips the cooldown CHECK exactly like `bypassCooldown` —
+   * a brand-new user can't yet be in a cooldown they've never triggered,
+   * but the flag exists as its own semantic (system-fired, not admin-
+   * triggered) rather than overloading `bypassCooldown`'s meaning. Still
+   * stamps `last_hunt_requested_at` on success, same as every other path.
+   */
+  systemInitiated?: boolean;
   cooldownHours: number;
   githubRepo: string | undefined;
   githubToken: string | undefined;
@@ -34,7 +43,8 @@ export interface DispatchHuntDeps {
  * service-role update of `last_hunt_requested_at`.
  */
 export async function dispatchHunt(deps: DispatchHuntDeps): Promise<DispatchHuntResult> {
-  const { admin, targetUserId, bypassCooldown, cooldownHours, githubRepo, githubToken, fetchImpl, now } = deps;
+  const { admin, targetUserId, bypassCooldown, systemInitiated, cooldownHours, githubRepo, githubToken, fetchImpl, now } =
+    deps;
 
   const { data: profile, error: profileError } = await admin
     .from("profiles")
@@ -45,7 +55,7 @@ export async function dispatchHunt(deps: DispatchHuntDeps): Promise<DispatchHunt
   if (!profile) return { kind: "no_profile" };
   if (profile.validation_status?.status === "invalid") return { kind: "invalid_profile" };
 
-  if (!bypassCooldown && profile.last_hunt_requested_at) {
+  if (!bypassCooldown && !systemInitiated && profile.last_hunt_requested_at) {
     const cooldownUntil = addHours(new Date(profile.last_hunt_requested_at), cooldownHours);
     if (cooldownUntil.getTime() > now().getTime()) {
       return { kind: "cooldown", cooldownUntil: cooldownUntil.toISOString() };

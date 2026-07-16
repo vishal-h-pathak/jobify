@@ -67,6 +67,13 @@ export interface Database {
           stage: "anchor" | "calibration" | "resume" | "identity" | "targeting" | "done";
           messages: Array<{ role: "user" | "assistant"; content: string }>;
           extracted: Record<string, unknown>;
+          // V3A-1 (0011): per-module completion progress, keyed by
+          // `moduleRegistry.ts::ModuleKey` plus the checkpoint's own
+          // `checkpoint_hunt` marker — see `web/lib/onboarding/moduleRegistry.ts`
+          // for the precise shape (`ModulesState`). Kept loose here, like
+          // `extracted`, rather than duplicating that union into this hand-
+          // written schema file.
+          modules: Record<string, unknown>;
           status: "in_progress" | "complete";
           created_at: string;
           updated_at: string;
@@ -76,12 +83,14 @@ export interface Database {
           stage?: "anchor" | "calibration" | "resume" | "identity" | "targeting" | "done";
           messages?: Array<{ role: "user" | "assistant"; content: string }>;
           extracted?: Record<string, unknown>;
+          modules?: Record<string, unknown>;
           status?: "in_progress" | "complete";
         };
         Update: {
           stage?: "anchor" | "calibration" | "resume" | "identity" | "targeting" | "done";
           messages?: Array<{ role: "user" | "assistant"; content: string }>;
           extracted?: Record<string, unknown>;
+          modules?: Record<string, unknown>;
           status?: "in_progress" | "complete";
           updated_at?: string;
         };
@@ -261,6 +270,30 @@ export interface Database {
         Update: {
           consumed_by?: string | null;
           consumed_at?: string | null;
+        };
+        Relationships: [];
+      };
+      // V3A-1 (0011_v3a_modules.sql): reaction calibration — swiping real
+      // postings interested/not during onboarding. Own-row select/insert/
+      // update RLS (users may change their mind); no delete, so the
+      // calibration signal's audit trail stays intact.
+      posting_reactions: {
+        Row: {
+          user_id: string;
+          posting_id: string;
+          reaction: "interested" | "not_interested";
+          note: string | null;
+          created_at: string;
+        };
+        Insert: {
+          user_id: string;
+          posting_id: string;
+          reaction: "interested" | "not_interested";
+          note?: string | null;
+        };
+        Update: {
+          reaction?: "interested" | "not_interested";
+          note?: string | null;
         };
         Relationships: [];
       };
