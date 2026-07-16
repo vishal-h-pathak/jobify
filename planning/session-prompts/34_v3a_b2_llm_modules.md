@@ -28,6 +28,15 @@ extraction shapes changed. Do NOT touch `web/app/(app)/profile/**`,
   the doc and routes to `/profile` (the dossier renders the new narrative —
   that's the payoff); any hunting stays on the feed's manual button.
 
+## Task 0 — MANDATORY debt from wave 2 (do this first)
+Write the cross-route phase-1 integration regression test B1 was asked for
+and didn't ship: drive ALL FOUR phase-1 modules (anchor, reactions, values,
+dealbreakers) through their REAL route handlers with fakes for DB/dispatch,
+in at least two completion orders (anchor-first and anchor-last), asserting
+the checkpoint hunt fires EXACTLY ONCE per session and never before all four
+are complete. This class of gap (a route not marking its module) survived
+two reviews because only per-route unit tests existed.
+
 ## Build (per V3A_DESIGN §2 — condensed to obligations)
 1. **Dedicated module routes** (NOT /turn — this is what makes the FIX-1
    always-ask exemption structural): each authed+invite-or-admin gated, each
