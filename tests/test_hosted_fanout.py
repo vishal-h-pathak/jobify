@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from jobify import db
-from jobify.hosted import embed, fanout
+from jobify.hosted import embed, fanout, learning
 from jobify.shared import llm
 from jobify.shared.llm import CompletionUsage
 
@@ -1037,3 +1037,52 @@ def test_cost_usd_includes_embedding_spend(tmp_path, monkeypatch):
     # The bug this test exists to catch: cost_usd must be MORE than just
     # rubric-compile + stage-4 verdict cost.
     assert counters["cost_usd"] > non_embedding_cost
+
+
+# ── LIV-1: learning-pass call site ───────────────────────────────────────
+
+
+def test_run_user_ladder_calls_learning_pass_after_scoring(tmp_path, monkeypatch):
+    """`_run_user_ladder` must call `learning.run_learning_pass` exactly
+    once per user, positionally with `(user_id, profile_dir)` and
+    `byo_key`/`counters` as kwargs — and only AFTER this cycle's
+    `db.upsert_match` calls, since the learning pass re-scores against
+    matches this same cycle just wrote. Call order (not just count) is
+    asserted via one shared list both fakes append to."""
+    d = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-1")])
+    _fixed_verdict_llm(monkeypatch)
+
+    events: list[tuple] = []
+    monkeypatch.setattr(
+        db, "upsert_match",
+        lambda uid, pid, **kw: events.append(("upsert_match", uid, pid)),
+    )
+
+    learning_calls: list[tuple] = []
+
+    def _fake_run_learning_pass(*args, **kwargs):
+        events.append(("run_learning_pass", args, kwargs))
+        learning_calls.append((args, kwargs))
+
+    monkeypatch.setattr(learning, "run_learning_pass", _fake_run_learning_pass)
+
+    fanout.run_fanout_cycle(["user-a"])
+
+    assert len(learning_calls) == 1
+    args, kwargs = learning_calls[0]
+    assert args == ("user-a", d)
+    assert set(kwargs) == {"api_key", "counters"}
+    assert isinstance(kwargs["counters"], dict)
+
+    # Call-order: every upsert_match for this cycle happened before the
+    # learning-pass call.
+    kinds = [kind for kind, *_ in events]
+    assert kinds[-1] == "run_learning_pass"
+    assert "upsert_match" in kinds

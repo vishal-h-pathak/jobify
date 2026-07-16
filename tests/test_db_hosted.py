@@ -25,12 +25,14 @@ class _FakeResult:
 
 
 class _FakeQuery:
-    """Mimics ``client.table(...).select|insert|update|eq|gte|execute()``.
+    """Mimics ``client.table(...).select|insert|update|eq|gte|in_|execute()``.
 
     ``eq()`` filters the backing rows (needed so the spend-sum test only
     sees one user's rows); ``gte()`` only records its call, matching
     ``tests/test_rescore.py``'s fake (this module's date filtering is a
-    server-side concern the fake doesn't need to reimplement).
+    server-side concern the fake doesn't need to reimplement). ``in_()``
+    filters like ``eq()`` but against a list of acceptable values (LIV-1's
+    `get_matches_by_states`/`get_postings_by_ids`).
     """
 
     def __init__(self, rows: list[dict]):
@@ -70,6 +72,10 @@ class _FakeQuery:
 
     def gte(self, col, val):
         self.gte_calls.append((col, val))
+        return self
+
+    def in_(self, col, vals):
+        self._rows = [r for r in self._rows if r.get(col) in vals]
         return self
 
     def execute(self):
@@ -599,6 +605,107 @@ def test_get_unmatched_postings_excludes_expired_link_status(patch_db_client):
     result = db.get_unmatched_postings("user-1")
 
     assert [p["id"] for p in result] == ["p-2", "p-3", "p-4"]
+
+
+# ── get_posting_reactions / get_matches_by_states / get_postings_by_ids /
+#    update_profile_doc_file (LIV-1 learning pass) ────────────────────────
+
+
+def test_get_posting_reactions_returns_only_this_users_rows(patch_db_client):
+    fake = _FakeClient({
+        "posting_reactions": [
+            {"user_id": "user-1", "posting_id": "p-1", "reaction": "interested"},
+            {"user_id": "user-2", "posting_id": "p-2", "reaction": "not_interested"},
+            {"user_id": "user-1", "posting_id": "p-3", "reaction": "not_interested"},
+        ],
+    })
+    patch_db_client(fake)
+
+    result = db.get_posting_reactions("user-1")
+
+    assert {r["posting_id"] for r in result} == {"p-1", "p-3"}
+
+
+def test_get_matches_by_states_filters_to_requested_states(patch_db_client):
+    fake = _FakeClient({
+        "matches": [
+            {"user_id": "user-1", "posting_id": "p-1", "state": "new"},
+            {"user_id": "user-1", "posting_id": "p-2", "state": "seen"},
+            {"user_id": "user-1", "posting_id": "p-3", "state": "saved"},
+            {"user_id": "user-1", "posting_id": "p-4", "state": "dismissed"},
+        ],
+    })
+    patch_db_client(fake)
+
+    result = db.get_matches_by_states("user-1", ["saved", "dismissed"])
+
+    assert {r["posting_id"] for r in result} == {"p-3", "p-4"}
+
+
+def test_get_postings_by_ids_returns_matching_rows(patch_db_client):
+    fake = _FakeClient({
+        "postings": [
+            {"id": "p-1", "title": "One"},
+            {"id": "p-2", "title": "Two"},
+            {"id": "p-3", "title": "Three"},
+        ],
+    })
+    patch_db_client(fake)
+
+    result = db.get_postings_by_ids(["p-1", "p-3"])
+
+    assert {p["id"] for p in result} == {"p-1", "p-3"}
+
+
+def test_get_postings_by_ids_empty_input_issues_no_query(patch_db_client):
+    fake = _FakeClient({"postings": [{"id": "p-1", "title": "One"}]})
+    patch_db_client(fake)
+
+    assert db.get_postings_by_ids([]) == []
+    assert fake.queries == []
+
+
+def test_update_profile_doc_file_merges_new_key_into_existing_doc(patch_db_client):
+    fake = _FakeClient({
+        "profiles": [
+            {"user_id": "user-1", "doc": {"thesis.md": "old thesis", "cv.md": "old cv"}},
+        ],
+    })
+    patch_db_client(fake)
+
+    db.update_profile_doc_file("user-1", "learned-insights.md", "new insight content")
+
+    update_queries = [q for name, q in fake.queries if name == "profiles" and q.update_payload]
+    assert len(update_queries) == 1
+    payload = update_queries[0].update_payload
+    assert payload == {
+        "doc": {
+            "thesis.md": "old thesis",
+            "cv.md": "old cv",
+            "learned-insights.md": "new insight content",
+        }
+    }
+    assert update_queries[0].eq_calls == [("user_id", "user-1")]
+
+
+def test_update_profile_doc_file_noop_when_profiles_row_missing(patch_db_client):
+    fake = _FakeClient({"profiles": []})
+    patch_db_client(fake)
+
+    db.update_profile_doc_file("user-1", "learned-insights.md", "content")
+
+    assert all(q.update_payload is None for _name, q in fake.queries)
+
+
+def test_update_profile_doc_file_noop_when_doc_not_a_dict(patch_db_client):
+    fake = _FakeClient({
+        "profiles": [{"user_id": "user-1", "doc": None}],
+    })
+    patch_db_client(fake)
+
+    db.update_profile_doc_file("user-1", "learned-insights.md", "content")
+
+    assert all(q.update_payload is None for _name, q in fake.queries)
 
 
 # ── insert_hunt_cycle_row (ADM-2 Task 2) ─────────────────────────────────
