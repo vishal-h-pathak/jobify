@@ -116,3 +116,34 @@ select,
     transparent 70%
   );
 }
+
+/* V3A_DESIGN.md §1.6 — one of the two sanctioned emotional-beat animations
+   (the other is B2's mirror-paragraph stagger): the PhaseRail's amber
+   underline does a full-width sweep-and-settle, once, as the checkpoint
+   interstitial enters. A highlight overlay sweeps across the rail
+   independent of its actual completed-width transition (which keeps using
+   panel-enter's 400ms width transition unchanged). */
+@keyframes rail-sweep {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+.rail-sweep {
+  animation: rail-sweep 600ms ease-in-out 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail-sweep {
+    animation: none;
+    opacity: 0;
+  }
+}

@@ -2,7 +2,6 @@
 
 import { useEffect, useReducer, useRef } from "react";
 import type { RefObject } from "react";
-import Link from "next/link";
 import { Button, BUTTON_VARIANT_CLASSES } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { TextArea } from "@/components/ui/Input";
@@ -11,11 +10,10 @@ import { Banner } from "@/components/ui/Banner";
 import { CALIBRATION_INTRO_COPY } from "@/lib/anthropic/interview";
 import type { ChatMessage, InterviewStage } from "@/lib/anthropic/interview";
 import { RESUME_SKIP_MESSAGE } from "@/lib/onboarding/handleTurn";
-import { deriveSpineSteps, StepSpine, type SpineReceipts } from "@/components/onboarding/StepSpine";
+import type { ModuleKey, ModulesState } from "@/lib/onboarding/moduleRegistry";
 import {
   AnchorForm,
   anchorFormValid,
-  anchorReceiptFor,
   buildAnchorPayload,
   initialAnchorFormValues,
   type AnchorFormValues,
@@ -28,6 +26,16 @@ import {
   formatCalibrationSubmission,
   parseCalibrationPrompts,
 } from "@/components/onboarding/CalibrationPanel";
+import { PhaseRail } from "@/components/onboarding/PhaseRail";
+import { deriveNextModule, isModuleComplete } from "@/components/onboarding/moduleOrder";
+import { ReactionDeck, REACTION_DECK_INTRO_COPY } from "@/components/onboarding/ReactionDeck";
+import { ValuePairsPanel, type ValuePairDef } from "@/components/onboarding/ValuePairsPanel";
+import { DealbreakersPanel } from "@/components/onboarding/DealbreakersPanel";
+import { EnergyPanel } from "@/components/onboarding/EnergyPanel";
+import { EnvironmentPanel, type EnvironmentScenarioDef } from "@/components/onboarding/EnvironmentPanel";
+import { TrajectoryPanel } from "@/components/onboarding/TrajectoryPanel";
+import { CheckpointInterstitial } from "@/components/onboarding/CheckpointInterstitial";
+import { RunHuntButton } from "@/app/(app)/feed/RunHuntButton";
 
 export interface Validation {
   status: "valid" | "invalid";
@@ -45,6 +53,10 @@ interface InitialState {
   messages: ChatMessage[];
   stage: InterviewStage;
   done: boolean;
+  modules: ModulesState;
+  matchCount: number;
+  valuePairs: ValuePairDef[];
+  environmentScenarios: EnvironmentScenarioDef[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -72,6 +84,12 @@ export async function handleUpload(file: File): Promise<UploadResult> {
   return { ok: true, text };
 }
 
+/**
+ * V3A-B1: extended (V3A_DESIGN.md §1.2) to also return `modules` (server
+ * truth for the rail + panel router), the match count for the ambient
+ * status chip, and the values/environment scenario data (shipped via state
+ * rather than a dedicated GET, per the design's either/or).
+ */
 export async function fetchInitialState(fetchImpl: typeof fetch = fetch): Promise<InitialState> {
   const res = await fetchImpl("/api/onboarding/state");
   if (!res.ok) throw new Error("Could not load your session.");
@@ -80,6 +98,10 @@ export async function fetchInitialState(fetchImpl: typeof fetch = fetch): Promis
     messages: (data.messages ?? []) as ChatMessage[],
     stage: (data.stage ?? "anchor") as InterviewStage,
     done: data.status === "complete",
+    modules: (data.modules ?? {}) as ModulesState,
+    matchCount: typeof data.match_count === "number" ? data.match_count : 0,
+    valuePairs: (data.value_pairs ?? []) as ValuePairDef[],
+    environmentScenarios: (data.environment_scenarios ?? []) as EnvironmentScenarioDef[],
   };
 }
 
@@ -118,9 +140,31 @@ export async function submitAnchor(
 // is) so the optimistic bubble matches exactly what the server persists.
 const RESUME_SKIP_DISPLAY_TEXT = "Skipped — using the anchor and range answers instead.";
 
-const RESUME_ADDED_RECEIPT = "resume added";
-const RESUME_SKIPPED_RECEIPT = "skipped — built from your answers";
-const CALIBRATION_RECEIPT = "4 answers";
+/** Deep-link `?module=<key>` (V3A_DESIGN.md §1.2) only re-opens modules with
+ * a dedicated redo panel — range/evidence/voice/metrics/mirror have no
+ * standalone UI this wave (interview block is driven by `stage`; voice/
+ * metrics/mirror are B2's). */
+const REDOABLE_MODULE_KEYS: readonly ModuleKey[] = [
+  "anchor",
+  "reactions",
+  "values",
+  "dealbreakers",
+  "energy",
+  "environment",
+  "trajectory",
+];
+
+/** V3A_DESIGN.md §1.6 — the ambient re-rank surface: only ever states things
+ * true in the DB (checkpoint_hunt.fired_at, or a real match count). */
+export function deriveHuntStatusLabel(modules: ModulesState, matchCount: number): string | null {
+  const checkpoint = modules.checkpoint_hunt;
+  if (!checkpoint) return null;
+  if (matchCount > 0) return `${matchCount} match${matchCount === 1 ? "" : "es"} waiting`;
+  const firedAt = new Date(checkpoint.fired_at);
+  const hh = String(firedAt.getHours()).padStart(2, "0");
+  const mm = String(firedAt.getMinutes()).padStart(2, "0");
+  return `hunt #1 running · ${hh}:${mm}`;
+}
 
 /* ------------------------------------------------------------------ */
 /* State machine — a pure reducer so every transition (including the   */
@@ -135,6 +179,13 @@ export interface OnboardingState {
   done: boolean;
   validation?: Validation;
 
+  modules: ModulesState;
+  matchCount: number;
+  valuePairs: ValuePairDef[];
+  environmentScenarios: EnvironmentScenarioDef[];
+  interstitialPending: boolean;
+  redoModule: ModuleKey | null;
+
   input: string;
   sending: boolean;
   turnError: string;
@@ -147,8 +198,6 @@ export interface OnboardingState {
   calibrationGenerating: boolean;
 
   calibrationAnswers: string[];
-
-  receipts: SpineReceipts;
 }
 
 export const initialOnboardingState: OnboardingState = {
@@ -158,6 +207,13 @@ export const initialOnboardingState: OnboardingState = {
   stage: "anchor",
   done: false,
   validation: undefined,
+
+  modules: {},
+  matchCount: 0,
+  valuePairs: [],
+  environmentScenarios: [],
+  interstitialPending: false,
+  redoModule: null,
 
   input: "",
   sending: false,
@@ -171,12 +227,10 @@ export const initialOnboardingState: OnboardingState = {
   calibrationGenerating: false,
 
   calibrationAnswers: ["", "", "", ""],
-
-  receipts: {},
 };
 
 export type OnboardingAction =
-  | { type: "state_loaded"; messages: ChatMessage[]; stage: InterviewStage; done: boolean }
+  | ({ type: "state_loaded" } & InitialState)
   | { type: "state_load_failed" }
   | { type: "input_changed"; value: string }
   | { type: "turn_started" }
@@ -187,7 +241,6 @@ export type OnboardingAction =
       stage: InterviewStage;
       done: boolean;
       validation?: Validation;
-      receiptUpdate?: Partial<SpineReceipts>;
     }
   | { type: "turn_failed"; error: string }
   | { type: "upload_rejected"; error: string }
@@ -195,9 +248,12 @@ export type OnboardingAction =
   | { type: "anchor_field_changed"; field: keyof Omit<AnchorFormValues, "mode">; value: string }
   | { type: "anchor_mode_toggled" }
   | { type: "anchor_submit_started" }
-  | { type: "anchor_submit_succeeded"; receipt: string }
   | { type: "anchor_submit_failed"; error: string }
-  | { type: "calibration_answer_changed"; index: number; value: string };
+  | { type: "calibration_answer_changed"; index: number; value: string }
+  | { type: "checkpoint_interstitial_shown" }
+  | { type: "checkpoint_interstitial_dismissed" }
+  | { type: "redo_requested"; key: ModuleKey }
+  | { type: "redo_cleared" };
 
 export function onboardingReducer(state: OnboardingState, action: OnboardingAction): OnboardingState {
   switch (action.type) {
@@ -209,7 +265,12 @@ export function onboardingReducer(state: OnboardingState, action: OnboardingActi
         messages: action.messages,
         stage: action.stage,
         done: action.done,
+        modules: action.modules,
+        matchCount: action.matchCount,
+        valuePairs: action.valuePairs,
+        environmentScenarios: action.environmentScenarios,
         calibrationGenerating: false,
+        anchorSubmitting: false,
       };
     case "state_load_failed":
       return { ...state, loading: false, loadError: "Could not load your session." };
@@ -231,7 +292,6 @@ export function onboardingReducer(state: OnboardingState, action: OnboardingActi
         stage: action.stage,
         done: action.done,
         validation: action.validation,
-        receipts: action.receiptUpdate ? { ...state.receipts, ...action.receiptUpdate } : state.receipts,
       };
     case "turn_failed":
       // Deliberately does NOT touch `input` (or `calibrationAnswers`) — a
@@ -256,14 +316,6 @@ export function onboardingReducer(state: OnboardingState, action: OnboardingActi
       };
     case "anchor_submit_started":
       return { ...state, anchorSubmitting: true, anchorError: "" };
-    case "anchor_submit_succeeded":
-      return {
-        ...state,
-        anchorSubmitting: false,
-        stage: "calibration",
-        calibrationGenerating: true,
-        receipts: { ...state.receipts, anchor: action.receipt },
-      };
     case "anchor_submit_failed":
       // Deliberately does NOT touch `anchorValues` — the typed form survives
       // the failure so the user can just retry the same submit.
@@ -273,6 +325,14 @@ export function onboardingReducer(state: OnboardingState, action: OnboardingActi
       next[action.index] = action.value;
       return { ...state, calibrationAnswers: next };
     }
+    case "checkpoint_interstitial_shown":
+      return { ...state, interstitialPending: true };
+    case "checkpoint_interstitial_dismissed":
+      return { ...state, interstitialPending: false };
+    case "redo_requested":
+      return { ...state, redoModule: action.key };
+    case "redo_cleared":
+      return { ...state, redoModule: null };
     default:
       return state;
   }
@@ -282,9 +342,7 @@ export function onboardingReducer(state: OnboardingState, action: OnboardingActi
 /* Presentational views — plain functions of props, no hooks/effects of */
 /* their own (the scroll ref is created upstream and only *attached*    */
 /* here), matching this repo's direct-invocation test style (see        */
-/* FileButton.test.tsx / layout.test.tsx). Split per stage so each is   */
-/* independently testable and the staged shell (ONBOARDING_REDESIGN.md  */
-/* §3) reads as a panel swap, not one big branching blob.               */
+/* FileButton.test.tsx / layout.test.tsx).                              */
 /* ------------------------------------------------------------------ */
 
 export interface ChatStageViewProps {
@@ -297,10 +355,12 @@ export interface ChatStageViewProps {
   onSkip: () => void;
 }
 
-/** Chat restyle (§3): assistant messages drop the Card for plain text with a
- * 2px amber left rule; the active (last, unanswered) question renders larger
- * than the historical transcript. Upload + Skip render only in the resume
- * stage; placeholder copy is stage-driven. */
+/** Chat restyle (ONBOARDING_REDESIGN.md §3): assistant messages drop the
+ * Card for plain text with a 2px amber left rule; the active (last,
+ * unanswered) question renders larger than the historical transcript.
+ * Upload + Skip render only in the resume stage; placeholder copy is
+ * stage-driven. This is the "interview block" (V3A_DESIGN.md §1.7)'s
+ * resume/targeting sub-view. */
 export function ChatStageView({ state, scrollRef, onInputChange, onSend, onRetry, onFileChange, onSkip }: ChatStageViewProps) {
   const placeholder =
     state.stage === "resume"
@@ -393,47 +453,30 @@ export function ChatStageView({ state, scrollRef, onInputChange, onSend, onRetry
   );
 }
 
-export interface DoneViewProps {
-  messages: ChatMessage[];
-  validation?: Validation;
-}
-
-/** The done-state summary moment (§3): the final turn's plain-words recap —
- * rank-up / never-show / logistics, content already mandated by the system
- * prompt (interview.ts:130-133) — rendered as its own paragraphs, plus the
- * primary "Run my first hunt" action. */
-export function DoneView({ messages, validation }: DoneViewProps) {
-  const summaryText = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
-  const paragraphs = summaryText
-    .split(/\n{2,}/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-
+/**
+ * V3A_DESIGN.md §4 build item 6 — pre-mirror terminal screen: B2 hasn't
+ * shipped voice/metrics/mirror this wave, so once the interview block
+ * finishes there's nowhere further to route. Manual "Run my hunt" (owner
+ * decision, 2026-07-06: no automatic hunt #2) plus the feed CTA.
+ */
+export function DoneForNowView({ matchCount }: { matchCount: number }) {
   return (
     <Card variant="elevated" className="flex flex-col gap-4">
-      <h2 className="text-2xl font-semibold tracking-tight text-ink">
-        {validation?.status === "invalid" ? "Profile saved, but needs a fix:" : "Your profile is built."}
-      </h2>
-      {validation?.status === "invalid" && (
-        <ul className="list-disc pl-5 text-sm text-danger">
-          {validation.errors.map((e, i) => (
-            <li key={i}>{e}</li>
-          ))}
-        </ul>
-      )}
-      <div className="flex flex-col gap-3 text-ink-muted">
-        {paragraphs.map((p, i) => (
-          <p key={i} className="whitespace-pre-wrap">
-            {p}
-          </p>
-        ))}
+      <h2 className="text-2xl font-semibold tracking-tight text-ink">Phase two, done for now.</h2>
+      <p className="text-ink-muted">
+        The rest of your profile (voice, metric honesty, the mirror moment) is coming soon. Your feed is already
+        live from what you&apos;ve told us so far.
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <a
+          href="/feed"
+          className={`inline-flex w-fit items-center gap-2 rounded-md px-4 py-2 text-sm font-medium ${BUTTON_VARIANT_CLASSES.primary}`}
+        >
+          View my feed
+        </a>
+        <RunHuntButton />
       </div>
-      <Link
-        href="/feed"
-        className={`inline-flex w-fit items-center gap-2 rounded-md px-4 py-2 text-sm font-medium ${BUTTON_VARIANT_CLASSES.primary}`}
-      >
-        Run my first hunt
-      </Link>
+      {matchCount > 0 && <p className="text-sm text-ink-muted">{matchCount} matches waiting now.</p>}
     </Card>
   );
 }
@@ -452,9 +495,24 @@ export interface OnboardingViewProps {
   onAnchorSubmit: () => void;
   onCalibrationAnswerChange: (index: number, value: string) => void;
   onCalibrationSubmit: () => void;
+  onModuleComplete: (key: ModuleKey) => void;
+  onCheckpointContinue: () => void;
 }
 
-function renderStagePanel(props: OnboardingViewProps) {
+/**
+ * V3A_DESIGN.md §1.2: the interview block (range -> evidence -> targeting)
+ * has no module key of its own for "still mid-targeting" — `evidence`
+ * derives complete as soon as the resume sub-stage ends (V3A_DESIGN.md §1.7),
+ * which is BEFORE targeting begins. So panel routing can't just take
+ * `deriveNextModule`'s first-incomplete-key verbatim once inside the block —
+ * it has to keep showing the chat for the whole block, until `stage` itself
+ * reaches 'done' (finish_interview).
+ */
+function isInterviewBlockActive(state: OnboardingState): boolean {
+  return state.stage !== "anchor" && state.stage !== "done" && isModuleComplete("trajectory", state.modules, state.stage);
+}
+
+function renderActivePanel(props: OnboardingViewProps) {
   const {
     state,
     calibrationPrompts,
@@ -469,9 +527,53 @@ function renderStagePanel(props: OnboardingViewProps) {
     onAnchorSubmit,
     onCalibrationAnswerChange,
     onCalibrationSubmit,
+    onModuleComplete,
   } = props;
 
-  switch (state.stage) {
+  const activeModule: ModuleKey | null =
+    state.redoModule ?? (isInterviewBlockActive(state) ? null : deriveNextModule(state.modules, state.stage));
+
+  if (!activeModule && !isInterviewBlockActive(state)) {
+    return <DoneForNowView matchCount={state.matchCount} />;
+  }
+
+  if (!activeModule) {
+    // Interview block active — driven by `stage`, matching the pre-B1
+    // (v2) chat stage machine exactly.
+    switch (state.stage) {
+      case "calibration":
+        return state.calibrationGenerating ? (
+          <CalibrationGeneratingSkeleton />
+        ) : (
+          <CalibrationPanel
+            introCopy={CALIBRATION_INTRO_COPY}
+            prompts={calibrationPrompts}
+            answers={state.calibrationAnswers}
+            submitting={state.sending}
+            error={state.turnError}
+            onAnswerChange={onCalibrationAnswerChange}
+            onSubmit={onCalibrationSubmit}
+          />
+        );
+      case "resume":
+      case "targeting":
+      case "identity":
+      default:
+        return (
+          <ChatStageView
+            state={state}
+            scrollRef={scrollRef}
+            onInputChange={onInputChange}
+            onSend={onSend}
+            onRetry={onRetry}
+            onFileChange={onFileChange}
+            onSkip={onSkip}
+          />
+        );
+    }
+  }
+
+  switch (activeModule) {
     case "anchor":
       return (
         <>
@@ -488,45 +590,40 @@ function renderStagePanel(props: OnboardingViewProps) {
           <p className="mt-6 text-xs text-ink-muted">{DISCLOSURE_COPY}</p>
         </>
       );
-    case "calibration":
-      return state.calibrationGenerating ? (
-        <CalibrationGeneratingSkeleton />
-      ) : (
-        <CalibrationPanel
-          introCopy={CALIBRATION_INTRO_COPY}
-          prompts={calibrationPrompts}
-          answers={state.calibrationAnswers}
-          submitting={state.sending}
-          error={state.turnError}
-          onAnswerChange={onCalibrationAnswerChange}
-          onSubmit={onCalibrationSubmit}
-        />
-      );
-    case "done":
-      return <DoneView messages={state.messages} validation={state.validation} />;
-    case "resume":
-    case "targeting":
-    case "identity":
-    default:
+    case "reactions":
       return (
-        <ChatStageView
-          state={state}
-          scrollRef={scrollRef}
-          onInputChange={onInputChange}
-          onSend={onSend}
-          onRetry={onRetry}
-          onFileChange={onFileChange}
-          onSkip={onSkip}
-        />
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-ink-muted">{REACTION_DECK_INTRO_COPY}</p>
+          <ReactionDeck onComplete={() => onModuleComplete("reactions")} />
+        </div>
       );
+    case "values":
+      return <ValuePairsPanel valuePairs={state.valuePairs} onComplete={() => onModuleComplete("values")} />;
+    case "dealbreakers":
+      return <DealbreakersPanel onComplete={() => onModuleComplete("dealbreakers")} />;
+    case "energy":
+      return <EnergyPanel onComplete={() => onModuleComplete("energy")} />;
+    case "environment":
+      return (
+        <EnvironmentPanel scenarios={state.environmentScenarios} onComplete={() => onModuleComplete("environment")} />
+      );
+    case "trajectory":
+      return <TrajectoryPanel onComplete={() => onModuleComplete("trajectory")} />;
+    case "range":
+    case "evidence":
+    case "voice":
+    case "metrics":
+    case "mirror":
+    default:
+      return <DoneForNowView matchCount={state.matchCount} />;
   }
 }
 
-/** The staged shell (§3): one route, a panel per stage swapped via the
+/** The staged shell: one route, a panel per module swapped via the
  * panel-enter motion utility, no outer bordered transcript box — the page
- * itself scrolls. StepSpine replaces the badge-arrow rail. */
+ * itself scrolls. PhaseRail (V3A_DESIGN.md §1.1) replaces StepSpine. */
 export function OnboardingView(props: OnboardingViewProps) {
-  const { state } = props;
+  const { state, onCheckpointContinue } = props;
 
   if (state.loading) {
     return (
@@ -546,15 +643,35 @@ export function OnboardingView(props: OnboardingViewProps) {
     );
   }
 
-  const spineSteps = deriveSpineSteps(state.stage, state.receipts);
+  const huntStatusLabel = deriveHuntStatusLabel(state.modules, state.matchCount);
+  const panelKey =
+    state.redoModule ??
+    (state.interstitialPending ? "checkpoint" : deriveNextModule(state.modules, state.stage) ?? state.stage);
 
   return (
     <div className="relative flex flex-1 flex-col">
       <div aria-hidden="true" className="amber-radial-glow pointer-events-none absolute inset-0" />
       <div className="relative mx-auto flex w-full max-w-3xl flex-1 flex-col gap-8 px-6 py-10">
-        <StepSpine steps={spineSteps} />
-        <div key={state.stage} className="panel-enter flex flex-1 flex-col">
-          {renderStagePanel(props)}
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
+            <PhaseRail modules={state.modules} stage={state.stage} sweeping={state.interstitialPending} />
+          </div>
+          {huntStatusLabel && (
+            <span className="mt-1 shrink-0 rounded-full border border-line px-2.5 py-1 text-xs text-ink-muted">
+              {huntStatusLabel}
+            </span>
+          )}
+        </div>
+        <div key={String(panelKey)} className="panel-enter flex flex-1 flex-col">
+          {state.interstitialPending ? (
+            <CheckpointInterstitial
+              fired={Boolean(state.modules.checkpoint_hunt)}
+              matchCount={state.matchCount}
+              onContinue={onCheckpointContinue}
+            />
+          ) : (
+            renderActivePanel(props)
+          )}
         </div>
       </div>
     </div>
@@ -584,12 +701,48 @@ export default function OnboardingPage() {
     };
   }, []);
 
+  // V3A_DESIGN.md §1.2 deep-link resumability: read `?module=<key>` once on
+  // mount via the plain browser API (not next/navigation's useSearchParams,
+  // which would force a Suspense boundary on an already-fully-client page).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get("module");
+    if (requested && (REDOABLE_MODULE_KEYS as readonly string[]).includes(requested)) {
+      dispatch({ type: "redo_requested", key: requested as ModuleKey });
+    }
+  }, []);
+
   // No outer scrollable transcript box (§3: "the page itself scrolls") — the
   // sentinel div at the bottom of the chat stage's message list is what gets
   // scrolled into view instead of an inner `overflow-y-auto` pane.
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
   }, [state.messages.length, state.sending]);
+
+  /**
+   * V3A_DESIGN.md §1.2/§1.6: every module POST replaces `extracted[key]`
+   * wholesale but returns only `{ok, key, receipt}` — not the session's
+   * updated `modules`/`checkpoint_hunt`/match count. So the page re-fetches
+   * `GET /state` (the one place that composes all of that) after every
+   * completion, and branches the checkpoint interstitial on dealbreakers
+   * specifically, since that's the module whose POST fires the checkpoint.
+   */
+  async function handleModuleComplete(key: ModuleKey) {
+    const wasRedo = state.redoModule === key;
+    try {
+      const data = await fetchInitialState();
+      dispatch({ type: "state_loaded", ...data });
+    } catch {
+      dispatch({ type: "state_load_failed" });
+      return;
+    }
+    if (wasRedo) {
+      dispatch({ type: "redo_cleared" });
+      window.history.replaceState(null, "", window.location.pathname);
+      return;
+    }
+    if (key === "dealbreakers") dispatch({ type: "checkpoint_interstitial_shown" });
+  }
 
   async function handleSend() {
     const message = state.input.trim();
@@ -604,7 +757,6 @@ export default function OnboardingPage() {
         stage: data.stage,
         done: data.done,
         validation: data.validation,
-        receiptUpdate: state.stage === "resume" ? { resume: RESUME_ADDED_RECEIPT } : undefined,
       });
     } catch (err) {
       dispatch({ type: "turn_failed", error: err instanceof Error ? err.message : "Something went wrong." });
@@ -623,7 +775,6 @@ export default function OnboardingPage() {
         stage: data.stage,
         done: data.done,
         validation: data.validation,
-        receiptUpdate: { resume: RESUME_SKIPPED_RECEIPT },
       });
     } catch (err) {
       dispatch({ type: "turn_failed", error: err instanceof Error ? err.message : "Something went wrong." });
@@ -644,12 +795,11 @@ export default function OnboardingPage() {
     dispatch({ type: "anchor_submit_started" });
     try {
       await submitAnchor(buildAnchorPayload(state.anchorValues));
-      dispatch({ type: "anchor_submit_succeeded", receipt: anchorReceiptFor(state.anchorValues) });
       // The 4 calibration prompts are generated lazily inside GET /state
       // itself (maybeGenerateCalibrationPrompts) — this follow-up fetch is
-      // what actually pays for and waits out that ~5-10s call.
-      const data = await fetchInitialState();
-      dispatch({ type: "state_loaded", ...data });
+      // what actually pays for and waits out that ~5-10s call, and also
+      // picks up modules.anchor now that the anchor route marks it complete.
+      await handleModuleComplete("anchor");
     } catch (err) {
       dispatch({ type: "anchor_submit_failed", error: err instanceof Error ? err.message : "Something went wrong." });
     }
@@ -668,7 +818,6 @@ export default function OnboardingPage() {
         stage: data.stage,
         done: data.done,
         validation: data.validation,
-        receiptUpdate: { calibration: CALIBRATION_RECEIPT },
       });
     } catch (err) {
       dispatch({ type: "turn_failed", error: err instanceof Error ? err.message : "Something went wrong." });
@@ -692,6 +841,8 @@ export default function OnboardingPage() {
       onAnchorSubmit={handleAnchorSubmit}
       onCalibrationAnswerChange={(index, value) => dispatch({ type: "calibration_answer_changed", index, value })}
       onCalibrationSubmit={handleCalibrationSubmit}
+      onModuleComplete={handleModuleComplete}
+      onCheckpointContinue={() => dispatch({ type: "checkpoint_interstitial_dismissed" })}
     />
   );
 }

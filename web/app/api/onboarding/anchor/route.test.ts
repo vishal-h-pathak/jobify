@@ -35,7 +35,13 @@ describe("POST /api/onboarding/anchor", () => {
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getOrCreateSessionMock.mockReset();
-    getOrCreateSessionMock.mockResolvedValue({ stage: "anchor", messages: [], extracted: {}, status: "in_progress" });
+    getOrCreateSessionMock.mockResolvedValue({
+      stage: "anchor",
+      messages: [],
+      extracted: {},
+      modules: {},
+      status: "in_progress",
+    });
     saveSessionMock.mockReset();
   });
 
@@ -87,6 +93,32 @@ describe("POST /api/onboarding/anchor", () => {
         extracted: expect.objectContaining({
           anchor: { current_title: "Senior Backend Engineer", current_company: "Acme Corp", years_in_role: "4 years" },
         }),
+        modules: expect.objectContaining({
+          anchor: expect.objectContaining({ receipt: "Senior Backend Engineer · Acme Corp" }),
+        }),
+      })
+    );
+  });
+
+  it("marks modules.anchor complete so phaseOneComplete can eventually fire (V3A-B1 fix)", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasClaimedInviteMock.mockResolvedValue(true);
+    getOrCreateSessionMock.mockResolvedValue({
+      stage: "anchor",
+      messages: [],
+      extracted: {},
+      modules: { values: { completed_at: "t", receipt: "r" } },
+      status: "in_progress",
+    });
+    await POST(jsonRequest({ free_text: "Between roles" }));
+    expect(saveSessionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "user-1",
+      expect.objectContaining({
+        modules: expect.objectContaining({
+          values: { completed_at: "t", receipt: "r" }, // untouched
+          anchor: expect.objectContaining({ receipt: "Between roles" }),
+        }),
       })
     );
   });
@@ -114,6 +146,7 @@ describe("POST /api/onboarding/anchor", () => {
       stage: "anchor",
       messages: [],
       extracted: { targeting: { tiers: [{ key: "tier_1", label: "x" }], hard_disqualifiers: [], soft_concerns: [], thesis_summary: "t" } },
+      modules: {},
       status: "in_progress",
     });
     await POST(jsonRequest({ current_title: "Engineer", current_company: "Acme" }));

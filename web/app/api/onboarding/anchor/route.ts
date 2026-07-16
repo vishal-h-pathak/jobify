@@ -3,6 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getOrCreateSession, saveSession } from "@/lib/db/onboardingSession";
 import { hasClaimedInvite } from "@/lib/db/invites";
 import { isAdmin } from "@/lib/admin/isAdmin";
+import { MODULE_REGISTRY, markModuleComplete } from "@/lib/onboarding/moduleRegistry";
 
 interface AnchorRequestBody {
   current_title?: unknown;
@@ -64,9 +65,18 @@ export async function POST(request: Request) {
         ...(yearsInRole ? { years_in_role: yearsInRole } : {}),
       };
 
+  // V3A-B1: this route predates the module-progress model (moduleRegistry.ts)
+  // and never marked `modules.anchor` complete, so `phaseOneComplete` (which
+  // requires anchor) could never flip true and the background-hunt
+  // checkpoint could never fire. Mark it here, same pattern as the other
+  // module routes.
+  const receipt = MODULE_REGISTRY.anchor.receipt(anchor) ?? "";
+  const modules = markModuleComplete(session, "anchor", receipt);
+
   await saveSession(supabase, user.id, {
     extracted: { ...session.extracted, anchor },
     stage: "calibration",
+    modules,
   });
 
   return NextResponse.json({ stage: "calibration" });
