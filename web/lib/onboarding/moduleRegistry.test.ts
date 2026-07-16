@@ -88,10 +88,43 @@ describe("MODULE_REGISTRY", () => {
       expect(MODULE_REGISTRY.trajectory.receipt({})).toBeNull();
     });
 
-    it("range/evidence/voice/metrics/mirror return null — no extractor exists yet", () => {
-      for (const key of ["range", "evidence", "voice", "metrics", "mirror"] as ModuleKey[]) {
-        expect(MODULE_REGISTRY[key].receipt({ anything: "goes" })).toBeNull();
-      }
+    it("range: returns '4 answers' when calibration exists, null otherwise", () => {
+      const { receipt } = MODULE_REGISTRY.range;
+      expect(receipt({ calibration: { skills: ["a"], evidence: ["b"] } })).toBe("4 answers");
+      expect(receipt({ calibration: {} })).toBe("4 answers");
+      expect(receipt({})).toBeNull();
+    });
+
+    it("evidence: prefers 'resume added' when cv_markdown is present, falls back to 'built from your answers'", () => {
+      const { receipt } = MODULE_REGISTRY.evidence;
+      expect(receipt({ resume: { cv_markdown: "# Experience\n..." } })).toBe("resume added");
+      expect(receipt({ calibration: { evidence: ["a", "b"] } })).toBe("built from your answers");
+      expect(receipt({})).toBeNull();
+      expect(receipt({ resume: { cv_markdown: "   " } })).toBeNull();
+    });
+
+    it("voice: returns 'voice: <register>' when register is a non-empty string, null otherwise", () => {
+      const { receipt } = MODULE_REGISTRY.voice;
+      expect(receipt({ voice: { register: "formal and professional" } })).toBe("voice: formal and professional");
+      expect(receipt({ voice: { register: "   " } })).toBeNull();
+      expect(receipt({ voice: {} })).toBeNull();
+      expect(receipt({})).toBeNull();
+    });
+
+    it("metrics: returns count of confirmed and held back, null if metrics missing", () => {
+      const { receipt } = MODULE_REGISTRY.metrics;
+      expect(receipt({ metrics: { confirmed: ["a", "b"], never_use: ["c"] } })).toBe("2 confirmed · 1 held back");
+      expect(receipt({ metrics: { confirmed: ["a"], never_use: [] } })).toBe("1 confirmed · 0 held back");
+      expect(receipt({ metrics: { confirmed: [], never_use: [] } })).toBe("0 confirmed · 0 held back");
+      expect(receipt({})).toBeNull();
+    });
+
+    it("mirror: returns count of verbatim quotes with proper pluralization, null if mirror missing", () => {
+      const { receipt } = MODULE_REGISTRY.mirror;
+      expect(receipt({ mirror: { quoted_phrases: ["quote 1", "quote 2", "quote 3"] } })).toBe("3 verbatim quotes");
+      expect(receipt({ mirror: { quoted_phrases: ["single quote"] } })).toBe("1 verbatim quote");
+      expect(receipt({ mirror: { quoted_phrases: [] } })).toBe("0 verbatim quotes");
+      expect(receipt({})).toBeNull();
     });
   });
 });

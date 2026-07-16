@@ -111,10 +111,41 @@ function trajectoryReceipt(extracted: Record<string, unknown>): string | null {
   return asTrimmedString(extracted.direction) || null;
 }
 
-// ── phase 2/3 — no extractor exists yet this wave; null until it does ───
+// ── phase 2/3 — receipts for this wave ───────────────────────────────────
 
-function noExtractorYet(): string | null {
+function rangeReceipt(extracted: Record<string, unknown>): string | null {
+  const calibration = extracted.calibration as { skills?: unknown; evidence?: unknown } | undefined;
+  if (!calibration) return null;
+  return "4 answers";
+}
+
+function evidenceReceipt(extracted: Record<string, unknown>): string | null {
+  const resume = extracted.resume as { cv_markdown?: unknown } | undefined;
+  if (resume && typeof resume.cv_markdown === "string" && resume.cv_markdown.trim()) return "resume added";
+  const calibration = extracted.calibration as { evidence?: unknown } | undefined;
+  if (calibration) return "built from your answers";
   return null;
+}
+
+function voiceReceipt(extracted: Record<string, unknown>): string | null {
+  const voice = extracted.voice as { register?: unknown } | undefined;
+  const register = typeof voice?.register === "string" ? voice.register.trim() : "";
+  return register ? `voice: ${register}` : null;
+}
+
+function metricsReceipt(extracted: Record<string, unknown>): string | null {
+  const metrics = extracted.metrics as { confirmed?: unknown; never_use?: unknown } | undefined;
+  if (!metrics) return null;
+  const confirmed = Array.isArray(metrics.confirmed) ? metrics.confirmed.length : 0;
+  const heldBack = Array.isArray(metrics.never_use) ? metrics.never_use.length : 0;
+  return `${confirmed} confirmed · ${heldBack} held back`;
+}
+
+function mirrorReceipt(extracted: Record<string, unknown>): string | null {
+  const mirror = extracted.mirror as { quoted_phrases?: unknown } | undefined;
+  if (!mirror) return null;
+  const n = Array.isArray(mirror.quoted_phrases) ? mirror.quoted_phrases.length : 0;
+  return `${n} verbatim quote${n === 1 ? "" : "s"}`;
 }
 
 export const MODULE_REGISTRY: Record<ModuleKey, ModuleDefinition> = {
@@ -122,14 +153,14 @@ export const MODULE_REGISTRY: Record<ModuleKey, ModuleDefinition> = {
   reactions: { key: "reactions", phase: 1, receipt: reactionsReceipt },
   values: { key: "values", phase: 1, receipt: valuesReceipt },
   dealbreakers: { key: "dealbreakers", phase: 1, receipt: dealbreakersReceipt },
-  range: { key: "range", phase: 2, receipt: noExtractorYet },
+  range: { key: "range", phase: 2, receipt: rangeReceipt },
   energy: { key: "energy", phase: 2, receipt: energyReceipt },
   environment: { key: "environment", phase: 2, receipt: environmentReceipt },
   trajectory: { key: "trajectory", phase: 2, receipt: trajectoryReceipt },
-  evidence: { key: "evidence", phase: 2, receipt: noExtractorYet },
-  voice: { key: "voice", phase: 2, receipt: noExtractorYet },
-  metrics: { key: "metrics", phase: 2, receipt: noExtractorYet },
-  mirror: { key: "mirror", phase: 3, receipt: noExtractorYet },
+  evidence: { key: "evidence", phase: 2, receipt: evidenceReceipt },
+  voice: { key: "voice", phase: 2, receipt: voiceReceipt },
+  metrics: { key: "metrics", phase: 2, receipt: metricsReceipt },
+  mirror: { key: "mirror", phase: 3, receipt: mirrorReceipt },
 };
 
 /**
