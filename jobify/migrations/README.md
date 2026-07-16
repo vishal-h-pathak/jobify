@@ -183,3 +183,19 @@ pool cap, BYO bypass), the BYO key encryption format, and the
 
 Apply it the same way as `0001`-`0005` (SQL Editor / `supabase db push` /
 `apply_migration`), after `0005` is already applied.
+
+## 0012 — hosted tailor tracking
+
+`0012_v3b_tailor.sql` is additive on top of `0001`-`0011` — V3b tailor worker
+support (`planning/V3B_DESIGN.md` §1.3). Moves resume tailoring to a hosted GHA
+compute plane with async status tracking. It adds:
+
+| Object | Purpose |
+|---|---|
+| `tailor_runs` | async tailor run lifecycle tracking — one row per dispatch, worker updates in place with status/progress/outcome |
+| `tailor_runs_one_active` unique index | per-posting cooldown — enforces at most one queued/running tailor per (user_id, posting_id); second dispatch while one is in-flight fails with unique-violation |
+| `tailor_runs` RLS | own-row SELECT for polling; INSERT/UPDATE service-role only |
+| `job-materials` storage policy | user-scoped path prefix — reads gated to own folder `(storage.foldername(name))[1] = auth.uid()::text` |
+
+Apply it the same way as `0001`-`0011` (SQL Editor / `supabase db push` /
+`apply_migration`), after `0011` is already applied.
