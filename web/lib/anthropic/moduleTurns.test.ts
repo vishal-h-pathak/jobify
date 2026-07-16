@@ -18,6 +18,22 @@ const {
   MIRROR_GENERATION_TOOLS,
 } = await import("./moduleTurns");
 
+// Prompt-content regression coverage: this constraint is prompt-only — no code
+// validates the model's output for stray question/exclamation marks, and the
+// mirror route is exempt from `/turn`'s ends-with-a-question post-check by
+// design (see the file-header comment in moduleTurns.ts). Without an assertion
+// on the actual text, a future edit could silently reintroduce ambiguous
+// "ends declaratively" wording with nothing to catch it.
+describe("MIRROR_GENERATION_SYSTEM_PROMPT content", () => {
+  it("bans question marks anywhere in the mirror text, not just at the end", () => {
+    expect(MIRROR_GENERATION_SYSTEM_PROMPT).toMatch(/no question marks anywhere/i);
+  });
+
+  it("bans exclamation marks anywhere in the mirror text", () => {
+    expect(MIRROR_GENERATION_SYSTEM_PROMPT).toMatch(/no exclamation marks anywhere/i);
+  });
+});
+
 function usageResponse(content: unknown[], usage = { input_tokens: 111, output_tokens: 22 }) {
   return { content, usage };
 }
