@@ -32,6 +32,7 @@ import re
 
 from jobify.config import TAILOR_CLAUDE_MODEL as CLAUDE_MODEL
 from jobify.shared import llm
+from jobify.shared.llm import CompletionUsage
 from prompts import cached_system_blocks, load_task_prompt
 from jobify.profile_loader import load_archetypes
 
@@ -155,12 +156,26 @@ def _extract_json(text: str) -> dict:
     return json.loads(text[start:end + 1])
 
 
-def classify_archetype(job: dict) -> dict:
+# Zero-usage sentinel for the branches below that never call the LLM (no
+# archetypes configured, tier-1.5 deterministic fast-path) and for the
+# classifier-error fallback, where no confirmed usage exists to report.
+_ZERO_USAGE = CompletionUsage(input_tokens=0, output_tokens=0)
+
+
+def _classify_archetype_call(job: dict) -> tuple[dict, CompletionUsage]:
     """Classify a JD into one archetype key with a cheap Sonnet call.
 
-    Returns a dict {archetype, confidence, reasoning}. Falls back to
-    `tier_3_mission_ml` if the response can't be parsed or no
-    archetypes are configured.
+    Returns (result, usage) — result is a dict {archetype, confidence,
+    reasoning}, falling back to the profile's fallback lane if the response
+    can't be parsed or no archetypes are configured. usage is honestly zero
+    on every branch that never calls the LLM (no archetypes configured, the
+    tier-1.5 deterministic fast-path, or a classifier error before a usable
+    response).
+
+    Shared by `classify_archetype` (text-only, existing callers) and
+    `classify_archetype_with_usage` (H4 ledger — Task 5b's hosted worker),
+    so prompt construction + parsing stays the single source of truth and
+    only the return type forks.
     """
     archs = _load_archetypes()
     if not archs:
@@ -168,7 +183,7 @@ def classify_archetype(job: dict) -> dict:
             "archetype": "",
             "confidence": 0.0,
             "reasoning": "no archetypes configured",
-        }
+        }, _ZERO_USAGE
 
     # Tier 1.5 routes deterministically when the profile defines an
     # agentic / applied-AI lane (``JOBIFY_AGENTIC_ARCHETYPE``): the scorer
@@ -179,7 +194,7 @@ def classify_archetype(job: dict) -> dict:
             "archetype": _AGENTIC_KEY,
             "confidence": 1.0,
             "reasoning": "tier 1.5 routes deterministically to the agentic builder lane",
-        }
+        }, _ZERO_USAGE
 
     prompt = load_task_prompt(
         "classify_archetype",
@@ -196,7 +211,7 @@ def classify_archetype(job: dict) -> dict:
         # routing binds to thesis tier semantics at cache-read price.
         # Credits-first with subscription-OAuth fallback — see
         # jobify.shared.llm.
-        text = llm.complete(
+        text, usage = llm.complete_with_usage(
             system=cached_system_blocks(),
             prompt=prompt,
             model=CLAUDE_MODEL,
@@ -209,7 +224,7 @@ def classify_archetype(job: dict) -> dict:
             "archetype": _fallback_key(archs),
             "confidence": 0.0,
             "reasoning": f"classifier error: {exc}",
-        }
+        }, _ZERO_USAGE
 
     key = (result.get("archetype") or "").strip()
     if key not in archs:
@@ -222,4 +237,24 @@ def classify_archetype(job: dict) -> dict:
         result["confidence"] = float(result.get("confidence") or 0.0)
     except (TypeError, ValueError):
         result["confidence"] = 0.0
+    return result, usage
+
+
+def classify_archetype(job: dict) -> dict:
+    """Classify a JD into one archetype key with a cheap Sonnet call.
+
+    Returns a dict {archetype, confidence, reasoning}. Falls back to
+    `tier_3_mission_ml` if the response can't be parsed or no
+    archetypes are configured.
+    """
+    result, _usage = _classify_archetype_call(job)
     return result
+
+
+def classify_archetype_with_usage(job: dict) -> tuple[dict, CompletionUsage]:
+    """Like `classify_archetype`, but also returns token usage for the
+    budget ledger (`jobify.db.insert_budget_ledger_row`) — Task 5b's hosted
+    worker. Honest zero usage on the branches that never call the LLM (see
+    `_classify_archetype_call`'s docstring). Same result shape and side
+    effects as `classify_archetype`."""
+    return _classify_archetype_call(job)

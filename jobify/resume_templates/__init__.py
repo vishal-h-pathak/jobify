@@ -95,7 +95,7 @@ BASE_TEMPLATE = r"""
 % Never put contact info in a real header/footer or an image — both break ATS.
 \begin{center}
 {%%NAMESIZE%% \textbf{<<NAME>>}} \\[4pt]
-\small <<EMAIL>> $\cdot$ <<LOCATION>> $\cdot$ \href{https://<<LINKEDIN>>}{<<LINKEDIN>>} $\cdot$ \href{https://<<WEBSITE>>}{<<WEBSITE>>}
+\small <<CONTACT_LINE>>
 \end{center}
 
 % ── Education & Skills ─────────────────────────────────────────────────────

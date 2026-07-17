@@ -233,7 +233,7 @@ def test_template_source_is_ats_safe(tid):
                 if pkg in ("fontspec", "helvet", "times", "mathptmx", "palatino"):
                     pytest.fail(f"{tid} pulls in non-standard font package {pkg!r}")
     # Shared body placeholders intact (so the tailor's renderer works).
-    for ph in ("<<NAME>>", "<<EMAIL>>", "<<EDU_AND_SKILLS>>", "<<EXPERIENCE_BLOCKS>>"):
+    for ph in ("<<NAME>>", "<<CONTACT_LINE>>", "<<EDU_AND_SKILLS>>", "<<EXPERIENCE_BLOCKS>>"):
         assert ph in src, f"{tid} missing body placeholder {ph}"
     # All typography tokens were filled (no leftover %%...%% markers).
     assert "%%" not in src, f"{tid} has an unfilled style token"

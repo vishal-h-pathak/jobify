@@ -29,6 +29,7 @@ from pathlib import Path
 from jobify import profile_loader
 from jobify.config import TAILOR_CLAUDE_MODEL as CLAUDE_MODEL
 from jobify.shared import llm
+from jobify.shared.llm import CompletionUsage
 from jobify.tailor.paths import CANDIDATE_PROFILE_PATH
 from prompts import cached_system_blocks, load_task_prompt
 from tailor.archetype import classify_archetype, render_archetype_block
@@ -394,6 +395,35 @@ def _build_experience_block(exp: dict) -> str:
     return "\n".join(lines)
 
 
+def _build_contact_line(identity: dict[str, str]) -> str:
+    """Join the present contact fields into one ``$\\cdot$``-separated line.
+
+    Owner decision (V3B session prompt binding): render what exists, never
+    a placeholder. Hosted profiles (V3a onboarding) only collect
+    name+email — no location/linkedin/website module exists — so a missing
+    field is simply omitted rather than leaving a stray ``$\\cdot$`` or an
+    empty ``\\href{https://}{}``. email/location are plain (escaped) text,
+    matching the template's prior per-field behavior; linkedin/website are
+    each wrapped in ``\\href{https://<value>}{<value>}`` only when present
+    (also matching prior behavior — those two fields were never run through
+    ``_escape_latex_safe``).
+    """
+    parts: list[str] = []
+    email = _escape_latex_safe(identity.get("email") or "")
+    if email:
+        parts.append(email)
+    location = _escape_latex_safe(identity.get("location") or "")
+    if location:
+        parts.append(location)
+    linkedin = identity.get("linkedin") or ""
+    if linkedin:
+        parts.append(f"\\href{{https://{linkedin}}}{{{linkedin}}}")
+    website = identity.get("website") or ""
+    if website:
+        parts.append(f"\\href{{https://{website}}}{{{website}}}")
+    return " $\\cdot$ ".join(parts)
+
+
 def _render_latex(tailored: dict, style: str = "classic") -> str:
     """Build the full LaTeX source for ``tailored`` in the chosen style.
 
@@ -404,10 +434,7 @@ def _render_latex(tailored: dict, style: str = "classic") -> str:
     identity = base_identity()
     latex = STYLES.get(style) or STYLES["classic"]
     latex = latex.replace("<<NAME>>", _escape_latex_safe(identity["name"]))
-    latex = latex.replace("<<EMAIL>>", _escape_latex_safe(identity["email"]))
-    latex = latex.replace("<<LOCATION>>", _escape_latex_safe(identity["location"]))
-    latex = latex.replace("<<LINKEDIN>>", identity["linkedin"])
-    latex = latex.replace("<<WEBSITE>>", identity["website"])
+    latex = latex.replace("<<CONTACT_LINE>>", _build_contact_line(identity))
 
     # Education + Skills, with a column width that adapts to the labels the
     # LLM picked (see _decide_skills_layout). ``skills_layout`` is optional.
@@ -615,17 +642,21 @@ def _fit_to_one_page(
     }
 
 
-def generate_tailored_latex(job: dict, tailoring: dict) -> dict:
-    """
-    Use Claude to select and reorder resume content for a specific job,
-    then compile to PDF.
+def _generate_tailored_latex_call(
+    job: dict, tailoring: dict,
+) -> tuple[dict, CompletionUsage]:
+    """Build the prompt, call the LLM, and parse the tailored-content JSON.
 
-    Args:
-        job: Dict with job details
-        tailoring: Output from tailor_resume() — emphasis_areas, keywords, etc.
+    Also resolves + stashes the archetype (``job["_archetype"]``) exactly as
+    the pre-refactor body did, so the compile stage (`_compile_tailored_latex`)
+    can read it back off the job dict for template selection without
+    re-classifying.
 
-    Returns:
-        Dict with latex_source, pdf_path, and compilation status.
+    Shared by `generate_tailored_latex` (text-only, existing callers) and
+    `generate_tailored_latex_with_usage` (H4 ledger — Task 5b's hosted
+    worker), so prompt construction + parsing stays the single source of
+    truth and only the return type forks. The compile/trim loop that follows
+    the LLM call is untouched — see `_compile_tailored_latex`.
     """
     job_title = job.get("title", "Unknown")
     company = job.get("company", "Unknown")
@@ -668,12 +699,13 @@ def generate_tailored_latex(job: dict, tailoring: dict) -> dict:
     # Session I: static rules + profile + voice ride in the cached
     # system prefix; only the per-job prompt above goes uncached.
     # Credits-first with subscription-OAuth fallback — see jobify.shared.llm.
-    response_text = llm.complete(
+    response_text, usage = llm.complete_with_usage(
         system=cached_system_blocks(),
         prompt=prompt,
         model=CLAUDE_MODEL,
         max_tokens=4000,
-    ).strip()
+    )
+    response_text = response_text.strip()
 
     # Parse JSON
     if "```json" in response_text:
@@ -682,6 +714,23 @@ def generate_tailored_latex(job: dict, tailoring: dict) -> dict:
         response_text = response_text.split("```")[1].split("```")[0]
 
     tailored = json.loads(response_text.strip())
+    return tailored, usage
+
+
+def _compile_tailored_latex(job: dict, tailored: dict) -> dict:
+    """Select the template, then build → compile → count → trim to one page.
+
+    Split out of `generate_tailored_latex` so the LLM-call-and-parse stage
+    (`_generate_tailored_latex_call`) can be shared with the
+    usage-returning sibling without duplicating this — untouched —
+    compile/trim logic. ``job["_archetype"]`` must already be stashed (the
+    LLM-call stage does this) so template selection can read it back.
+
+    Returns the same dict shape `generate_tailored_latex` has always
+    returned.
+    """
+    company = job.get("company", "Unknown")
+    archetype_meta = job.get("_archetype") or {}
 
     # ── Template selection: user's onboarding pick wins, else per-archetype ──
     style = _select_template(archetype_meta.get("archetype", ""))
@@ -734,3 +783,32 @@ def generate_tailored_latex(job: dict, tailoring: dict) -> dict:
         "style": style,
         "pages": fit["pages"],
     }
+
+
+def generate_tailored_latex(job: dict, tailoring: dict) -> dict:
+    """
+    Use Claude to select and reorder resume content for a specific job,
+    then compile to PDF.
+
+    Args:
+        job: Dict with job details
+        tailoring: Output from tailor_resume() — emphasis_areas, keywords, etc.
+
+    Returns:
+        Dict with latex_source, pdf_path, and compilation status.
+    """
+    tailored, _usage = _generate_tailored_latex_call(job, tailoring)
+    return _compile_tailored_latex(job, tailored)
+
+
+def generate_tailored_latex_with_usage(
+    job: dict, tailoring: dict,
+) -> tuple[dict, CompletionUsage]:
+    """Like `generate_tailored_latex`, but also returns token usage for the
+    budget ledger (`jobify.db.insert_budget_ledger_row`) — Task 5b's hosted
+    worker. Same return dict shape as `generate_tailored_latex`, alongside
+    the usage from the one LLM call this function makes (the trim/compile
+    loop that follows makes zero further LLM calls, so the usage is the
+    whole story here)."""
+    tailored, usage = _generate_tailored_latex_call(job, tailoring)
+    return _compile_tailored_latex(job, tailored), usage
