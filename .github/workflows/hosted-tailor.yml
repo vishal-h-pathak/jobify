@@ -80,11 +80,15 @@ jobs:
         # New vs. hosted-hunt.yml: the tailor worker renders both PDFs via
         # pdflatex (jobify.tailor.tailor.latex_resume /
         # jobify.tailor.tailor.cover_letter_pdf) — hunt never touches
-        # LaTeX. Cached by package-list hash so a change to the package
-        # list below invalidates the cache automatically.
+        # LaTeX. Package list cross-checked against tailor.yml's verified set:
+        # jobify/resume_templates/__init__.py's shared preamble uses
+        # \usepackage{enumitem} and \usepackage{titlesec}, both of which
+        # live in TeX Live's texlive-latex-extra, not texlive-latex-recommended.
+        # Cached by package-list hash so a change to the package list below
+        # invalidates the cache automatically.
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: texlive-latex-base texlive-latex-recommended texlive-fonts-recommended lmodern
+          packages: texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended lmodern
           version: 1.0
       - name: Install package
         run: pip install -e .
