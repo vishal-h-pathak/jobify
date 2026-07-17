@@ -7,6 +7,11 @@ import { Spinner } from "@/components/ui/Spinner";
 import { TAILOR_STAGES } from "@/components/tailor/types";
 import { interpretTailorResponse } from "@/app/(app)/feed/tailorOutcome";
 import type { PolledTailorRun } from "@/lib/tailor/pollRuns";
+import { ResumeView } from "@/components/tailor/ResumeView";
+import { CoverLetterView } from "@/components/tailor/CoverLetterView";
+import { HonestyDrawer } from "@/components/tailor/HonestyDrawer";
+import { TemplateSwitcher } from "@/components/tailor/TemplateSwitcher";
+import type { ClaimsJson, ClaimUnit } from "@/components/tailor/types";
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -93,6 +98,190 @@ function FailedPanel({ run, postingId, onRetried }: { run: PolledTailorRun; post
   );
 }
 
+/**
+ * Applies a local, in-memory edit: the *only* place `status:"user_edited"`
+ * is ever assigned in this app (there is no backend persistence route for
+ * it — see Global Constraints). Sources/numbers are cleared because an
+ * edited unit is the user's own assertion, not a sourced claim; keeping
+ * stale sources around would let a hover chip show a quote that no longer
+ * matches the displayed text.
+ */
+export function applyUserEdit(units: ClaimUnit[], id: string, newText: string): ClaimUnit[] {
+  return units.map((u) => {
+    if (u.id !== id) return u;
+    const { sources: _sources, numbers: _numbers, ...rest } = u;
+    return { ...rest, text: newText, status: "user_edited" as const };
+  });
+}
+
+interface Materials {
+  claims: ClaimsJson;
+  coverLetterText: string;
+  urls: Record<string, string>;
+}
+
+interface ResolvedMaterialUrls {
+  claimsUrl: string | undefined;
+  coverLetterTextUrl: string | undefined;
+  resumePdfUrl: string | undefined;
+  coverLetterPdfUrl: string | undefined;
+}
+
+/**
+ * Picks the 4 signed URLs the viewer actually consumes out of
+ * `GET /api/tailor/materials/[runId]`'s `{urls}` map (which may also
+ * contain `tailored.json`/`render_meta.json`, unused here). A pure
+ * projection so the "which storage key means what" mapping is unit-tested
+ * without mocking `fetch`.
+ */
+export function resolveMaterialUrls(urls: Record<string, string>): ResolvedMaterialUrls {
+  return {
+    claimsUrl: urls["claims.json"],
+    coverLetterTextUrl: urls["cover_letter.txt"],
+    resumePdfUrl: urls["resume.pdf"],
+    coverLetterPdfUrl: urls["cover_letter.pdf"],
+  };
+}
+
+function useMaterials(runId: string) {
+  const [materials, setMaterials] = useState<Materials | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      const res = await fetch(`/api/tailor/materials/${runId}`);
+      if (!res.ok) {
+        if (!cancelled) setError("Couldn't load your materials — try refreshing.");
+        return;
+      }
+      const { urls }: { urls: Record<string, string> } = await res.json();
+      const { claimsUrl, coverLetterTextUrl } = resolveMaterialUrls(urls);
+      if (!claimsUrl) {
+        if (!cancelled) setError("This run has no claims data.");
+        return;
+      }
+      const [claims, coverLetterText] = await Promise.all([
+        fetch(claimsUrl).then((r) => r.json() as Promise<ClaimsJson>),
+        coverLetterTextUrl ? fetch(coverLetterTextUrl).then((r) => r.text()) : Promise.resolve(""),
+      ]);
+      if (!cancelled) setMaterials({ claims, coverLetterText, urls });
+    }
+    load().catch(() => {
+      if (!cancelled) setError("Couldn't load your materials — try refreshing.");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [runId]);
+
+  return { materials, error };
+}
+
+function SucceededPanel({ run, postingId }: { run: PolledTailorRun; postingId: string }) {
+  const { materials, error } = useMaterials(run.id);
+  const [units, setUnits] = useState<ClaimUnit[] | null>(null);
+  const [confirmingRegenerate, setConfirmingRegenerate] = useState(false);
+  const [regenerateMessage, setRegenerateMessage] = useState<string | null>(null);
+  const [redirectRunId, setRedirectRunId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (materials) setUnits(materials.claims.units);
+  }, [materials]);
+
+  if (error) return <Banner tone="danger">{error}</Banner>;
+  if (!materials || !units) return <Spinner />;
+  const { resumePdfUrl, coverLetterPdfUrl } = resolveMaterialUrls(materials.urls);
+
+  if (redirectRunId) {
+    if (typeof window !== "undefined") {
+      window.location.href = `/tailor/${redirectRunId}?posting=${encodeURIComponent(postingId)}`;
+    }
+    return <Spinner />;
+  }
+
+  function editUnit(id: string, newText: string) {
+    setUnits((prev) => (prev ? applyUserEdit(prev, id, newText) : prev));
+  }
+
+  async function regenerate() {
+    setConfirmingRegenerate(false);
+    const res = await fetch("/api/tailor/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ posting_id: postingId, mode: "tailor" }),
+    });
+    const body = await res.json();
+    const outcome = interpretTailorResponse(res.status, body);
+    if (outcome.kind === "started") {
+      setRedirectRunId(outcome.runId);
+      return;
+    }
+    setRegenerateMessage(outcome.message);
+  }
+
+  return (
+    <div className="rail-sweep flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <TemplateSwitcher
+          postingId={postingId}
+          currentTemplate={run.template}
+          onRun={(outcome) => {
+            if (outcome.kind === "started") setRedirectRunId(outcome.runId);
+            else setRegenerateMessage(outcome.message);
+          }}
+        />
+        <div className="flex items-center gap-2">
+          {resumePdfUrl && (
+            <a href={resumePdfUrl} className="text-sm text-amber hover:text-amber-hover">
+              Download resume
+            </a>
+          )}
+          {coverLetterPdfUrl && (
+            <a href={coverLetterPdfUrl} className="text-sm text-amber hover:text-amber-hover">
+              Download letter
+            </a>
+          )}
+          <Button variant="ghost" onClick={() => navigator.clipboard.writeText(materials.coverLetterText)}>
+            Copy letter text
+          </Button>
+        </div>
+      </div>
+
+      <HonestyDrawer dropped={materials.claims.dropped} />
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <ResumeView units={units} onEdit={editUnit} />
+        <CoverLetterView units={units} onEdit={editUnit} />
+      </div>
+
+      <div className="flex flex-col items-start gap-2">
+        {confirmingRegenerate ? (
+          <Banner tone="warn" className="flex flex-col gap-2">
+            <p>
+              This re-runs the full tailor (archetype → resume → cover letter → verification → render), uses one of
+              your 5 daily tailors, and costs roughly $0.20–$0.35. Continue?
+            </p>
+            <div className="flex gap-2">
+              <Button variant="primary" onClick={regenerate}>
+                Regenerate
+              </Button>
+              <Button variant="ghost" onClick={() => setConfirmingRegenerate(false)}>
+                Cancel
+              </Button>
+            </div>
+          </Banner>
+        ) : (
+          <Button variant="secondary" onClick={() => setConfirmingRegenerate(true)}>
+            Regenerate
+          </Button>
+        )}
+        {regenerateMessage && <p className="text-xs text-ink-muted">{regenerateMessage}</p>}
+      </div>
+    </div>
+  );
+}
+
 export function TailorViewer({ runId, postingId }: { runId: string; postingId: string }) {
   const [activeRunId, setActiveRunId] = useState(runId);
   const [run, setRun] = useState<PolledTailorRun | null>(null);
@@ -147,6 +336,8 @@ export function TailorViewer({ runId, postingId }: { runId: string; postingId: s
     );
   }
 
-  // run.status === "succeeded" — succeeded-state content is added in Task 9.
+  if (run.status === "succeeded") {
+    return <SucceededPanel run={run} postingId={postingId} />;
+  }
   return null;
 }
