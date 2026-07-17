@@ -304,6 +304,57 @@ export interface Database {
         };
         Relationships: [];
       };
+      // V3B-S2 (0012_v3b_tailor.sql): one row per GHA tailor-worker
+      // invocation, keyed by `id` (the `run_id` the workflow_dispatch input
+      // carries) — the worker updates this exact row rather than the
+      // hunt_cycles pattern of inferring outcome after the fact. RLS: own-row
+      // SELECT only (polling); INSERT/UPDATE are service-role only — the web
+      // route inserts with the admin client before dispatch, and the worker
+      // updates via service role too.
+      tailor_runs: {
+        Row: {
+          id: string;
+          user_id: string;
+          posting_id: string;
+          status: "queued" | "running" | "succeeded" | "failed";
+          mode: "tailor" | "render";
+          template: string | null;
+          feedback: string | null;
+          progress: Array<{ step: string; label: string; at: string }>;
+          doc_sha256: string | null;
+          dropped_count: number | null;
+          error: string | null;
+          cost_usd: number | null;
+          created_at: string;
+          updated_at: string;
+        };
+        // Service-role only per the SQL's RLS comment — the web route
+        // inserts with the admin client before dispatch; status/progress/etc.
+        // all have DB defaults, id/created_at/updated_at are server-generated.
+        Insert: {
+          user_id: string;
+          posting_id: string;
+          mode?: "tailor" | "render";
+          template?: string | null;
+        };
+        // Web side (stale-reap + dispatch-failure paths) only ever writes
+        // status/error/updated_at; the worker's broader update surface
+        // (progress/dropped_count/cost_usd/...) is Python's concern, still
+        // typed here since Database is shared.
+        Update: {
+          status?: "queued" | "running" | "succeeded" | "failed";
+          mode?: "tailor" | "render";
+          template?: string | null;
+          feedback?: string | null;
+          progress?: Array<{ step: string; label: string; at: string }>;
+          doc_sha256?: string | null;
+          dropped_count?: number | null;
+          error?: string | null;
+          cost_usd?: number | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {

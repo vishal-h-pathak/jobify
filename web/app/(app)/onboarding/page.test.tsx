@@ -186,14 +186,75 @@ describe("handleUpload / validateUploadName", () => {
   });
 
   it("rejects a disallowed extension without reading it", async () => {
-    const file = new File(["binary"], "resume.pdf", { type: "application/pdf" });
+    const file = new File(["binary"], "resume.docx", { type: "application/octet-stream" });
     const textSpy = vi.spyOn(file, "text");
-    expect(await handleUpload(file)).toEqual({ ok: false, error: "Please upload a .txt or .md file." });
+    expect(await handleUpload(file)).toEqual({ ok: false, error: "Please upload a .pdf, .txt, or .md file." });
     expect(textSpy).not.toHaveBeenCalled();
   });
 
   it("accepts .md", () => {
     expect(validateUploadName("resume.md")).toBeNull();
+  });
+
+  it("accepts .pdf by name (extension check only — the route call itself is exercised below)", () => {
+    expect(validateUploadName("resume.pdf")).toBeNull();
+  });
+});
+
+describe("handleUpload — .pdf routes through /api/resume/extract (judgment call #8)", () => {
+  it("POSTs the file as multipart FormData under the 'file' field and returns the extracted text", async () => {
+    const file = new File(["%PDF-1.4 fake bytes"], "resume.pdf", { type: "application/pdf" });
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toBe("/api/resume/extract");
+      expect(init?.method).toBe("POST");
+      const body = init?.body as FormData;
+      expect(body.get("file")).toBe(file);
+      return fakeResponse({ ok: true, text: "extracted resume text" });
+    });
+    const result = await handleUpload(file, fetchMock as unknown as typeof fetch);
+    expect(result).toEqual({ ok: true, text: "extracted resume text" });
+  });
+
+  it("maps a 422 { ok: false, error } response to the same UploadResult shape as a client-side rejection", async () => {
+    const file = new File(["not really a pdf"], "resume.pdf", { type: "application/pdf" });
+    const fetchMock = vi.fn(async () =>
+      fakeResponse({ ok: false, error: "Couldn't read text in this PDF — paste it instead." }, false)
+    );
+    const result = await handleUpload(file, fetchMock as unknown as typeof fetch);
+    expect(result).toEqual({ ok: false, error: "Couldn't read text in this PDF — paste it instead." });
+  });
+
+  it("does not call the extract route for .txt/.md — those stay client-side unchanged", async () => {
+    const fetchMock = vi.fn();
+    const file = new File(["plain resume"], "resume.txt", { type: "text/plain" });
+    const result = await handleUpload(file, fetchMock as unknown as typeof fetch);
+    expect(result).toEqual({ ok: true, text: "plain resume" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleUpload -> upload_accepted -> state.input — spy test proving extracted PDF text reaches the exact same field pasted/.txt text does (the field submitTurn reads)", () => {
+  it("a .pdf upload's extracted text ends up in state.input via the same 'upload_accepted' action a .txt upload would dispatch", async () => {
+    const pdfFile = new File(["%PDF-1.4 fake bytes"], "resume.pdf", { type: "application/pdf" });
+    const fetchMock = vi.fn(async () => fakeResponse({ ok: true, text: "PDF-extracted resume body" }));
+
+    const result = await handleUpload(pdfFile, fetchMock as unknown as typeof fetch);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok result");
+
+    // This mirrors exactly what handleFile (page.tsx) does with handleUpload's
+    // result for every extension, including .txt — proving the .pdf path
+    // feeds the identical reducer action, and therefore the identical
+    // `state.input` field that `handleSend`/`submitTurn` read, as a pasted
+    // or .txt-uploaded resume would.
+    const next = onboardingReducer(initialOnboardingState, {
+      type: "upload_accepted",
+      fileName: pdfFile.name,
+      text: result.text,
+    });
+    expect(next.input).toBe("PDF-extracted resume body");
+    expect(next.fileName).toBe("resume.pdf");
+    expect(next.uploadError).toBeNull();
   });
 });
 
