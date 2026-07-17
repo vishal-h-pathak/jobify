@@ -39,6 +39,7 @@ echo "== [1/2] identifier scan (text, all extensions) =="
 hits=$(grep -rEIl -i "$PATTERN" . \
   --exclude-dir=.git \
   --exclude-dir=node_modules \
+  --exclude-dir=.next \
   --exclude-dir=onboarding/examples \
   --exclude-dir=profile.example \
   --exclude-dir=planning \
