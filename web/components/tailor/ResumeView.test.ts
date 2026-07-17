@@ -79,4 +79,77 @@ describe("groupResumeUnits", () => {
     expect(grouped.experience).toHaveLength(1);
     expect(grouped.skills).toHaveLength(1);
   });
+
+  it("orders bullets by parsed numeric id, not by array/encounter position, even with a gap from a dropped bullet", () => {
+    // b1 is intentionally absent (simulates a bullet the verifier dropped),
+    // and b2 is placed BEFORE b0 in the array. A naive encounter-order
+    // implementation would emit ["r.exp0.b2", "r.exp0.b0"]; only an
+    // id-parsing sort produces ascending numeric order.
+    const header: ClaimUnit = {
+      id: "r.exp0.header",
+      surface: "resume",
+      kind: "header",
+      fields: { org: "Acme Corp", title: "Senior PM", location: "Remote", period: "2022–Present" },
+      status: "verified",
+    };
+    const b2: ClaimUnit = {
+      id: "r.exp0.b2",
+      surface: "resume",
+      kind: "bullet",
+      text: "Ran quarterly planning across three product pods.",
+      status: "verified",
+    };
+    const b0: ClaimUnit = {
+      id: "r.exp0.b0",
+      surface: "resume",
+      kind: "bullet",
+      text: "Shipped a self-serve onboarding flow.",
+      status: "verified",
+    };
+    const grouped = groupResumeUnits([b2, header, b0]);
+    expect(grouped.experience).toHaveLength(1);
+    expect(grouped.experience[0].bullets.map((b) => b.id)).toEqual(["r.exp0.b0", "r.exp0.b2"]);
+  });
+
+  it("returns empty sections for an empty units array", () => {
+    const grouped = groupResumeUnits([]);
+    expect(grouped).toEqual({ experience: [], education: [], skills: [], summary: null });
+  });
+
+  it("last unit wins when two units share the same id (Map keyed by parsed index)", () => {
+    const firstHeader: ClaimUnit = {
+      id: "r.exp0.header",
+      surface: "resume",
+      kind: "header",
+      fields: { org: "Acme Corp", title: "Senior PM", location: "Remote", period: "2022–Present" },
+      status: "verified",
+    };
+    const secondHeader: ClaimUnit = {
+      id: "r.exp0.header",
+      surface: "resume",
+      kind: "header",
+      fields: { org: "Globex Inc", title: "Staff PM", location: "Hybrid", period: "2023–Present" },
+      status: "verified",
+    };
+    const grouped = groupResumeUnits([firstHeader, secondHeader]);
+    expect(grouped.experience).toHaveLength(1);
+    expect(grouped.experience[0].header).toBe(secondHeader);
+    expect(grouped.experience[0].header?.fields?.org).toBe("Globex Inc");
+  });
+
+  it("silently excludes a resume unit whose id matches none of the known patterns, from every section", () => {
+    const unknownUnit: ClaimUnit = {
+      id: "r.something.weird",
+      surface: "resume",
+      kind: "voice",
+      text: "unrecognized id shape",
+      status: "verified",
+    };
+    const grouped = groupResumeUnits([...ALEX_QUINN_UNITS, unknownUnit]);
+    expect(grouped.experience).toHaveLength(1);
+    expect(grouped.experience[0].bullets.map((b) => b.id)).toEqual(["r.exp0.b0", "r.exp0.b1"]);
+    expect(grouped.education.map((e) => e.id)).toEqual(["r.edu0"]);
+    expect(grouped.skills.map((s) => s.id)).toEqual(["r.skill0"]);
+    expect(grouped.summary?.id).toBe("r.summary");
+  });
 });
