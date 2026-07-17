@@ -107,6 +107,7 @@ from pathlib import Path  # noqa: E402
 from typing import Any, Optional  # noqa: E402
 
 from jobify import config, db  # noqa: E402
+from jobify import profile_loader  # noqa: E402
 from jobify.hosted.keycrypt import KeyDecryptionError, decrypt_key  # noqa: E402
 from jobify.profile_loader import (  # noqa: E402
     load_article_digest,
@@ -668,6 +669,19 @@ def _run_pipeline(run: dict) -> None:
     # profile_loader.load_profile(), the zero-arg process-global path).
     profile_dir = materialize_profile_dir(user_id)
     os.environ["JOBIFY_PROFILE_DIR"] = str(profile_dir)
+    # CRITICAL: clear the zero-arg process-global cache. `profile_dir()`
+    # (jobify.profile_loader) is `@lru_cache(maxsize=1)` and gets populated
+    # at IMPORT TIME — this module's own `from tailor import resume as
+    # resume_mod` import runs resume.py's top-level `cv_sync_check.warn_if_drift()`,
+    # which calls the zero-arg `profile_loader.load_cv()` and caches
+    # whatever JOBIFY_PROFILE_DIR resolved to at THAT time (unset -> the
+    # repo fallback, or a stale dir from a prior process). Every subsequent
+    # zero-arg profile read in the tailor subtree (base_identity(),
+    # cached_system_blocks(), _letterhead(), ...) would otherwise keep
+    # returning that stale/wrong-persona dir even after the env var above
+    # is updated for THIS run's user. Clearing here forces the next
+    # zero-arg call to re-resolve from the just-set env var.
+    profile_loader.profile_dir.cache_clear()
 
     if (run.get("mode") or "tailor") == "render":
         _run_render_mode(run, storage_prefix)

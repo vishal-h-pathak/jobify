@@ -37,10 +37,13 @@ with a small "Alex Quinn"-style fixture using the REAL hosted
 from __future__ import annotations
 
 import json
+import shutil
+from pathlib import Path
 
 import pytest
 
 from jobify import db
+from jobify import profile_loader
 from jobify.hosted import tailoring
 from jobify.shared import llm
 from jobify.shared import storage as storage_mod
@@ -278,6 +281,100 @@ def _install_common(tmp_profile, monkeypatch, *, posting=None):
     monkeypatch.setattr(db, "get_postings_by_ids", lambda ids: [posting or _posting()])
     monkeypatch.setattr(latex_mod, "_compile_and_count_factory", _fake_compile_ok)
     return d
+
+
+# ── Profile cache leak regression (Critical review fix) ─────────────────────
+#
+# `jobify.profile_loader.profile_dir()` is `@lru_cache(maxsize=1)` and gets
+# populated by ANY zero-arg profile read — including the import-time one
+# this module's own `from tailor import resume as resume_mod` import
+# triggers via `resume.py`'s top-level `cv_sync_check.warn_if_drift()` ->
+# `profile_loader.load_cv()`. If `_run_pipeline` sets `JOBIFY_PROFILE_DIR`
+# for the dispatched user WITHOUT clearing that cache, every zero-arg
+# profile read downstream (`base_identity()`, `cached_system_blocks()`,
+# `_letterhead()`) keeps returning whatever directory got cached FIRST —
+# risking one user's resume/cover-letter identity being generated under a
+# DIFFERENT (stale or prior) user's persona. The fix clears
+# `profile_loader.profile_dir`'s cache right after `_run_pipeline` sets the
+# env var for this run's user.
+
+
+def test_run_pipeline_does_not_leak_a_stale_cached_profile_across_users(
+    tmp_profile, tmp_path, monkeypatch
+):
+    # Step 1: simulate the import-time pre-population of profile_dir()'s
+    # process-global lru_cache with the WRONG persona ("Profile A") — this
+    # stands in for a zero-arg profile read that happened before this run's
+    # own profile materialization (e.g. at module import time, or a prior
+    # run in the same worker process).
+    tmp_profile(overrides={
+        "profile.yml": (
+            "identity:\n"
+            "  name: Profile A (stale, WRONG persona)\n"
+            "  email: a@example.invalid\n"
+        ),
+    })
+    stale = profile_loader.load_profile()  # zero-arg — primes the lru_cache to A
+    assert stale["identity"]["name"] == "Profile A (stale, WRONG persona)"
+
+    # Step 2: build a genuinely SEPARATE directory for "Profile B" — the
+    # profile this run is actually dispatched for. Must be a distinct path
+    # on disk: re-writing files at the SAME path tmp_profile() already used
+    # would still resolve correctly even with a stale cache (the cache
+    # holds a Path, not file contents), so that would not reproduce the bug.
+    fixtures_profile_dir = Path(__file__).resolve().parent / "fixtures" / "profile"
+    profile_b_dir = tmp_path / "profile_b_dispatched_user"
+    shutil.copytree(fixtures_profile_dir, profile_b_dir)
+    (profile_b_dir / "profile.yml").write_text(
+        "identity:\n"
+        "  name: Profile B (correct, dispatched persona)\n"
+        "  email: b@example.invalid\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(tailoring, "materialize_profile_dir", lambda user_id: profile_b_dir)
+    monkeypatch.setattr(db, "get_postings_by_ids", lambda ids: [_posting()])
+    monkeypatch.setattr(latex_mod, "_compile_and_count_factory", _fake_compile_ok)
+
+    def _boom_llm(**kwargs):
+        raise AssertionError("mode=render must never call the LLM")
+    monkeypatch.setattr(llm, "complete_with_usage", _boom_llm)
+
+    seed_tailored = {
+        "skills": {"Core": "Python, Kubernetes"},
+        "skills_layout": "auto",
+        "experience": [],
+        "education": [],
+        "summary_line": None,
+    }
+    seed_claims = {"version": 1, "doc_sha256": "cafef00d", "units": [], "dropped": []}
+    seed = {
+        "user-leak/posting-1/tailored.json": json.dumps(seed_tailored).encode("utf-8"),
+        "user-leak/posting-1/claims.json": json.dumps(seed_claims).encode("utf-8"),
+        "user-leak/posting-1/render_meta.json": json.dumps({"style": "classic", "pages": 1}).encode("utf-8"),
+        "user-leak/posting-1/cover_letter.txt": "Hi team, thanks for your consideration.".encode("utf-8"),
+    }
+    fake_storage = _FakeStorage(seed=seed)
+    fake_storage.install(monkeypatch)
+
+    run_store = _RunStore({
+        "id": "run-leak", "user_id": "user-leak", "posting_id": "posting-1",
+        "mode": "render", "status": "queued", "template": None, "progress": [],
+    })
+    run_store.install(monkeypatch)
+
+    tailoring._execute("run-leak")
+
+    assert run_store.run["status"] == "succeeded"
+
+    # The proof: a FRESH zero-arg profile read, taken AFTER the pipeline
+    # ran, must now resolve to Profile B (the dispatched user) — not the
+    # STALE Profile A cached before this run started. Pre-fix,
+    # `_run_pipeline` sets JOBIFY_PROFILE_DIR to profile B's dir but never
+    # clears profile_dir()'s lru_cache, so this would still return A.
+    fresh_identity = latex_mod.base_identity()
+    assert fresh_identity["name"] == "Profile B (correct, dispatched persona)"
+    assert fresh_identity["name"] != "Profile A (stale, WRONG persona)"
 
 
 # ── Happy path ────────────────────────────────────────────────────────────
