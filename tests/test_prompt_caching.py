@@ -289,3 +289,22 @@ def test_classifier_with_usage_is_zero_when_no_archetypes_configured(monkeypatch
 
     assert result["archetype"] == ""
     assert usage == llm.CompletionUsage(input_tokens=0, output_tokens=0)
+
+
+def test_classifier_with_usage_preserves_real_usage_on_parse_failure(monkeypatch):
+    """The LLM call can succeed (and spend real tokens) while the response
+    text is malformed/unparseable JSON. That's a downstream parse failure,
+    not a failed call — the usage already in hand must be reported, not
+    thrown away as _ZERO_USAGE, or a budget-ledger row off this value would
+    under-report real spend."""
+    fake = _FakeClientWithUsage(
+        "not json at all — no braces here", input_tokens=77, output_tokens=13,
+    )
+    _patch_api_client(monkeypatch, fake)
+    job = _job()
+    job.pop("_archetype")
+    result, usage = archetype_mod.classify_archetype_with_usage(job)
+
+    assert usage == llm.CompletionUsage(input_tokens=77, output_tokens=13)
+    assert usage != llm.CompletionUsage(input_tokens=0, output_tokens=0)
+    assert "classifier error" in result["reasoning"]

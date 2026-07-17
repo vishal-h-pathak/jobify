@@ -157,8 +157,10 @@ def _extract_json(text: str) -> dict:
 
 
 # Zero-usage sentinel for the branches below that never call the LLM (no
-# archetypes configured, tier-1.5 deterministic fast-path) and for the
-# classifier-error fallback, where no confirmed usage exists to report.
+# archetypes configured, tier-1.5 deterministic fast-path) and for an
+# LLM-call failure, where no confirmed usage exists to report. A parse
+# failure AFTER a successful call reports the real usage instead — see
+# `_classify_archetype_call`.
 _ZERO_USAGE = CompletionUsage(input_tokens=0, output_tokens=0)
 
 
@@ -168,9 +170,12 @@ def _classify_archetype_call(job: dict) -> tuple[dict, CompletionUsage]:
     Returns (result, usage) — result is a dict {archetype, confidence,
     reasoning}, falling back to the profile's fallback lane if the response
     can't be parsed or no archetypes are configured. usage is honestly zero
-    on every branch that never calls the LLM (no archetypes configured, the
-    tier-1.5 deterministic fast-path, or a classifier error before a usable
-    response).
+    on the branches that never call the LLM (no archetypes configured, the
+    tier-1.5 deterministic fast-path) and on an LLM-call failure (the call
+    itself never returned a usage). If the call succeeds but the response
+    can't be parsed into JSON, the real usage from that successful call is
+    still returned alongside the fallback result — the tokens were spent
+    either way.
 
     Shared by `classify_archetype` (text-only, existing callers) and
     `classify_archetype_with_usage` (H4 ledger — Task 5b's hosted worker),
@@ -217,7 +222,6 @@ def _classify_archetype_call(job: dict) -> tuple[dict, CompletionUsage]:
             model=CLAUDE_MODEL,
             max_tokens=300,
         )
-        result = _extract_json(text)
     except Exception as exc:
         logger.warning("archetype classify failed: %s — falling back", exc)
         return {
@@ -225,6 +229,20 @@ def _classify_archetype_call(job: dict) -> tuple[dict, CompletionUsage]:
             "confidence": 0.0,
             "reasoning": f"classifier error: {exc}",
         }, _ZERO_USAGE
+
+    try:
+        result = _extract_json(text)
+    except Exception as exc:
+        # The LLM call itself succeeded — `usage` above is real, non-zero
+        # spend. A parse failure here is a downstream formatting problem,
+        # not a failed call, so report the tokens that were actually
+        # burned instead of masking them with the zero sentinel.
+        logger.warning("archetype classify failed: %s — falling back", exc)
+        return {
+            "archetype": _fallback_key(archs),
+            "confidence": 0.0,
+            "reasoning": f"classifier error: {exc}",
+        }, usage
 
     key = (result.get("archetype") or "").strip()
     if key not in archs:
