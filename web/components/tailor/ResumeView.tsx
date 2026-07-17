@@ -186,7 +186,7 @@ export function ResumeView({ units, onEdit }: { units: ClaimUnit[]; onEdit?: (id
           {sections.education.map((edu) => (
             <div key={edu.id} className="flex items-baseline justify-between gap-3 text-sm text-ink">
               <span>
-                {edu.fields?.school} — {edu.fields?.degree} <SourceChip unit={edu} />
+                {edu.fields?.school} — {edu.fields?.degree}
               </span>
               <span className="text-xs text-ink-muted">{edu.fields?.period}</span>
             </div>

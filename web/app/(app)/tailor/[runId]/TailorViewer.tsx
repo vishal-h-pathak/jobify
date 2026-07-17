@@ -189,14 +189,17 @@ function SucceededPanel({ run, postingId }: { run: PolledTailorRun; postingId: s
     if (materials) setUnits(materials.claims.units);
   }, [materials]);
 
+  useEffect(() => {
+    if (redirectRunId && typeof window !== "undefined") {
+      window.location.href = `/tailor/${redirectRunId}?posting=${encodeURIComponent(postingId)}`;
+    }
+  }, [redirectRunId, postingId]);
+
   if (error) return <Banner tone="danger">{error}</Banner>;
   if (!materials || !units) return <Spinner />;
   const { resumePdfUrl, coverLetterPdfUrl } = resolveMaterialUrls(materials.urls);
 
   if (redirectRunId) {
-    if (typeof window !== "undefined") {
-      window.location.href = `/tailor/${redirectRunId}?posting=${encodeURIComponent(postingId)}`;
-    }
     return <Spinner />;
   }
 
