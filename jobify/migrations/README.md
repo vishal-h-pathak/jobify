@@ -183,4 +183,3 @@ pool cap, BYO bypass), the BYO key encryption format, and the
 
 Apply it the same way as `0001`-`0005` (SQL Editor / `supabase db push` /
 `apply_migration`), after `0005` is already applied.
-
