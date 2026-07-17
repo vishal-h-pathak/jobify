@@ -71,6 +71,42 @@ class _FakeClient:
         self.messages = _Messages()
 
 
+# ── `*_with_usage` siblings (V3B Task 5a — H4 ledger) ────────────────────────
+#
+# `tailor_resume`, `generate_tailored_latex`, `generate_cover_letter`, and
+# `classify_archetype` each gained a `*_with_usage` sibling that shares the
+# exact same prompt-build + parse helper and only forks the return type to
+# also surface `CompletionUsage` (for `jobify.db.insert_budget_ledger_row`,
+# Task 5b). These pin: same result shape as the plain function, and a
+# non-fake usage matching what the fake client's `.usage` carried.
+
+
+class _FakeUsage:
+    def __init__(self, input_tokens: int, output_tokens: int):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
+class _FakeClientWithUsage:
+    """Like `_FakeClient`, but the canned response also carries `.usage`."""
+
+    def __init__(self, response_text: str, input_tokens: int, output_tokens: int):
+        self.sent: list[dict] = []
+        outer = self
+
+        class _Messages:
+            def create(self, **kwargs):
+                outer.sent.append(kwargs)
+
+                class _Resp:
+                    content = [_FakeBlock(response_text)]
+                    usage = _FakeUsage(input_tokens, output_tokens)
+
+                return _Resp()
+
+        self.messages = _Messages()
+
+
 def test_cached_system_blocks_shape():
     blocks = tailor_prompts.cached_system_blocks()
     assert len(blocks) == 1
@@ -154,3 +190,121 @@ def test_prefix_is_big_enough_to_cache():
     """
     text = tailor_prompts.cached_system_blocks()[0]["text"]
     assert len(text) / 4 > 1024
+
+
+def test_tailor_resume_with_usage_matches_plain_and_returns_real_usage(monkeypatch):
+    fake = _FakeClientWithUsage(
+        '{"tailored_summary": "x", "emphasis_areas": []}',
+        input_tokens=111, output_tokens=22,
+    )
+    _patch_api_client(monkeypatch, fake)
+    result, usage = resume_mod.tailor_resume_with_usage(_job())
+
+    assert usage == llm.CompletionUsage(input_tokens=111, output_tokens=22)
+    # Same result shape as the plain function.
+    fake_plain = _FakeClientWithUsage(
+        '{"tailored_summary": "x", "emphasis_areas": []}',
+        input_tokens=111, output_tokens=22,
+    )
+    _patch_api_client(monkeypatch, fake_plain)
+    plain_result = resume_mod.tailor_resume(_job())
+    assert result["tailored_summary"] == plain_result["tailored_summary"]
+    assert result["_archetype"] == plain_result["_archetype"]
+
+
+def test_cover_letter_with_usage_matches_plain_and_returns_real_usage(monkeypatch):
+    fake = _FakeClientWithUsage(
+        "A cover letter body.", input_tokens=200, output_tokens=80,
+    )
+    _patch_api_client(monkeypatch, fake)
+    result, usage = cl_mod.generate_cover_letter_with_usage(_job())
+
+    assert result == {"cover_letter": "A cover letter body."}
+    assert usage == llm.CompletionUsage(input_tokens=200, output_tokens=80)
+    # Same result shape as the plain function.
+    fake_plain = _FakeClientWithUsage(
+        "A cover letter body.", input_tokens=200, output_tokens=80,
+    )
+    _patch_api_client(monkeypatch, fake_plain)
+    assert cl_mod.generate_cover_letter(_job()) == result
+
+
+def test_latex_resume_with_usage_matches_plain_and_returns_real_usage(monkeypatch):
+    from tailor import latex_resume as latex_mod
+
+    fake = _FakeClientWithUsage(
+        '{"skills": {}, "experience": []}', input_tokens=321, output_tokens=64,
+    )
+    _patch_api_client(monkeypatch, fake)
+    result, usage = latex_mod.generate_tailored_latex_with_usage(
+        _job(), {"_archetype": dict(_ARCHETYPE_STUB)}
+    )
+
+    assert "latex_source" in result
+    assert usage == llm.CompletionUsage(input_tokens=321, output_tokens=64)
+    # Same result shape as the plain function.
+    fake_plain = _FakeClientWithUsage(
+        '{"skills": {}, "experience": []}', input_tokens=321, output_tokens=64,
+    )
+    _patch_api_client(monkeypatch, fake_plain)
+    plain_result = latex_mod.generate_tailored_latex(
+        _job(), {"_archetype": dict(_ARCHETYPE_STUB)}
+    )
+    assert set(result.keys()) == set(plain_result.keys())
+
+
+def test_classifier_with_usage_matches_plain_and_returns_real_usage(monkeypatch):
+    # "developer_facing" is a real archetype key in the shipped example
+    # profile (unlike test_tailor_thesis.py's `tier_1a_compneuro` stub,
+    # which is only ever pre-stashed and never round-tripped through the
+    # classifier's own archetype-key validation).
+    fake = _FakeClientWithUsage(
+        '{"archetype": "developer_facing", "confidence": 0.8, "reasoning": "x"}',
+        input_tokens=50, output_tokens=10,
+    )
+    _patch_api_client(monkeypatch, fake)
+    job = _job()
+    job.pop("_archetype")
+    result, usage = archetype_mod.classify_archetype_with_usage(job)
+
+    assert result["archetype"] == "developer_facing"
+    assert usage == llm.CompletionUsage(input_tokens=50, output_tokens=10)
+    # Same result shape as the plain function.
+    fake_plain = _FakeClientWithUsage(
+        '{"archetype": "developer_facing", "confidence": 0.8, "reasoning": "x"}',
+        input_tokens=50, output_tokens=10,
+    )
+    _patch_api_client(monkeypatch, fake_plain)
+    job2 = _job()
+    job2.pop("_archetype")
+    plain_result = archetype_mod.classify_archetype(job2)
+    assert result["archetype"] == plain_result["archetype"]
+
+
+def test_classifier_with_usage_is_zero_when_no_archetypes_configured(monkeypatch):
+    """The no-LLM-call fallback branch reports honest zero usage — no
+    ledger row should even be written by a caller in that case."""
+    monkeypatch.setattr(archetype_mod, "_load_archetypes", lambda: {})
+    result, usage = archetype_mod.classify_archetype_with_usage({"title": "x"})
+
+    assert result["archetype"] == ""
+    assert usage == llm.CompletionUsage(input_tokens=0, output_tokens=0)
+
+
+def test_classifier_with_usage_preserves_real_usage_on_parse_failure(monkeypatch):
+    """The LLM call can succeed (and spend real tokens) while the response
+    text is malformed/unparseable JSON. That's a downstream parse failure,
+    not a failed call — the usage already in hand must be reported, not
+    thrown away as _ZERO_USAGE, or a budget-ledger row off this value would
+    under-report real spend."""
+    fake = _FakeClientWithUsage(
+        "not json at all — no braces here", input_tokens=77, output_tokens=13,
+    )
+    _patch_api_client(monkeypatch, fake)
+    job = _job()
+    job.pop("_archetype")
+    result, usage = archetype_mod.classify_archetype_with_usage(job)
+
+    assert usage == llm.CompletionUsage(input_tokens=77, output_tokens=13)
+    assert usage != llm.CompletionUsage(input_tokens=0, output_tokens=0)
+    assert "classifier error" in result["reasoning"]

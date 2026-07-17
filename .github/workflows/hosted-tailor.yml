@@ -1,0 +1,119 @@
+name: hosted-tailor
+
+# OPT-IN on a fork, same posture as hosted-hunt.yml. Nothing runs until you
+# add the repository secrets read below. NO NEW SECRETS beyond what
+# hosted-hunt.yml already requires (see the `env:` block below) — this
+# workflow trims the hunt-only ones (VOYAGE_API_KEY / SERPAPI_KEY /
+# JSEARCH_API_KEY) rather than adding anything.
+#
+# This is the V3B-S1 hosted tailor worker: one dispatch = one
+# `tailor_runs` row = one user (jobify.hosted.tailoring.run(), wired as
+# the `jobify-hosted-tailor` console script). Unlike hosted-hunt.yml,
+# this workflow is `workflow_dispatch`-only — no `schedule:` block —
+# because a tailor run only ever happens in response to a specific user
+# action (the "Tailor this" click) that the web app dispatches with a
+# `run_id` it already inserted into `tailor_runs`. There is no
+# "run everyone" or cron-driven mode here the way hunt has one.
+#
+# Inputs: all 5 (`user_id`, `posting_id`, `run_id`, `mode`, `template`)
+# are DECLARED for GHA UI visibility/audit-trail — a human triggering
+# this manually via the Actions tab can see/set what's being dispatched,
+# and the web route's dispatch payload (a parallel session's concern)
+# gets a stable input contract to POST against — but the run step below
+# only actually CONSUMES `run_id`. `jobify.hosted.tailoring.run()`'s
+# argparse only reads `--run <run_id>`; the worker reads user_id,
+# posting_id, mode, and template off the `tailor_runs` row itself via
+# `db.get_tailor_run(run_id)`, not from these workflow inputs. So only
+# `run_id` is strictly required; the rest are optional and unused by the
+# script, on purpose.
+#
+# Full required-secrets list lives in docs/OPERATIONS.md — this header
+# only calls out the ones worth a second look; see the inline comments
+# on each `env:` entry below for what's required vs optional.
+
+on:
+  workflow_dispatch:
+    inputs:
+      user_id:
+        description: "User (uuid) this run belongs to. Not read by the worker directly — see header comment; declared for UI visibility/audit-trail."
+        required: false
+        type: string
+      posting_id:
+        description: "Posting (text id) this run is tailoring against. Not read by the worker directly — see header comment; declared for UI visibility/audit-trail."
+        required: false
+        type: string
+      run_id:
+        description: "tailor_runs.id to execute — the only input the console script (--run) actually consumes."
+        required: true
+        type: string
+      mode:
+        description: "tailor_runs.mode: 'tailor' (full 5-LLM-call pipeline) or 'render' (zero-LLM PDF re-render). Not read by the worker directly — it reads the tailor_runs row's own `mode` column via db.get_tailor_run(run_id); declared here for UI visibility/audit-trail."
+        required: false
+        type: string
+      template:
+        description: "Optional resume template id override (tailor_runs.template is nullable). Not read by the worker directly — see header comment; declared for UI visibility/audit-trail."
+        required: false
+        type: string
+
+jobs:
+  hosted-tailor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Claude Code CLI (for OAuth fallback)
+        # jobify.hosted.tailoring's 5 LLM call sites (archetype, resume,
+        # LaTeX, cover letter, claim attribution) route through
+        # jobify.shared.llm, same as the single-user tailor and the hosted
+        # hunt's fan-out scorer — it falls back to the Claude Agent SDK
+        # under Max-plan OAuth when ANTHROPIC_API_KEY is absent or benched
+        # by a billing/credit failure. The SDK spawns the bundled Claude
+        # Code CLI as a subprocess, so it must be on PATH. No-op for the
+        # API path — only invoked when the fallback fires.
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Install LaTeX (pdflatex for resume/cover-letter rendering)
+        # New vs. hosted-hunt.yml: the tailor worker renders both PDFs via
+        # pdflatex (jobify.tailor.tailor.latex_resume /
+        # jobify.tailor.tailor.cover_letter_pdf) — hunt never touches
+        # LaTeX. Package list cross-checked against tailor.yml's verified set:
+        # jobify/resume_templates/__init__.py's shared preamble uses
+        # \usepackage{enumitem} and \usepackage{titlesec}, both of which
+        # live in TeX Live's texlive-latex-extra, not texlive-latex-recommended.
+        # Cached by package-list hash so a change to the package list below
+        # invalidates the cache automatically.
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended lmodern
+          version: 1.0
+      - name: Install package
+        run: pip install -e .
+      - name: Hosted tailor
+        env:
+          # The validation gate imports `onboarding.validate_profile`, which
+          # is NOT part of the installed package (see repo-root conftest.py).
+          # Console scripts don't put the CWD on sys.path, so without this
+          # the import fails SILENTLY and profiles are never validation-gated.
+          # jobify.hosted.tailoring calls materialize_profile_dir(), which
+          # routes through the same gate — same reason this is needed here.
+          PYTHONPATH: ${{ github.workspace }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Max-plan OAuth fallback (jobify.shared.llm). Used only when
+          # ANTHROPIC_API_KEY is unset or has been benched by a
+          # billing/credit/auth failure. Safe to leave empty if not
+          # configured — the API path stays primary.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # jobify.hosted.keycrypt — decrypts BYO Anthropic keys pasted
+          # in the settings UI (H6) for jobify.hosted.tailoring to use.
+          # Required once any user has pasted a BYO key; safe to leave
+          # unset otherwise — a decrypt failure degrades to the
+          # pool-with-caps path rather than crashing the run.
+          JOBIFY_KEY_ENCRYPTION_SECRET: ${{ secrets.JOBIFY_KEY_ENCRYPTION_SECRET }}
+        run: |
+          jobify-hosted-tailor --run "${{ github.event.inputs.run_id }}"

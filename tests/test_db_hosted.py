@@ -779,3 +779,137 @@ def test_insert_hunt_cycle_row_error_row(patch_db_client):
 
     _, q = fake.queries[-1]
     assert q.insert_payload["error"] == "discovery phase blew up"
+
+
+# ── tailor_runs (V3b Task 4) ──────────────────────────────────────────────
+
+
+def test_get_tailor_run_returns_stored_row(patch_db_client):
+    row = {"id": "run-1", "status": "queued", "progress": []}
+    fake = _FakeClient({"tailor_runs": [row]})
+    patch_db_client(fake)
+
+    assert db.get_tailor_run("run-1") == row
+
+
+def test_get_tailor_run_none_when_missing(patch_db_client):
+    fake = _FakeClient({"tailor_runs": []})
+    patch_db_client(fake)
+
+    assert db.get_tailor_run("run-1") is None
+
+
+def test_mark_tailor_run_running_writes_status_and_bumps_updated_at(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.mark_tailor_run_running("run-1")
+
+    name, q = fake.queries[-1]
+    assert name == "tailor_runs"
+    assert q.update_payload["status"] == "running"
+    assert "updated_at" in q.update_payload
+    assert set(q.update_payload) == {"status", "updated_at"}
+    assert q.eq_calls == [("id", "run-1")]
+
+
+def test_mark_tailor_run_succeeded_writes_expected_columns(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.mark_tailor_run_succeeded(
+        "run-1", dropped_count=2, cost_usd=0.0456, doc_sha256="deadbeef"
+    )
+
+    name, q = fake.queries[-1]
+    assert name == "tailor_runs"
+    assert q.update_payload["status"] == "succeeded"
+    assert q.update_payload["dropped_count"] == 2
+    assert q.update_payload["cost_usd"] == 0.0456
+    assert q.update_payload["doc_sha256"] == "deadbeef"
+    assert "updated_at" in q.update_payload
+    assert set(q.update_payload) == {
+        "status", "dropped_count", "cost_usd", "doc_sha256", "updated_at",
+    }
+    assert q.eq_calls == [("id", "run-1")]
+
+
+def test_mark_tailor_run_failed_writes_error_and_status(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.mark_tailor_run_failed("run-1", "pdflatex exited 1")
+
+    name, q = fake.queries[-1]
+    assert name == "tailor_runs"
+    assert q.update_payload["status"] == "failed"
+    assert q.update_payload["error"] == "pdflatex exited 1"
+    assert "updated_at" in q.update_payload
+    assert set(q.update_payload) == {"status", "error", "updated_at"}
+    assert q.eq_calls == [("id", "run-1")]
+
+
+def test_append_tailor_run_progress_writes_one_entry_with_step_label_at(patch_db_client):
+    fake = _FakeClient({"tailor_runs": [{"id": "run-1", "progress": []}]})
+    patch_db_client(fake)
+
+    db.append_tailor_run_progress("run-1", "resume", "Generating resume")
+
+    # Second query is the update (first was the read-modify-write's select).
+    update_queries = [q for name, q in fake.queries if name == "tailor_runs" and q._mode == "update"]
+    assert len(update_queries) == 1
+    written = update_queries[-1].update_payload["progress"]
+    assert len(written) == 1
+    assert written[0]["step"] == "resume"
+    assert written[0]["label"] == "Generating resume"
+    assert "at" in written[0]
+
+
+def test_append_tailor_run_progress_starts_fresh_when_no_prior_progress(patch_db_client):
+    # No pre-seeded row at all (worker's very first progress call on a
+    # freshly-claimed run) — must not blow up on a missing row.
+    fake = _FakeClient({"tailor_runs": []})
+    patch_db_client(fake)
+
+    db.append_tailor_run_progress("run-1", "claim", "Run claimed")
+
+    update_queries = [q for name, q in fake.queries if name == "tailor_runs" and q._mode == "update"]
+    written = update_queries[-1].update_payload["progress"]
+    assert written == [
+        {"step": "claim", "label": "Run claimed", "at": written[0]["at"]}
+    ]
+
+
+def test_append_tailor_run_progress_accumulates_across_two_calls(patch_db_client):
+    # The fake's `.table()` rebuilds a fresh `_FakeQuery` from the ORIGINAL
+    # backing dict on every call — it doesn't persist writes the way real
+    # Postgres does. To exercise real accumulation (not just the shape of
+    # one write), manually thread the first call's written array back into
+    # the fake's backing row before the second call, simulating what the
+    # real read-after-write round trip would see.
+    tailor_runs_table = [{"id": "run-1", "progress": []}]
+    fake = _FakeClient({"tailor_runs": tailor_runs_table})
+    patch_db_client(fake)
+
+    db.append_tailor_run_progress("run-1", "resume", "Generating resume")
+    first_update = [
+        q for name, q in fake.queries if name == "tailor_runs" and q._mode == "update"
+    ][-1]
+    progress_after_first = first_update.update_payload["progress"]
+    assert len(progress_after_first) == 1
+
+    tailor_runs_table[0]["progress"] = progress_after_first
+
+    db.append_tailor_run_progress("run-1", "cover_letter", "Generating cover letter")
+    second_update = [
+        q for name, q in fake.queries if name == "tailor_runs" and q._mode == "update"
+    ][-1]
+    progress_after_second = second_update.update_payload["progress"]
+
+    assert len(progress_after_second) == 2
+    assert progress_after_second[0]["step"] == "resume"
+    assert progress_after_second[0]["label"] == "Generating resume"
+    assert progress_after_second[1]["step"] == "cover_letter"
+    assert progress_after_second[1]["label"] == "Generating cover letter"
+    # First entry is carried through unchanged, not re-stamped.
+    assert progress_after_second[0]["at"] == progress_after_first[0]["at"]

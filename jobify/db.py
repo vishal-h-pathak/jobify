@@ -25,6 +25,13 @@ Tables touched:
                                    (H4 fan-out worker + H2 rubric compiler)
     - ``budget_caps``            — per-user monthly spend cap (read-only
                                    here; caps are set out of band)
+    - ``tailor_runs``            — V3b hosted async tailor-run tracking
+                                   (queued/running/succeeded/failed); the
+                                   web route (TS, not this package) inserts
+                                   the ``queued`` row and dispatches the GHA
+                                   workflow with ``run_id``, this module's
+                                   helpers are what the worker (Task 5) uses
+                                   to claim + update it (0012_v3b_tailor.sql)
 
 Behavior contract (preserves PR-6's failure split):
     - ``mark_tailor_failed`` is the canonical tailor-side failure
@@ -1006,6 +1013,87 @@ def get_job_counts_by_status() -> dict:
         s = row.get("status", "unknown")
         counts[s] = counts.get(s, 0) + 1
     return counts
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  HOSTED — V3b tailor-run tracking (async GHA compute plane, Task 4)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# `tailor_runs` (0012_v3b_tailor.sql) tracks one hosted tailor dispatch:
+# queued -> running -> succeeded | failed. Per the design (V3B_DESIGN.md
+# §1.3), the web route (a separate Next.js/TS codebase, not this package)
+# inserts the `queued` row and dispatches the GHA workflow with `run_id` —
+# so there is deliberately no insert helper here. Everything below is what
+# the Python worker (Task 5) does with that row once it's running: read it
+# to claim it, append progress entries as it works, and land the terminal
+# status with its completion fields.
+
+
+def get_tailor_run(run_id: str) -> dict | None:
+    """Return one `tailor_runs` row by id, or `None` if it doesn't exist.
+
+    The worker's very first step after being dispatched with `run_id` is
+    reading this row (to validate it before claiming it) — same one-row
+    read-by-id shape as `get_job`.
+    """
+    result = _get_client().table("tailor_runs").select("*").eq("id", run_id).execute()
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def _update_tailor_run(run_id: str, **fields: Any) -> None:
+    """Shared update funnel for `tailor_runs` — every transition bumps
+    `updated_at` alongside whatever columns it's setting, mirroring
+    `update_job_status`'s single funnel for the `jobs` table."""
+    payload = {"updated_at": _utcnow(), **fields}
+    _get_client().table("tailor_runs").update(payload).eq("id", run_id).execute()
+
+
+def mark_tailor_run_running(run_id: str) -> None:
+    """Worker claims the row: `status` -> `'running'`. Called once, right
+    after the worker's first successful `get_tailor_run` read validates
+    the row is actually claimable."""
+    _update_tailor_run(run_id, status="running")
+
+
+def append_tailor_run_progress(run_id: str, step: str, label: str) -> None:
+    """Append one `{step, label, at}` entry to `tailor_runs.progress`.
+
+    `progress` is a plain jsonb array with no jsonb-append RPC backing it
+    anywhere in this codebase (checked — `set_compiled_rubric` is the
+    closest jsonb-column precedent here and it's a straight overwrite,
+    not an append), so this is read-modify-write: fetch the row's current
+    `progress` via `get_tailor_run`, append one entry stamped with the
+    current UTC time, and write the whole array back. Not safe against
+    two processes appending to the SAME run_id concurrently, but that
+    never happens by design — one GHA job per dispatched `run_id`.
+    """
+    run = get_tailor_run(run_id)
+    progress = list((run or {}).get("progress") or [])
+    progress.append({"step": step, "label": label, "at": _utcnow()})
+    _update_tailor_run(run_id, progress=progress)
+
+
+def mark_tailor_run_succeeded(
+    run_id: str, *, dropped_count: int, cost_usd: float, doc_sha256: str
+) -> None:
+    """Terminal success transition: `status` -> `'succeeded'` plus the
+    three completion fields the cockpit/dashboard reads — how many claims
+    the deterministic verifier dropped, what the run cost, and the
+    `profiles.doc` snapshot hash the materials were generated against."""
+    _update_tailor_run(
+        run_id,
+        status="succeeded",
+        dropped_count=dropped_count,
+        cost_usd=cost_usd,
+        doc_sha256=doc_sha256,
+    )
+
+
+def mark_tailor_run_failed(run_id: str, error: str) -> None:
+    """Terminal failure transition: `status` -> `'failed'`, `error` set to
+    a human-readable reason for the cockpit's failure banner."""
+    _update_tailor_run(run_id, status="failed", error=error)
 
 
 # ══════════════════════════════════════════════════════════════════════════

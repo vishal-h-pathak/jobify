@@ -11,8 +11,10 @@ divergent bodies). The unified body adopts:
     corrupt a submission)
   - the submitter version's optional ``suffix`` parameter and debug log
 
-Other storage operations (uploads, deletes, signed-URL generation, screenshot
-upload) remain in their original modules until later PRs.
+``upload_bytes`` (V3B Task 5a) is the one generic upload primitive here — for
+the hosted worker's ``{user_id}/{posting_id}/{filename}`` path shape. Deletes,
+signed-URL generation, and the single-user ``{job_id}/{kind}.pdf``-keyed
+upload remain in their original modules (``jobify.tailor.storage``).
 
 The Supabase client is created lazily inside ``_get_client`` so importing this
 module does not require ``supabase`` to be installed — only calling a function
@@ -59,6 +61,46 @@ def _get_client() -> Any:
 def download_bytes(storage_path: str) -> bytes:
     """Return the raw bytes at ``storage_path`` without touching the filesystem."""
     return _get_client().storage.from_(BUCKET).download(storage_path)
+
+
+def upload_bytes(storage_path: str, data: bytes, content_type: str) -> None:
+    """Upload ``data`` to ``storage_path`` in the ``job-materials`` bucket
+    (``BUCKET``), overwriting any existing object (upsert semantics).
+
+    The hosted tailor worker (Task 5b) uses this for its
+    ``{user_id}/{posting_id}/{filename}`` path shape — different from the
+    single-user ``jobify.tailor.storage.upload_pdf``'s ``{job_id}/{kind}.pdf``
+    shape, which is outside this module's ownership fence. Mirrors that
+    function's upsert-then-remove-and-retry pattern (older SDKs throw on a
+    duplicate key rather than honoring ``upsert``), adapted to this module's
+    lazy client (``_get_client()``) rather than the eager one
+    ``jobify.tailor.storage`` uses.
+    """
+    storage = _get_client().storage.from_(BUCKET)
+    try:
+        storage.upload(
+            path=storage_path,
+            file=data,
+            file_options={
+                "content-type": content_type,
+                "upsert": "true",
+            },
+        )
+    except Exception as e:
+        logger.debug(
+            "upload with upsert failed for %s (%r); trying remove-then-upload",
+            storage_path, e,
+        )
+        try:
+            storage.remove([storage_path])
+        except Exception:
+            pass
+        storage.upload(
+            path=storage_path,
+            file=data,
+            file_options={"content-type": content_type},
+        )
+    logger.info("Uploaded %s (%d bytes) to bucket=%s", storage_path, len(data), BUCKET)
 
 
 def download_to_tmp(storage_path: str, suffix: Optional[str] = None) -> Path:

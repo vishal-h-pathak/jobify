@@ -99,6 +99,13 @@ jobify-tailor-one = "jobify.tailor.manual.cli:run"
 # console-script pattern; cron / .github/workflows/hosted-hunt.yml handles
 # recurrence.
 jobify-hosted-hunt = "jobify.hosted.worker:run"
+# V3B-S1 Task 5b: hosted tailor worker console script. One dispatch = one
+# `tailor_runs.id` = one GHA job (planning/V3B_DESIGN.md §1.1/§4 S1) —
+# `jobify.hosted.tailoring:run` claims the row, runs the 5-LLM-call tailor
+# pipeline (or the zero-LLM `mode=render` re-render short-circuit), and
+# lands a terminal `succeeded`/`failed` status. `jobify.hosted` is already
+# in `[tool.setuptools] packages` above — no new package-list entry needed.
+jobify-hosted-tailor = "jobify.hosted.tailoring:run"
 # H7 Launch Part A Task 3: invite-minting ops CLI. `invites` (0003) has
 # no `authenticated`-role INSERT policy — only a service-role client can
 # mint a code — so this is an operator-run CLI, not a web endpoint.

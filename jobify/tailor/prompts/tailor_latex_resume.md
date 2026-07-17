@@ -29,11 +29,44 @@ this lane. Same candidate, different framing):
 CHOSEN ARCHETYPE applies to project + skill ordering only; never invent
 content not present in the CV above.
 
+CITATIONS: every bullet, every skills-category value, and the optional
+summary_line must ALSO be backed by a "sources" array citing the exact
+cv.md passage(s) it's drawn from — this is what lets a deterministic
+checker confirm nothing here was invented. Each source is
+`{{"file": "cv.md", "quote": "..."}}`; the quote MUST be copied
+character-for-character from the CANDIDATE'S MASTER CV above — this is
+checked by exact substring match, not by meaning, so a paraphrased or
+reworded quote fails verification even if it's an accurate paraphrase.
+Example: if the CV contains the line
+`- Cut inference latency from 2.1s to 380ms on Jetson Orin` and you
+write the bullet "Reduced inference latency from 2.1s to 380ms," the
+correct source is
+`{{"file": "cv.md", "quote": "Cut inference latency from 2.1s to 380ms on Jetson Orin"}}`
+— the full line as it literally appears in the CV, not a fragment
+composed to match your rewrite. A bullet/category/summary_line can cite
+more than one source if it draws on multiple passages. Experience
+headers (org/title/location/period) and education entries do NOT need
+citations — those are checked directly against the CV text structurally.
+
+These citations ride in three NEW, additive top-level/nested fields —
+they do not change the shape of "skills", "bullets", or "summary_line"
+themselves, they sit alongside them (see the JSON example at the end):
+
+- "skills_sources" — a top-level dict, same keys as "skills", each value
+  an array of sources backing that category's skills.
+- "bullet_sources" — inside each project (alongside "bullets"), an array
+  the SAME LENGTH and SAME ORDER as that project's "bullets", where
+  `bullet_sources[j]` is the sources array for `bullets[j]`.
+- "summary_sources" — a top-level array of sources backing
+  "summary_line" (omit or leave empty if "summary_line" is null).
+
 YOUR TASK — respond with a JSON object containing:
 
 1. "skills" — a dict of 4-5 skill categories with comma-separated skills.
    Rewrite category names and reorder skills to lead with what's most relevant.
    Only include skills the candidate actually has from the CV above.
+   Also fill in "skills_sources" (see CITATIONS above) with one entry
+   per category, same keys as "skills".
 
    You have flexibility on category names — the resume's two-column
    skills layout auto-sizes the left column to fit the longest label
@@ -60,7 +93,8 @@ YOUR TASK — respond with a JSON object containing:
    - "org", "title", "location", "period" (keep these factual, from the CV)
    - "projects" — list of projects to INCLUDE (you can drop irrelevant ones).
      Each project has "name" (use null when a role has no distinct project name),
-     "period", and "bullets".
+     "period", "bullets", and "bullet_sources" (see CITATIONS above —
+     same length/order as "bullets").
      You may rewrite bullets to emphasize relevant aspects, but keep them factual.
      Lead with the most relevant projects for this role. Include the most recent and
      most relevant roles from the CV; do not fabricate employers or projects.
@@ -71,6 +105,7 @@ YOUR TASK — respond with a JSON object containing:
 
 5. "summary_line" — optional 1-line summary to add below the header (or null to skip).
    If included, write it in the candidate's voice: direct, technical, no fluff.
+   Fill in "summary_sources" (see CITATIONS above) alongside it.
 
 ONE PAGE IS MANDATORY. The resume MUST fit on a single page. Budget the
 content so it does — a downstream trim loop will mechanically drop bullets
@@ -91,4 +126,46 @@ RULES:
 - Keep the resume to 1 page worth of content — see the mandatory caps above.
 - Do NOT add projects, employers, or skills that don't exist in the CV above.
 
-Respond with valid JSON only, no markdown.
+Respond with valid JSON only, no markdown, in exactly this shape (the
+"sources" fields are the additive citation arrays described above —
+everything else is the existing contract, unchanged):
+{{
+    "skills": {{
+        "Category Name": "skill1, skill2, skill3"
+    }},
+    "skills_sources": {{
+        "Category Name": [
+            {{"file": "cv.md", "quote": "exact verbatim passage from cv.md"}}
+        ]
+    }},
+    "skills_layout": "auto",
+    "experience": [
+        {{
+            "org": "Employer, from the CV",
+            "title": "Title, from the CV",
+            "location": "Location, from the CV",
+            "period": "Period, from the CV",
+            "projects": [
+                {{
+                    "name": "Project name or null",
+                    "period": "Period, from the CV",
+                    "bullets": [
+                        "Rewritten bullet 1",
+                        "Rewritten bullet 2"
+                    ],
+                    "bullet_sources": [
+                        [{{"file": "cv.md", "quote": "exact verbatim passage backing bullet 1"}}],
+                        [{{"file": "cv.md", "quote": "exact verbatim passage backing bullet 2"}}]
+                    ]
+                }}
+            ]
+        }}
+    ],
+    "education": [
+        {{"school": "School, from the CV", "degree": "Degree, from the CV", "period": "Period, from the CV"}}
+    ],
+    "summary_line": "Optional 1-line summary in the candidate's voice, or null",
+    "summary_sources": [
+        {{"file": "cv.md", "quote": "exact verbatim passage backing the summary line"}}
+    ]
+}}

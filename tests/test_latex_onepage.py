@@ -206,3 +206,67 @@ def test_fit_pdflatex_absent_returns_gracefully():
     # No trimming attempted when we can't even compile once.
     assert _total_bullets(result["tailored_data"]) == bullets_before
     assert "latex_source" in result
+
+
+# ── _build_contact_line (identity-header fix, owner decision: "render what
+# exists, never placeholder") ────────────────────────────────────────────
+
+
+def test_build_contact_line_joins_all_present_fields():
+    identity = {
+        "name": "Alex Quinn",
+        "email": "alex@example.com",
+        "location": "Denver, CO",
+        "linkedin": "linkedin.com/in/alexquinn",
+        "website": "alexquinn.dev",
+    }
+    line = latex_mod._build_contact_line(identity)
+    assert line == (
+        "alex@example.com $\\cdot$ Denver, CO $\\cdot$ "
+        "\\href{https://linkedin.com/in/alexquinn}{linkedin.com/in/alexquinn} $\\cdot$ "
+        "\\href{https://alexquinn.dev}{alexquinn.dev}"
+    )
+
+
+def test_build_contact_line_hosted_profile_shape_name_and_email_only():
+    """Hosted profiles (V3a onboarding) only collect name+email — no
+    location/linkedin/website module exists. Owner decision: render what
+    exists, never a placeholder — no stray ``$\\cdot$``, no empty ``\\href``."""
+    identity = {
+        "name": "Alex Quinn",
+        "email": "alex@example.com",
+        "location": "",
+        "linkedin": "",
+        "website": "",
+    }
+    line = latex_mod._build_contact_line(identity)
+    assert line == "alex@example.com"
+    assert "$\\cdot$" not in line
+    assert "\\href" not in line
+
+
+def test_build_contact_line_missing_dict_keys_degrade_to_empty():
+    """``.get`` fallbacks — a caller that omits a key entirely (not just
+    empty-strings it) must not raise."""
+    line = latex_mod._build_contact_line({"name": "Alex Quinn", "email": "alex@example.com"})
+    assert line == "alex@example.com"
+
+
+def test_render_latex_hosted_profile_shape_has_no_stray_separator_or_empty_href(monkeypatch):
+    monkeypatch.setattr(
+        latex_mod, "base_identity",
+        lambda: {
+            "name": "Alex Quinn",
+            "email": "alex@example.com",
+            "location": "",
+            "linkedin": "",
+            "website": "",
+        },
+    )
+    latex = latex_mod._render_latex({"skills": {}, "experience": []}, "classic")
+    assert "<<CONTACT_LINE>>" not in latex
+    assert "\\href{https://}{}" not in latex
+    assert "alex@example.com" in latex
+    # No stray leading/trailing/doubled separator around the lone field.
+    assert "$\\cdot$ alex@example.com" not in latex
+    assert "alex@example.com $\\cdot$" not in latex

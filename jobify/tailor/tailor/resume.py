@@ -11,6 +11,7 @@ from datetime import datetime
 
 from jobify.config import TAILOR_CLAUDE_MODEL as CLAUDE_MODEL
 from jobify.shared import llm
+from jobify.shared.llm import CompletionUsage
 from jobify.tailor.paths import CANDIDATE_PROFILE_PATH
 from prompts import cached_system_blocks, load_task_prompt
 from tailor.archetype import classify_archetype, render_archetype_block
@@ -29,19 +30,13 @@ except Exception:
 logger = logging.getLogger("tailor.resume")
 
 
-def tailor_resume(job: dict) -> dict:
-    """
-    Generate a tailored resume for a specific job posting.
+def _tailor_resume_call(job: dict) -> tuple[dict, CompletionUsage]:
+    """Build the prompt, call the LLM, and parse the tailored-resume JSON.
 
-    Args:
-        job: Dict with keys: title, company, description, location, url, score, tier, reasoning
-
-    Returns:
-        Dict with:
-            - tailored_summary: str — the tailored professional summary
-            - emphasis_areas: list[str] — which skills/experience to highlight
-            - output_path: str — path to the generated resume file
-            - diff_notes: str — what changed from the base resume
+    Shared by `tailor_resume` (text-only, existing callers) and
+    `tailor_resume_with_usage` (H4 ledger — Task 5b's hosted worker), so
+    prompt construction + parsing stays the single source of truth and only
+    the return type forks.
     """
     job_desc = job.get("description", "")
     job_title = job.get("title", "Unknown")
@@ -90,7 +85,7 @@ def tailor_resume(job: dict) -> dict:
     # Session I: static rules + profile + voice ride in the cached
     # system prefix; only the per-job prompt above goes uncached.
     # Credits-first with subscription-OAuth fallback — see jobify.shared.llm.
-    response_text = llm.complete(
+    response_text, usage = llm.complete_with_usage(
         system=cached_system_blocks(),
         prompt=prompt,
         model=CLAUDE_MODEL,
@@ -111,4 +106,30 @@ def tailor_resume(job: dict) -> dict:
     result["_archetype"] = archetype_meta
 
     logger.info(f"Resume tailored for {company} — {job_title}")
+    return result, usage
+
+
+def tailor_resume(job: dict) -> dict:
+    """
+    Generate a tailored resume for a specific job posting.
+
+    Args:
+        job: Dict with keys: title, company, description, location, url, score, tier, reasoning
+
+    Returns:
+        Dict with:
+            - tailored_summary: str — the tailored professional summary
+            - emphasis_areas: list[str] — which skills/experience to highlight
+            - output_path: str — path to the generated resume file
+            - diff_notes: str — what changed from the base resume
+    """
+    result, _usage = _tailor_resume_call(job)
     return result
+
+
+def tailor_resume_with_usage(job: dict) -> tuple[dict, CompletionUsage]:
+    """Like `tailor_resume`, but also returns token usage for the budget
+    ledger (`jobify.db.insert_budget_ledger_row`) — Task 5b's hosted worker.
+    Same JSON contract and side effects as `tailor_resume`; see
+    `_tailor_resume_call` for the shared implementation."""
+    return _tailor_resume_call(job)
