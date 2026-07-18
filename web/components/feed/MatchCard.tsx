@@ -5,6 +5,7 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { Badge, scoreTone } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { TailorAction } from "./TailorAction";
 import {
   bestScore,
   dismissMatch,
@@ -80,6 +81,7 @@ export function MatchCard({ match }: { match: MatchWithPosting }) {
       </div>
 
       <div className="flex flex-wrap gap-2 pt-1">
+        {state !== "dismissed" && <TailorAction postingId={match.posting_id} />}
         {state === "dismissed" ? (
           <Button
             variant="ghost"

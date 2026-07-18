@@ -1,127 +1,148 @@
-# Task 4 report — `web/lib/materials/` + `GET /api/tailor/materials/[runId]`
+# Task 4 report: SourceChip + ResumeView
 
-## What I implemented
+## What was done
 
-- `web/lib/materials/signMaterials.ts`: `signMaterials(admin, userId, postingId, expiresInSeconds)`.
-  Lists `job-materials/{userId}/{postingId}/` via `admin.storage.from("job-materials").list(prefix)`,
-  intersects the listing against a `KNOWN_ARTIFACTS` constant (`resume.pdf`, `cover_letter.pdf`,
-  `cover_letter.txt`, `tailored.json`, `claims.json`, `render_meta.json` — the exact §1.4 set),
-  then makes **one batched** `createSignedUrls()` call for whatever's present and returns
-  `{ filename: signedUrl }`. Bucket name `"job-materials"` is hardcoded (verified there's no
-  existing shared bucket-name constant anywhere under `web/lib/` before adding this — matches
-  `jobify/shared/storage.py::BUCKET`). Returns `{}` without ever calling `createSignedUrls` when
-  nothing recognized is listed.
+1. Read `.superpowers/sdd/task-4-brief.md` in full.
+2. Verified prerequisite types (`ClaimUnit`, `NumberToken`, `SourceRef`) already exist in
+   `web/components/tailor/types.ts` (from Task 2) and match the brief's expectations exactly —
+   no redefinition needed.
+3. Verified `web/components/ui/Card.tsx` exports `Card` with a `className` prop, as consumed by
+   `ResumeView.tsx`.
+4. Created `web/components/tailor/SourceChip.test.ts` verbatim from the brief (Step 1).
+5. Created `web/components/tailor/ResumeView.test.ts` verbatim from the brief (Step 1).
+6. Ran both new test files before implementation existed — confirmed both failed with
+   "Cannot find module" errors (Step 2), as expected.
+7. Created `web/components/tailor/SourceChip.tsx` verbatim from the brief (Step 3):
+   `claimChipLabel`, `escapeRegExp`, `highlightNumbers`, and the `SourceChip` component
+   (hover/focus-triggered quote popover).
+8. Created `web/components/tailor/ResumeView.tsx` verbatim from the brief (Step 4):
+   `groupResumeUnits` (id-regex-based grouping, never array-position-based), `BulletText`,
+   `EditableClaim` (click-to-edit textarea, commits on blur/Enter, `onEdit` gates the affordance
+   to text-bearing units only), and the `ResumeView` component.
+9. Ran the two new test files — both pass (Step 5).
+10. Ran `npx tsc --noEmit` — clean, no output.
+11. Ran the full `npx vitest run` suite — 111 test files, 990 tests, all passing (nothing else
+    broke).
+12. Self-reviewed the diff against the brief line-by-line, with particular attention to the four
+    id-parsing regexes:
+    - `EXP_HEADER_RE = /^r\.exp(\d+)\.header$/`
+    - `EXP_BULLET_RE = /^r\.exp(\d+)\.b(\d+)$/`
+    - `EDU_RE = /^r\.edu(\d+)$/`
+    - `SKILL_RE = /^r\.skill(\d+)$/`
+    All four match the brief exactly, and the grouping logic derives experience/education/skill
+    structure purely from `unit.id` regex captures — never from array position in a separate
+    `tailored.json`. The defensive backstop (`.filter((g) => g.header !== null)`) drops any
+    experience group whose header unit didn't survive claims-verification, even if orphan
+    bullets for that index are still present.
+13. Committed with the exact message specified in the brief.
 
-- `web/app/api/tailor/materials/[runId]/route.ts`: `GET` handler.
-  1. Auth gate mirrors `web/app/api/hunt/run/route.ts:20-32` exactly.
-  2. Ownership check is a **single query**: `.from("tailor_runs").select("user_id, posting_id,
-     status").eq("id", runId).eq("user_id", user.id).maybeSingle()` — a row that doesn't exist and
-     a row belonging to someone else both come back `null` from the same query, so they're
-     structurally indistinguishable before the route even branches on it.
-  3. `!run || run.status !== "succeeded"` → identical `404 { error: "not found" }` for both
-     "doesn't exist" and "not ready yet."
-  4. `signMaterials(admin, run.user_id, run.posting_id, SIGNED_URL_EXPIRY_SECONDS)` —
-     `SIGNED_URL_EXPIRY_SECONDS = 300` is a named module-level constant, referenced once.
-  5. `NextResponse.json({ urls })`.
+## Test output — SourceChip.test.ts
 
-  Dynamic route params: `{ params }: { params: Promise<{ runId: string }> }`, `const { runId } =
-  await params` — matches `web/app/api/onboarding/modules/[key]/route.ts:28` exactly.
-
-## What I tested and results
-
-- `web/lib/materials/signMaterials.test.ts` (9 tests): exact prefix passed to `.list()`; `{}` +
-  no `createSignedUrls` call when the listing is empty or has only unrecognized filenames; only
-  present known artifacts get signed, in one batched call (asserted both a 2-of-6 subset and all
-  6 present); a signed entry with a null `path` or null `signedUrl` is skipped rather than
-  crashing; `expiresInSeconds` passed through verbatim; `list()` and `createSignedUrls()` errors
-  both propagate (thrown, not swallowed).
-
-- `web/app/api/tailor/materials/[runId]/route.test.ts` (11 tests): 401 unauthenticated; 403 no
-  invite (non-admin); dynamic params correctly awaited (asserted the `eq("id", ...)` call
-  receives the resolved `runId`); 404 for a nonexistent run; 404 for a different user's run,
-  explicitly asserting the query is scoped by `user_id` too (no user-enumeration signal); 404 for
-  `queued`/`failed`/`running` runs (`signMaterials` never called in any 404 case); 200 with the
-  exact URLs `signMaterials` returned, and `signMaterials` called with the 300-second constant;
-  admin bypasses the invite gate; a SELECT error throws rather than being swallowed.
-
-- Full verification from `web/`: `npx tsc --noEmit` clean. `npm run lint` — zero errors/warnings
-  in any file this task touched (`npx eslint` scoped to the four new files: clean); the 5
-  pre-existing errors + 29 warnings elsewhere in the repo are untouched by this task and were
-  present before it. `npm test`: **935 passed / 935** across 104 files (20 of them new to this
-  task). `bash scripts/scrub_gate.sh` from repo root: PASS (no forbidden identifiers, no stray
-  tracked binaries).
-
-## TDD Evidence: RED and GREEN
-
-For both new source files, I wrote the real test file first, then temporarily replaced the
-implementation with a stub, ran the suite to capture a genuine failure, then restored the real
-implementation and reran for green.
-
-**RED — `signMaterials.test.ts` against a stub that always returns `{}`:**
 ```
- Test Files  1 failed (1)
-      Tests  6 failed | 3 passed (9)
-```
-(6 failures: wrong `{}` results where signed URLs were expected, and the two error-propagation
-tests found the stub doesn't throw.)
+ ✓ components/tailor/SourceChip.test.ts (8 tests) 2ms
 
-**RED — `route.test.ts` against a stub `GET` that always returns `{ urls: {} }` with no auth/DB
-logic:**
-```
- Test Files  1 failed (1)
-      Tests  10 failed | 1 passed (11)
-```
-(Only the params-await test passed by coincidence; everything auth/ownership/status/signing
--related failed.)
-
-**GREEN — after restoring the real implementations:**
-```
- ✓ lib/materials/signMaterials.test.ts (9 tests) 3ms
- ✓ app/api/tailor/materials/[runId]/route.test.ts (11 tests) 5ms
-
- Test Files  2 passed (2)
-      Tests  20 passed (20)
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
 ```
 
-## Files changed
+## Test output — ResumeView.test.ts
 
-- `web/lib/materials/signMaterials.ts` (new)
-- `web/lib/materials/signMaterials.test.ts` (new)
-- `web/app/api/tailor/materials/[runId]/route.ts` (new)
-- `web/app/api/tailor/materials/[runId]/route.test.ts` (new)
+```
+ ✓ components/tailor/ResumeView.test.ts (6 tests) 2ms
 
-Commit: `951a644` — "feat(web): signed-URL materials read for tailor runs"
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+```
 
-## Self-review findings
+Both load-bearing correctness cases pass:
+- "drops an experience whose header did not survive, even if a bullet unit is present (defensive
+  backstop)" — `grouped.experience.map((e) => e.index)` equals `[0]`, confirming the orphan
+  `r.exp1.b0` bullet (no matching `r.exp1.header`) does not produce a phantom experience group.
+- "ignores cover-letter units entirely" — a `cl.s0` / `surface: "cover_letter"` unit does not
+  leak into `experience` or `skills`.
 
-Checked every item from the task brief's self-review list; no issues found:
+## Full suite
 
-- Ownership check is one query filtering both `id` and `user_id` (not fetch-then-compare).
-  Verified the HTTP response is identical (`404 { error: "not found" }`) for both "doesn't
-  exist" and "exists but isn't yours" — same code path, same status, same body, since the
-  underlying query returns `null` in both cases.
-- `status !== "succeeded"` (covering `queued`/`running`/`failed`) → 404, same shape as not-found.
-- Only artifacts present in storage get signed URLs — cross-checked `KNOWN_ARTIFACTS` character-
-  for-character against the six-file list in `V3B_DESIGN.md` §1.4.
-- `SIGNED_URL_EXPIRY_SECONDS = 300` is a single named constant referenced once at the call site
-  (never a bare `300` repeated elsewhere in either file).
-- Dynamic route params: `Promise<{ runId: string }>` + `await params`, matching the pinned
-  pattern.
+```
+ Test Files  111 passed (111)
+      Tests  990 passed (990)
+   Duration  3.62s
+```
 
-One judgment call worth flagging explicitly (not a defect, just noting the choice): the route
-does **not** give admins a bypass on the ownership filter — even an admin's request for a run
-they don't own gets 404, unlike `POST /api/hunt/run`'s admin-`userId`-override affordance. The
-brief's wording ("filtered by both `id = runId` AND `user_id = user.id`... not a separate
-ownership check") reads as unconditional, so I followed it literally rather than assuming an
-implicit admin carve-out the brief never mentioned. If an admin "view any user's materials" path
-is wanted later, it needs its own explicit judgment call.
+## tsc --noEmit
 
-## Issues or concerns
+Clean — no output, exit 0.
 
-None. `@supabase/supabase-js`'s `createSignedUrls` return shape was verified directly against
-`node_modules/@supabase/storage-js/src/packages/StorageFileApi.ts` (no `.d.ts` files ship in this
-version — the package ships type-annotated `.ts` sources compiled at build time) rather than
-assumed: `{ data: { error, path, signedUrl }[], error } | { data: null, error }`. Note the field
-is `signedUrl` (lowercase `u`), not `signedURL` — the legacy Python SDK's `get_signed_url` checks
-three casings defensively; the current JS client's typed return only has `signedUrl`, so no such
-defensiveness was needed here.
+## Commit
+
+```
+90ccb6e V3B-S3: source chips + resume viewer, id-parsed claim grouping
+ 4 files changed, 420 insertions(+)
+ create mode 100644 web/components/tailor/ResumeView.test.ts
+ create mode 100644 web/components/tailor/ResumeView.tsx
+ create mode 100644 web/components/tailor/SourceChip.test.ts
+ create mode 100644 web/components/tailor/SourceChip.tsx
+```
+
+## Concerns
+
+None. All files were written verbatim from the brief (both test files and both implementation
+files), types matched what Task 2 already shipped with zero drift, and every verification step
+(fail-first, pass-after, tsc, full suite, regex self-review) came back clean.
+
+Note: this file previously held a report from an earlier/different task-numbering pass of the
+plan (materials-signing + `GET /api/tailor/materials/[runId]`, unrelated to this task's scope).
+It has been overwritten with this task's report per the current brief.
+
+## Addendum: code-review fix pass — test-coverage gaps in ResumeView.test.ts
+
+Two Important findings from code review on the already-committed, approved
+`groupResumeUnits` implementation (`web/components/tailor/ResumeView.tsx` unchanged):
+
+1. The existing fixture always presented bullets in id-ascending array order, so a naive
+   encounter-order implementation (no real regex-parse-and-sort) would have passed every
+   existing test undetected.
+2. No coverage for empty `units`, duplicate ids (Map-overwrite "last one wins" semantics),
+   or a resume-surface unit whose id matches none of the four known patterns.
+
+Added 4 new `it(...)` blocks to `web/components/tailor/ResumeView.test.ts` (no changes to
+`ResumeView.tsx`):
+
+- **id-order property**: fixture array `[b2, header, b0]` (b1 intentionally missing, simulating
+  a verifier-dropped bullet; b2 placed before b0). Asserts
+  `grouped.experience[0].bullets.map(b => b.id)` equals `["r.exp0.b0", "r.exp0.b2"]`. Verified by
+  inspection that a naive push-in-encounter-order implementation would emit
+  `["r.exp0.b2", "r.exp0.b0"]` instead — the real implementation's
+  `.sort((a, b) => Number(EXP_BULLET_RE.exec(a.id)![2]) - Number(EXP_BULLET_RE.exec(b.id)![2]))`
+  is what makes this assertion pass, so the test is a genuine regression guard against
+  reverting to array-order.
+- **empty array**: `groupResumeUnits([])` equals
+  `{ experience: [], education: [], skills: [], summary: null }`.
+- **duplicate id "last one wins"**: two `r.exp0.header` units with different `fields.org`;
+  asserts `grouped.experience[0].header` is reference-equal to the second unit — documents the
+  `Map`-keyed-by-parsed-index overwrite behavior as intentional.
+- **unrecognized id pattern**: a `resume`-surface unit `id: "r.something.weird"` mixed into the
+  existing fixture; asserts it appears in none of `experience`/`education`/`skills`/`summary`
+  and doesn't disturb the other sections' contents.
+
+### Test output
+
+```
+ RUN  v3.2.6 /Users/jarvis/dev/jarvis/jobify-wt/v3b-s3-ui/web
+
+ ✓ components/tailor/ResumeView.test.ts (10 tests) 2ms
+
+ Test Files  1 passed (1)
+      Tests  10 passed (10)
+```
+
+### tsc --noEmit
+
+Clean, no output.
+
+### Commit
+
+```
+git add web/components/tailor/ResumeView.test.ts
+git commit -m "V3B-S3: strengthen groupResumeUnits tests — id-order property, edge cases"
+```
