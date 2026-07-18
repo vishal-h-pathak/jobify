@@ -40,6 +40,9 @@ hits=$(grep -rEIl -i "$PATTERN" . \
   --exclude-dir=.git \
   --exclude-dir=node_modules \
   --exclude-dir=.next \
+  --exclude-dir=.venv \
+  --exclude-dir=venv \
+  --exclude='.env.*' \
   --exclude-dir=onboarding/examples \
   --exclude-dir=profile.example \
   --exclude-dir=planning \
@@ -47,6 +50,12 @@ hits=$(grep -rEIl -i "$PATTERN" . \
   | grep -vx './scripts/scrub_gate.sh' \
   | grep -vx './.github/workflows/ci.yml' \
   || true)
+# Local-noise exclusions (.venv, .env.*) added 2026-07-07 after repeated
+# false FAILs on operator machines: .venv site-packages coincidentally
+# contain forbidden substrings mid-word (numpy 'lagtrim', pdfminer
+# 'pointingtriangle' both contain 'gtri'), and git-ignored .env.hosted is
+# the SANCTIONED home for operator identifiers. CI checkouts have neither,
+# so this changes nothing about what the gate enforces on tracked files.
 
 if [ -n "$hits" ]; then
   echo "FAIL: forbidden identifier(s) found in:"
