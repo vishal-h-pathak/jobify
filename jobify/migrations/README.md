@@ -183,3 +183,31 @@ pool cap, BYO bypass), the BYO key encryption format, and the
 
 Apply it the same way as `0001`-`0005` (SQL Editor / `supabase db push` /
 `apply_migration`), after `0005` is already applied.
+
+## 0013 — V3c submitter: application profile + submit telemetry
+
+`0013_v3c_submit.sql` is additive on top of `0001`-`0012` — V3c P0 of the
+hosted plan (`planning/V3C_DESIGN.md` §8.1). It adds:
+
+| Object | Purpose |
+|---|---|
+| `application_profiles` | one row per user — the submitter's contact/EEO/work-auth answers etc., stored as `encrypted_payload` ciphertext in the keycrypt `v1:...` wire format (AES-256-GCM); no plaintext column |
+| `submit_events` | per-attempt kit/extension submit telemetry — source, final state, page count, per-field outcomes, wall blockers, advance-agreement capture, cost |
+| `learned_field_maps` | shared, structure-only field-mapping cache keyed by `(hostname, field_signature)`, global across users |
+
+`application_profiles` gets **no `authenticated` policy at all** — the
+client never touches ciphertext directly, there is no admin surface that
+renders this table, and every read/write goes through an authed Next.js
+route that encrypts/decrypts server-side with the service-role admin
+client. `submit_events` gets own-row SELECT (`auth.uid() = user_id`) so a
+user can see their own submit history, plus a service-role `ALL` policy
+for insert/update/delete from the kit/extension routes. `learned_field_maps`
+is service-role only (no `authenticated` policy) — it's served via a read
+API in E3; nothing in this session reads or writes it yet, the schema is
+just locked in early so it doesn't shift under the later engine phases.
+Both `submit_events.field_outcomes` and `learned_field_maps.mapping` are
+structure/outcome-only JSONB — neither ever stores the actual values a
+human typed into a form field.
+
+Apply it the same way as `0001`-`0012` (SQL Editor / `supabase db push` /
+`apply_migration`), after `0012` is already applied.
