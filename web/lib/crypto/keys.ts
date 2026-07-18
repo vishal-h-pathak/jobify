@@ -12,9 +12,10 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
  * that exact concatenated shape, so the two sides need no extra framing.
  *
  * `decryptKey`/`decryptJson` are exercised by this module's own roundtrip
- * test (`keys.test.ts`) and are also called in production, from the web
- * app, by `web/lib/submit/applicationProfile.ts` (V3c) to read back the
- * `application_profiles` table's `encrypted_payload` column. Python-side
+ * test (`keys.test.ts`) and will be called in production, from the web
+ * app, once `web/lib/submit/applicationProfile.ts` (V3c, Task 3) lands,
+ * to read back the `application_profiles` table's `encrypted_payload`
+ * column. Python-side
  * decryption (`jobify.hosted.fanout`) still uses the same wire format via
  * `jobify/hosted/keycrypt.py` for the H6 BYO-key case.
  */
