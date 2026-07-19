@@ -1,15 +1,27 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { hasClaimedInvite } from "@/lib/db/invites";
 import { isAdmin } from "@/lib/admin/isAdmin";
+import { intakeComplete } from "@/lib/onboarding/intakeComplete";
+import { deriveWelcomeBack } from "@/lib/onboarding/welcomeBack";
+import { completedModuleCount, CANONICAL_MODULE_ORDER } from "@/components/onboarding/moduleOrder";
+import type { InterviewStage } from "@/components/onboarding/moduleOrder";
+import type { ModulesState } from "@/lib/onboarding/moduleRegistry";
 import { HandoffEmitter } from "@/components/extension/HandoffEmitter";
-import { NavLinks } from "./NavLinks";
+import { NavLinks, type NavProgress } from "./NavLinks";
 import { SignOutButton } from "./SignOutButton";
+import { WelcomeBackProvider } from "./WelcomeBackContext";
 
 // Auth + invite gate lives here, not in proxy.ts — see
 // lib/supabase/updateSession.ts for why (mirrors a proven magic-link pattern).
 export const dynamic = "force-dynamic";
+
+/** UX1_DESIGN.md §2: the gate excludes `/onboarding` itself from the redirect. */
+function isUnderOnboarding(pathname: string): boolean {
+  return pathname === "/onboarding" || pathname.startsWith("/onboarding/");
+}
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createSupabaseServerClient();
@@ -22,6 +34,27 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const admin = isAdmin(user);
   const claimed = admin || (await hasClaimedInvite(supabase));
   if (!claimed) redirect("/invite");
+
+  const complete = await intakeComplete(supabase, user.id);
+
+  let progress: NavProgress = { completed: 0, total: CANONICAL_MODULE_ORDER.length };
+  let welcomeBack = null;
+
+  if (!complete) {
+    const { data: session, error } = await supabase
+      .from("onboarding_sessions")
+      .select("modules, stage, updated_at")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (error) throw error;
+    const modules = (session?.modules ?? {}) as ModulesState;
+    const stage = (session?.stage ?? "anchor") as InterviewStage;
+    progress = { completed: completedModuleCount(modules, stage), total: CANONICAL_MODULE_ORDER.length };
+    welcomeBack = deriveWelcomeBack(modules, stage, session?.updated_at ?? null, new Date());
+
+    const pathname = (await headers()).get("x-pathname") ?? "";
+    if (!isUnderOnboarding(pathname)) redirect("/onboarding");
+  }
 
   return (
     <div className="flex min-h-full flex-col">
@@ -37,12 +70,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             jobify<span className="text-amber">.</span>
           </Link>
           <div className="flex items-center gap-6">
-            <NavLinks isAdmin={admin} />
+            <NavLinks isAdmin={admin} complete={complete} progress={progress} />
             <SignOutButton />
           </div>
         </div>
       </header>
-      <main className="flex flex-1 flex-col">{children}</main>
+      <main className="flex flex-1 flex-col">
+        <WelcomeBackProvider value={welcomeBack}>{children}</WelcomeBackProvider>
+      </main>
       <footer className="border-t border-line px-6 py-4 text-center text-sm text-ink-muted">
         jobify — a private beta for friends
       </footer>

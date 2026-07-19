@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const getUserMock = vi.fn();
 const hasClaimedInviteMock = vi.fn();
+const intakeCompleteMock = vi.fn();
 const redirectMock = vi.fn((url: string) => {
   throw new Error(`REDIRECT:${url}`);
 });
@@ -11,6 +12,7 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock } })),
 }));
 vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+vi.mock("@/lib/onboarding/intakeComplete", () => ({ intakeComplete: intakeCompleteMock }));
 
 const { default: Home } = await import("./page");
 
@@ -18,21 +20,32 @@ describe("landing page (/)", () => {
   beforeEach(() => {
     getUserMock.mockClear();
     hasClaimedInviteMock.mockClear();
+    intakeCompleteMock.mockReset();
+    intakeCompleteMock.mockResolvedValue(true);
     redirectMock.mockClear();
   });
 
-  it("redirects signed-in visitors with a claimed invite straight to /feed", async () => {
+  it("redirects signed-in visitors with a claimed invite and a complete intake straight to /feed", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     hasClaimedInviteMock.mockResolvedValue(true);
 
     await expect(Home()).rejects.toThrow("REDIRECT:/feed");
   });
 
-  it("renders the pitch for a signed-out visitor, without checking invite state", async () => {
+  it("redirects signed-in visitors with a claimed invite but an incomplete intake to /onboarding, not /feed", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasClaimedInviteMock.mockResolvedValue(true);
+    intakeCompleteMock.mockResolvedValue(false);
+
+    await expect(Home()).rejects.toThrow("REDIRECT:/onboarding");
+  });
+
+  it("renders the pitch for a signed-out visitor, without checking invite or intake state", async () => {
     getUserMock.mockResolvedValue({ data: { user: null } });
 
     const result = await Home();
     expect(hasClaimedInviteMock).not.toHaveBeenCalled();
+    expect(intakeCompleteMock).not.toHaveBeenCalled();
 
     const [, , , ctas] = result.props.children;
     const [inviteLink, signInLink] = ctas.props.children;
@@ -47,6 +60,7 @@ describe("landing page (/)", () => {
     const result = await Home();
     expect(result.props.children).toBeTruthy();
     expect(redirectMock).not.toHaveBeenCalled();
+    expect(intakeCompleteMock).not.toHaveBeenCalled();
   });
 
   it("renders the 3 pitch steps as a visibly numbered list", async () => {

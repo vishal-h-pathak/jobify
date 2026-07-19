@@ -39,6 +39,8 @@ import { VoicePanel } from "@/components/onboarding/VoicePanel";
 import { MetricsPanel } from "@/components/onboarding/MetricsPanel";
 import { MirrorPanel } from "@/components/onboarding/MirrorPanel";
 import { RunHuntButton } from "@/app/(app)/feed/RunHuntButton";
+import { useWelcomeBack } from "../WelcomeBackContext";
+import type { WelcomeBackInfo } from "@/lib/onboarding/welcomeBack";
 
 export interface Validation {
   status: "valid" | "invalid";
@@ -532,6 +534,11 @@ export interface OnboardingViewProps {
   onModuleComplete: (key: ModuleKey) => void;
   onMirrorComplete: () => void;
   onCheckpointContinue: () => void;
+  /** UX1_DESIGN.md §2: set only on a stale (>30 min) return visit — the
+   * (app) layout derives this server-side and hands it down via context
+   * (see OnboardingPage below), so this hook-free view stays directly
+   * testable as a plain function call. */
+  welcomeBack?: WelcomeBackInfo | null;
 }
 
 /**
@@ -662,7 +669,7 @@ function renderActivePanel(props: OnboardingViewProps) {
  * panel-enter motion utility, no outer bordered transcript box — the page
  * itself scrolls. PhaseRail (V3A_DESIGN.md §1.1) replaces StepSpine. */
 export function OnboardingView(props: OnboardingViewProps) {
-  const { state, onCheckpointContinue } = props;
+  const { state, onCheckpointContinue, welcomeBack } = props;
 
   if (state.loading) {
     return (
@@ -693,6 +700,11 @@ export function OnboardingView(props: OnboardingViewProps) {
       <div className="relative mx-auto flex w-full max-w-3xl flex-1 flex-col gap-8 px-6 py-10">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1">
+            {welcomeBack && (
+              <p className="mb-2 text-sm text-ink-muted">
+                Welcome back — picking up at {welcomeBack.moduleLabel}.
+              </p>
+            )}
             <PhaseRail modules={state.modules} stage={state.stage} sweeping={state.interstitialPending} />
           </div>
           {huntStatusLabel && (
@@ -725,6 +737,7 @@ export function OnboardingView(props: OnboardingViewProps) {
 export default function OnboardingPage() {
   const [state, dispatch] = useReducer(onboardingReducer, initialOnboardingState);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const welcomeBack = useWelcomeBack();
 
   useEffect(() => {
     let cancelled = false;
@@ -881,6 +894,7 @@ export default function OnboardingPage() {
   return (
     <OnboardingView
       state={state}
+      welcomeBack={welcomeBack}
       calibrationPrompts={calibrationPrompts}
       scrollRef={scrollRef}
       onInputChange={(value) => dispatch({ type: "input_changed", value })}
