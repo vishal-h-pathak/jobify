@@ -545,6 +545,138 @@ describe("handleOnboardingTurn", () => {
       expect(savedArg.modules.evidence?.receipt).toBe("built from your answers");
     });
 
+  });
+
+  describe("INTSIM task 4: fallback_kind telemetry", () => {
+    it("fallback_kind is undefined on a normal turn (question present, no fallback fired)", async () => {
+      const runTurn = vi.fn(async () => ({
+        assistantText: "Thanks — tell me about your background?",
+        toolCalls: [],
+        usage: { inputTokens: 100, outputTokens: 50 },
+      }));
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "here is my resume",
+        session: baseSession(),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.fallback_kind).toBeUndefined();
+    });
+
+    it("sets fallback_kind to 'reprompt' when the v2 continue re-prompt fires, and warns a structured line", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const runTurn = vi
+        .fn()
+        .mockResolvedValueOnce({
+          assistantText: "Got it — that gives real shape to direction.",
+          toolCalls: [],
+          usage: { inputTokens: 100, outputTokens: 40 },
+        })
+        .mockResolvedValueOnce({
+          assistantText: "Which of those directions would you pick first?",
+          toolCalls: [],
+          usage: { inputTokens: 120, outputTokens: 30 },
+        });
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "I'd want roles applying frontier AI across my interest areas.",
+        session: baseSession({ stage: "targeting" }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.fallback_kind).toBe("reprompt");
+      expect(warnSpy).toHaveBeenCalledWith(
+        "onboarding_fallback",
+        expect.objectContaining({ userId: "user-1", stage: "targeting", kind: "reprompt" })
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("sets fallback_kind to 'fallback' when the empty-response retry survives (still empty)", async () => {
+      const runTurn = vi.fn(async () => ({
+        assistantText: "",
+        toolCalls: [],
+        usage: { inputTokens: 5, outputTokens: 0 },
+      }));
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "ok",
+        session: baseSession({ stage: "targeting" }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.fallback_kind).toBe("fallback");
+    });
+
+    it("sets fallback_kind to 'fallback' on the first last-resort append (non-empty ack-only turn)", async () => {
+      const runTurn = vi.fn(async () => ({
+        assistantText: "Good, moving on.",
+        toolCalls: [{ name: "record_resume", input: { cv_markdown: "# CV" } }],
+        usage: { inputTokens: 40, outputTokens: 10 },
+      }));
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "This is good.",
+        session: baseSession({ stage: "resume" }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.fallback_kind).toBe("fallback");
+    });
+
+    it("sets fallback_kind to 'loop_breaker' when the same canned fallback would repeat consecutively", async () => {
+      // The prior assistant turn already ends with the canned targeting
+      // fallback text (session-prompt 45's second live loop) — a new
+      // ack-only turn must get the loop-breaker question, not the same
+      // canned text again.
+      const priorFallback =
+        "Logistics, all in one go: where are you based, remote-only or is some onsite fine (and where), " +
+        "and what's the salary floor below which you won't even look?";
+      const runTurn = vi.fn(async () => ({
+        assistantText: "Noted, thanks.",
+        toolCalls: [],
+        usage: { inputTokens: 20, outputTokens: 10 },
+      }));
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "here's more context",
+        session: baseSession({
+          stage: "targeting",
+          messages: [
+            { role: "user", content: "hi" },
+            { role: "assistant", content: priorFallback },
+          ],
+        }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.fallback_kind).toBe("loop_breaker");
+      expect(result.assistantText).toContain("What's the one thing I haven't asked about that matters most");
+    });
+  });
+
+  describe("V3A-B2: module-completion glue", () => {
     it("preserves session.modules unchanged in saveSession when a turn fires neither record_calibration nor record_resume", async () => {
       const runTurn = vi.fn(async () => ({
         assistantText: "Got it — what's your target comp?",
