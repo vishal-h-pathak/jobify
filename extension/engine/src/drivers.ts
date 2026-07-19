@@ -10,9 +10,9 @@ import { settle } from "./settle.js";
 import type { EngineFiles, FillInstruction, SurveyField } from "./types.js";
 
 // Strategy escalation interface (native -> keystrokes). The union stays
-// open (`string & {}`) as a typed extension point for E2's `chrome.debugger`
-// trusted-input strategy, added once read-back keeps failing native +
-// keystrokes on a real form — not implemented here.
+// open (`string & {}`) as a typed extension point for E2's debugger-
+// protocol trusted-input strategy, added once read-back keeps failing
+// native + keystrokes on a real form — not implemented here.
 export type Strategy = "native" | "keystrokes" | (string & {});
 
 const CHECKED_TRUE_VALUES = new Set(["true", "1", "yes", "on", "checked"]);

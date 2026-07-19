@@ -1,7 +1,7 @@
 // survey.ts — TS port + upgrade of `browser_tools.py::get_form_fields`
 // (§3.1). Enumerates fields + buttons across the document, every open
 // shadow root (recursive), and every same-origin iframe (frame-path ids),
-// emitting one normalized Survey. Zero chrome.* APIs, zero network.
+// emitting one normalized Survey. Zero extension-API access, zero network.
 
 import {
   FIELD_ID_ATTR,

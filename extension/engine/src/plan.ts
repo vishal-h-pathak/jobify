@@ -1,8 +1,8 @@
 // plan.ts — port of `prepare_dom/_common.py::build_field_map` + the join
 // logic that used to live inline in each per-ATS adapter
 // (`field_maps.py::apply_field_map`'s value-resolution half). Pure: no DOM
-// access, no chrome.* APIs — everything it needs is already captured on the
-// Survey.
+// access, no extension-API access — everything it needs is already
+// captured on the Survey.
 
 import { MAPS, selectorsFor, type FieldSpec, type FieldType } from "./maps.js";
 import type { AtsMapKind, FillInstruction, Survey, SurveyField, SubmitPacket } from "./types.js";
