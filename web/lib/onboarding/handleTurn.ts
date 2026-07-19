@@ -182,6 +182,25 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     if (followText !== "") assistantText = `${assistantText} ${followText}`;
   }
 
+  // Live-fire fix (2026-07-19, dead-end #4): completion is a SERVER decision,
+  // not a model courtesy. Once every field the profile requires exists
+  // (targeting tiers + thesis, identity name), the interview IS complete —
+  // even if the model never emits finish_interview. In production a
+  // record_targeting landed perfectly (2,292 tokens) with no text and no
+  // finish signal, stranding a fully-collected profile behind a canned
+  // fallback forever. finish_interview stays the happy path (it carries the
+  // closing summary); this is the deterministic floor beneath it.
+  if (
+    !done &&
+    stage === "targeting" &&
+    (extracted.targeting?.tiers?.length ?? 0) > 0 &&
+    extracted.targeting?.thesis_summary &&
+    extracted.identity?.name
+  ) {
+    done = true;
+    stage = "done";
+  }
+
   // V3A-B2: mark range/evidence complete when their tool calls land this
   // turn. `{ modules }` matches markModuleComplete's `{ modules: ModulesState
   // }` signature (it only reads `.modules`) — chain by threading the local
