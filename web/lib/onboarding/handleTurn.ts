@@ -45,6 +45,8 @@ const RESUME_STAGE_FALLBACK = "Have a resume handy? Paste/upload it — or skip,
 const TARGETING_STAGE_FALLBACK =
   "Logistics, all in one go: where are you based, remote-only or is some onsite fine (and where), " +
   "and what's the salary floor below which you won't even look?";
+const CALIBRATION_STAGE_GENERIC_FALLBACK =
+  "Let's capture your range — tell me about the core of your work in a few sentences.";
 // Live-fire fix (2026-07-19): once record_identity has landed the logistics
 // block, the targeting fallback must nudge FORWARD into the generated
 // questions, never re-ask the logistics opener — the context-blind opener
@@ -58,8 +60,6 @@ const TARGETING_DIRECTION_FALLBACK =
 // would be appended twice in a row, ask this instead — never repeat.
 const LOOP_BREAKER_QUESTION =
   "What's the one thing I haven't asked about that matters most for your search?";
-const CALIBRATION_STAGE_GENERIC_FALLBACK =
-  "Let's capture your range — tell me about the core of your work in a few sentences.";
 
 const DONE_FALLBACK_TEXT =
   'Your profile is built — head to your feed and hit "Run my hunt" to get your first results.';
@@ -72,9 +72,8 @@ const DONE_FALLBACK_TEXT =
  * at all. `calibration`'s fallback re-surfaces the first of the four
  * already-generated prompts (extracted.calibration.prompts) rather than a
  * fixed string, since the ingest turn's only real content IS those
- * prompts; `anchor`/legacy `identity` never reach a chat turn in v2 (the
- * anchor stage is a zero-LLM form, and no session is ever written back
- * into 'identity'), so they fall back to the targeting text defensively.
+ * prompts; `anchor` never reaches a chat turn in v2 (the anchor stage is a
+ * zero-LLM form), so it falls back to the targeting text defensively.
  */
 function fallbackAssistantText(stage: InterviewStage, extracted: ExtractedState): string {
   switch (stage) {
@@ -86,7 +85,6 @@ function fallbackAssistantText(stage: InterviewStage, extracted: ExtractedState)
       return RESUME_STAGE_FALLBACK;
     case "targeting":
     case "anchor":
-    case "identity":
     default:
       // Logistics already recorded -> push forward, don't re-ask it.
       return extracted.identity?.location_and_compensation

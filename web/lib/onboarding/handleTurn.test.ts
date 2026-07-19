@@ -34,9 +34,11 @@ describe("handleOnboardingTurn", () => {
     recordOnboardingTurnMock.mockClear();
   });
 
-  it("records exactly one budget_ledger row per turn", async () => {
+  it("records exactly one budget_ledger row per LLM call (single-call turn)", async () => {
+    // The reply contains a question, so the v2 continue re-prompt does NOT
+    // fire — exactly one model call, exactly one ledger row.
     const runTurn = vi.fn(async () => ({
-      assistantText: "Thanks — tell me about your background.",
+      assistantText: "Thanks — tell me about your background?",
       toolCalls: [],
       usage: { inputTokens: 100, outputTokens: 50 },
     }));
@@ -51,10 +53,61 @@ describe("handleOnboardingTurn", () => {
       runTurn,
     });
 
+    expect(runTurn).toHaveBeenCalledTimes(1);
     expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(1);
     expect(recordOnboardingTurnMock).toHaveBeenCalledWith(
       fakeClient,
       expect.objectContaining({ userId: "user-1", inputTokens: 100, outputTokens: 50 })
+    );
+  });
+
+  it("v2 loop fix: a question-less turn triggers ONE continue re-prompt, and BOTH calls get ledger rows", async () => {
+    const runTurn = vi
+      .fn()
+      .mockResolvedValueOnce({
+        // Ack-only turn: no question mark -> the re-prompt must fire.
+        assistantText: "Got it — that gives real shape to direction.",
+        toolCalls: [],
+        usage: { inputTokens: 100, outputTokens: 40 },
+      })
+      .mockResolvedValueOnce({
+        // The model continues properly on the nudge.
+        assistantText: "Which of those directions would you pick first?",
+        toolCalls: [],
+        usage: { inputTokens: 120, outputTokens: 30 },
+      });
+
+    const result = await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "I'd want roles applying frontier AI across my interest areas.",
+      session: baseSession({ stage: "targeting" }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    expect(runTurn).toHaveBeenCalledTimes(2);
+    // The synthetic continue nudge is never persisted to history.
+    const secondCallHistory = runTurn.mock.calls[1]![0] as ChatMessage[];
+    expect(secondCallHistory[secondCallHistory.length - 1]!.content).toContain("Continue");
+    const savedMessages = (saveSessionMock.mock.calls[0]![2] as { messages: ChatMessage[] }).messages;
+    expect(savedMessages.some((m) => m.content.includes("(Continue"))).toBe(false);
+    // Combined text = ack + the model's own follow-up question, no canned append.
+    expect(result.assistantText).toBe(
+      "Got it — that gives real shape to direction. Which of those directions would you pick first?"
+    );
+    // Constitutional: one ledger row per real LLM call — two calls, two rows.
+    expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(2);
+    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(
+      1,
+      fakeClient,
+      expect.objectContaining({ inputTokens: 100, outputTokens: 40 })
+    );
+    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(
+      2,
+      fakeClient,
+      expect.objectContaining({ inputTokens: 120, outputTokens: 30 })
     );
   });
 
