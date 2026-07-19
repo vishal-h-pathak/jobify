@@ -738,6 +738,17 @@ def run_fanout_cycle(user_ids: Optional[list[str]] = None) -> dict[str, int]:
             _run_user_ladder(user_id, counters, global_pool_capped=global_pool_capped)
         except Exception as exc:  # noqa: BLE001 — one user's failure must not abort the cycle
             counters["users_errored"] += 1
+            # Live-fire fix (2026-07-19): surface the FIRST ladder failure into
+            # the hunt_cycles counters jsonb — a users_errored count with no
+            # message forced a blind debugging session (cycle #23: one user
+            # errored at stage 2 with cost 0 and the traceback existed only in
+            # ephemeral GHA logs). Truncated; first failure only; no PII —
+            # user_id prefix + exception text.
+            if "first_error" not in counters:
+                import traceback as _tb  # noqa: PLC0415
+
+                tail = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__, limit=-4))
+                counters["first_error"] = f"{user_id[:8]}: {tail}"[-800:]  # type: ignore[assignment]
             logger.error("fanout: ladder failed for user_id=%s: %s", user_id, exc)
 
     logger.info("fanout cycle done: %s", counters)
