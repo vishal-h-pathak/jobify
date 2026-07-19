@@ -46,8 +46,9 @@ describe("(app) layout — invite gate", () => {
     hasClaimedInviteMock.mockResolvedValue(true);
 
     const result = await AppLayout({ children: "content" });
-    const [header, main, footer] = result.props.children;
+    const [handoffEmitter, header, main, footer] = result.props.children;
 
+    expect(handoffEmitter.type.name).toBe("HandoffEmitter");
     const [wordmarkLink, navGroup] = header.props.children.props.children;
     expect(wordmarkLink.props.href).toBe("/feed");
     const [navLinks, signOutButton] = navGroup.props.children;
@@ -68,7 +69,7 @@ describe("(app) layout — invite gate", () => {
     expect(redirectMock).not.toHaveBeenCalled();
     // Short-circuits on the admin bypass — no need to query the invite.
     expect(hasClaimedInviteMock).not.toHaveBeenCalled();
-    const [header] = result.props.children;
+    const [, header] = result.props.children;
     const [, navGroup] = header.props.children.props.children;
     const [navLinks] = navGroup.props.children;
     expect(navLinks.props.isAdmin).toBe(true);
