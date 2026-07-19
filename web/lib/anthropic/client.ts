@@ -29,12 +29,22 @@ const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for 
 type SystemBlock = { type: string; text?: string; [k: string]: unknown };
 
 function injectIdentityBlock(bodyText: string): string {
-  const body = JSON.parse(bodyText) as { system?: string | SystemBlock[] };
+  const body = JSON.parse(bodyText) as { system?: string | SystemBlock[]; thinking?: unknown };
   const sys = body.system;
   const blocks: SystemBlock[] =
     typeof sys === "string" ? [{ type: "text", text: sys }] : Array.isArray(sys) ? sys : [];
   const alreadyFirst = blocks[0]?.type === "text" && blocks[0]?.text === CLAUDE_CODE_IDENTITY;
   body.system = alreadyFirst ? blocks : [{ type: "text", text: CLAUDE_CODE_IDENTITY }, ...blocks];
+  // Live-fire fix (2026-07-19, the day's unifying suspect): this token class
+  // serves with extended thinking enabled by default (it's how Claude Code
+  // runs), thinking tokens count against max_tokens, and our parsers read
+  // only text/tool_use blocks — so turns burned their entire budget on
+  // invisible reasoning and arrived "empty" or truncated at EVERY cap size
+  // (1536, 2048, 4096 — all hit flush in prod today). Disable it explicitly;
+  // an app-provided thinking config, if one ever appears, wins.
+  if (body.thinking === undefined) {
+    body.thinking = { type: "disabled" };
+  }
   return JSON.stringify(body);
 }
 
