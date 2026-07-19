@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { deriveDossier } from "@/lib/dossier/derive";
+import { renderDossierCopyBlock } from "@/lib/dossier/exportMarkdown";
 
 const redirectMock = vi.fn((url: string) => {
   throw new Error(`REDIRECT:${url}`);
@@ -62,8 +63,11 @@ describe("/profile page", () => {
     const result = await ProfilePage();
     const view = result.props.children;
     expect(view.type).toBe(DossierView);
-    expect(view.props.dossier).toEqual(
-      deriveDossier({ doc, validationStatus: validation_status, modules, extracted })
+    const expectedDossier = deriveDossier({ doc, validationStatus: validation_status, modules, extracted });
+    expect(view.props.dossier).toEqual(expectedDossier);
+    expect(typeof view.props.copyBlock).toBe("string");
+    expect(view.props.copyBlock.startsWith(renderDossierCopyBlock(expectedDossier, new Date()).slice(0, 40))).toBe(
+      true
     );
   });
 

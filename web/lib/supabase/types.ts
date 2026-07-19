@@ -57,11 +57,11 @@ export interface Database {
       onboarding_sessions: {
         // ONB-A (2026-07-05): v2 stage machine — anchor -> calibration ->
         // resume (optional) -> targeting -> done (0010_onboarding_stage_v2.sql).
-        // "identity" is kept as a legal union member purely so the pre-B
-        // onboarding UI (web/app/(app)/onboarding/page.tsx, out of this
-        // session's ownership) keeps compiling against its old literal
-        // "identity" stage usages; v2 code never writes it — migration
-        // 0010 remaps every existing 'identity' row to 'targeting'.
+        // The legacy "identity" literal (UX1-B audit, 2026-07-19) was
+        // removed from this union: the live DB CHECK constraint never
+        // allowed it (migration 0010 remapped every historical row to
+        // 'targeting'), so it was dead weight kept only for the pre-B
+        // onboarding UI's old literal usages — deleted alongside it.
         // V3A-1 contract (session-prompts/31_v3a_modules.md, pinned block):
         // `modules` anticipates session 30's migration 0011 —
         // { [key: ModuleKey]: { completed_at: string, receipt: string } },
@@ -73,7 +73,7 @@ export interface Database {
         // typechecks without depending on 30's migration landing first.
         Row: {
           user_id: string;
-          stage: "anchor" | "calibration" | "resume" | "identity" | "targeting" | "done";
+          stage: "anchor" | "calibration" | "resume" | "targeting" | "done";
           messages: Array<{ role: "user" | "assistant"; content: string }>;
           extracted: Record<string, unknown>;
           // V3A-1 (0011): per-module completion progress, keyed by
@@ -87,14 +87,14 @@ export interface Database {
         };
         Insert: {
           user_id: string;
-          stage?: "anchor" | "calibration" | "resume" | "identity" | "targeting" | "done";
+          stage?: "anchor" | "calibration" | "resume" | "targeting" | "done";
           messages?: Array<{ role: "user" | "assistant"; content: string }>;
           extracted?: Record<string, unknown>;
           modules?: Record<string, { completed_at: string; receipt: string } | { fired_at: string }>;
           status?: "in_progress" | "complete";
         };
         Update: {
-          stage?: "anchor" | "calibration" | "resume" | "identity" | "targeting" | "done";
+          stage?: "anchor" | "calibration" | "resume" | "targeting" | "done";
           messages?: Array<{ role: "user" | "assistant"; content: string }>;
           extracted?: Record<string, unknown>;
           modules?: Record<string, { completed_at: string; receipt: string } | { fired_at: string }>;

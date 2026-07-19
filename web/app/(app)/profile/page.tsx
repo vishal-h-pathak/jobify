@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getProfileDoc } from "@/lib/db/profiles";
 import { deriveDossier } from "@/lib/dossier/derive";
+import { renderDossierCopyBlock } from "@/lib/dossier/exportMarkdown";
 import { DossierView } from "@/components/dossier/DossierView";
 import type { ModulesState } from "@/lib/onboarding/moduleRegistry";
 
@@ -39,9 +40,11 @@ export default async function ProfilePage() {
     extracted,
   });
 
+  const copyBlock = renderDossierCopyBlock(dossier, new Date());
+
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 py-10">
-      <DossierView dossier={dossier} />
+    <div className="dossier-print mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 py-10">
+      <DossierView dossier={dossier} copyBlock={copyBlock} />
     </div>
   );
 }

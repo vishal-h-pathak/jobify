@@ -9,11 +9,11 @@ export interface ChatMessage {
 }
 
 // ONB-A (2026-07-05): v2 stage machine — anchor -> calibration -> resume
-// (optional) -> targeting -> done. "identity" is kept as a legal union
-// member purely so the pre-B onboarding UI (web/app/(app)/onboarding/**,
-// out of this session's ownership) keeps compiling against its old literal
-// "identity" stage usages; v2 code never produces it.
-export type InterviewStage = "anchor" | "calibration" | "resume" | "identity" | "targeting" | "done";
+// (optional) -> targeting -> done. The legacy "identity" literal was
+// removed (UX1-B audit, 2026-07-19): the live DB CHECK never allowed it
+// (migration 0010 remapped every historical row to 'targeting'), so it was
+// dead weight — v2 code never produced it.
+export type InterviewStage = "anchor" | "calibration" | "resume" | "targeting" | "done";
 
 /**
  * Legacy: the v1 resume-first opener. Never produced by v2 code — the

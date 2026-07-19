@@ -161,3 +161,18 @@ select,
     color: black;
   }
 }
+
+/* UX1-B (session 44) — the dossier prints as a clean typographic one-pager
+   (D5's "Print/PDF" affordance, no server-side PDF). Same body:has()
+   scoping as the submit kit above; per-element print:hidden Tailwind
+   utilities hide the export row's own buttons. */
+@media print {
+  body:has(.dossier-print) header,
+  body:has(.dossier-print) footer {
+    display: none;
+  }
+  body:has(.dossier-print) {
+    background: white;
+    color: black;
+  }
+}

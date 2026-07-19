@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { handleAppliedClick, shouldRedirectToSetup } from "./SubmitKit";
+import { canFireAppliedClick, handleAppliedClick, shouldRedirectToSetup } from "./SubmitKit";
 
 describe("handleAppliedClick", () => {
   it("calls markApplied with the given supabase client, user, and posting — the feed's own mechanism", async () => {
@@ -16,6 +16,16 @@ describe("handleAppliedClick", () => {
     const markAppliedImpl = vi.fn().mockRejectedValue(new Error("RLS policy regression?"));
     const result = await handleAppliedClick({} as never, "user-1", "posting-1", markAppliedImpl);
     expect(result).toEqual({ ok: false, error: "RLS policy regression?" });
+  });
+});
+
+describe("canFireAppliedClick — UX1-B paper cut 2: in-flight guard", () => {
+  it("allows the click when no call is already pending", () => {
+    expect(canFireAppliedClick(false)).toBe(true);
+  });
+
+  it("blocks a second click while the markApplied call is still in flight — no double-fire", () => {
+    expect(canFireAppliedClick(true)).toBe(false);
   });
 });
 
