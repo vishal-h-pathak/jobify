@@ -248,7 +248,7 @@ export async function runInterviewTurn(history: ChatMessage[]): Promise<Intervie
     // nose). A truncated tool_use block arrives as no tool call and no
     // text, so the turn looked empty and the fallback loop fired. 4096
     // costs fractions of a cent more and only when actually used.
-    max_tokens: 4096,
+    max_tokens: 8192, // was 4096 after the first raise — prod hit THAT flush twice too (cap audit 2026-07-19)
     system: INTERVIEW_SYSTEM_PROMPT,
     tools: INTERVIEW_TOOLS,
     messages: history.map((m) => ({ role: m.role, content: m.content })),
@@ -353,7 +353,7 @@ function anchorContextLine(anchor: AnchorStageData): string {
 export async function runCalibrationGeneration(anchor: AnchorStageData): Promise<CalibrationGenerationResult> {
   const response = await anthropicClient().messages.create({
     model: ONBOARDING_MODEL,
-    max_tokens: 1024,
+    max_tokens: 2048, // was 1024 (cap audit 2026-07-19)
     system: CALIBRATION_GENERATION_SYSTEM_PROMPT,
     tools: CALIBRATION_GENERATION_TOOLS,
     messages: [{ role: "user", content: anchorContextLine(anchor) }],
@@ -411,7 +411,7 @@ export interface ResumeExtractionTurnResult {
 export async function runResumeExtractionTurn(resumeText: string): Promise<ResumeExtractionTurnResult> {
   const response = await anthropicClient().messages.create({
     model: ONBOARDING_MODEL,
-    max_tokens: 2048,
+    max_tokens: 8192, // was 2048 — cv_markdown for a long resume alone can exceed it (cap audit 2026-07-19)
     system: RESUME_EXTRACTION_SYSTEM_PROMPT,
     tools: RESUME_EXTRACTION_TOOLS,
     messages: [{ role: "user", content: resumeText }],

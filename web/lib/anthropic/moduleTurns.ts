@@ -83,7 +83,12 @@ export interface VoiceTurnResult {
 export async function runVoiceIngestTurn(sample: string): Promise<VoiceTurnResult> {
   const response = await anthropicClient().messages.create({
     model: ONBOARDING_MODEL,
-    max_tokens: 1024,
+    // Live-fire cap audit (2026-07-19): all three caps in this file were
+    // sized for a terser transport; mirror hit its cap flush twice in prod
+    // (truncated synthesis -> verification dropped it -> empty mirror
+    // panel), metrics hit its cap once. Raised across the board — output
+    // tokens only cost when actually used.
+    max_tokens: 2048,
     system: VOICE_INGEST_SYSTEM_PROMPT,
     tools: VOICE_INGEST_TOOLS,
     messages: [{ role: "user", content: sample }],
@@ -211,7 +216,7 @@ function isMetricClaim(value: unknown): value is MetricClaim {
 export async function runMetricsExtractionTurn(searchableText: string): Promise<MetricsExtractionResult> {
   const response = await anthropicClient().messages.create({
     model: ONBOARDING_MODEL,
-    max_tokens: 2048,
+    max_tokens: 4096, // was 2048 — hit flush in prod (see cap-audit note above)
     system: METRICS_EXTRACTION_SYSTEM_PROMPT,
     tools: METRICS_EXTRACTION_TOOLS,
     messages: [{ role: "user", content: searchableText }],
@@ -306,7 +311,10 @@ function isTwoStringTuple(value: unknown): value is [string, string] {
 export async function runMirrorGenerationTurn(inputs: MirrorGenerationInput): Promise<MirrorGenerationResult> {
   const response = await anthropicClient().messages.create({
     model: ONBOARDING_MODEL,
-    max_tokens: 1024,
+    // was 1024 — truncated flush TWICE in prod; the drop-on-fail verifier
+    // then correctly refused the mangled synthesis and the mirror rendered
+    // empty (see cap-audit note above).
+    max_tokens: 4096,
     system: MIRROR_GENERATION_SYSTEM_PROMPT,
     tools: MIRROR_GENERATION_TOOLS,
     messages: [{ role: "user", content: inputs.extractedSummary }],
