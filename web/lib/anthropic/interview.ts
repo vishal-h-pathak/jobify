@@ -232,16 +232,26 @@ export interface InterviewToolCall {
   input: Record<string, unknown>;
 }
 
+// INTSIM reviewer addendum 2: named (not magic-number) caps, each also
+// returned on its call's result below as `maxTokens` — a TRUNCATION-
+// invariant check needs to know the cap a response was measured against,
+// not just its token count, to tell "the model stopped naturally" from
+// "the response was decapitated at the cap" (motivating live bug:
+// record_targeting truncated at this cap, indistinguishable downstream
+// from an empty turn).
+export const INTERVIEW_MAX_TOKENS = 1536;
+
 export interface InterviewTurnResult {
   assistantText: string;
   toolCalls: InterviewToolCall[];
   usage: { inputTokens: number; outputTokens: number };
+  maxTokens?: number;
 }
 
 export async function runInterviewTurn(history: ChatMessage[]): Promise<InterviewTurnResult> {
   const response = await anthropicClient().messages.create({
     model: ONBOARDING_MODEL,
-    max_tokens: 1536,
+    max_tokens: INTERVIEW_MAX_TOKENS,
     system: INTERVIEW_SYSTEM_PROMPT,
     tools: INTERVIEW_TOOLS,
     messages: history.map((m) => ({ role: m.role, content: m.content })),
@@ -263,6 +273,7 @@ export async function runInterviewTurn(history: ChatMessage[]): Promise<Intervie
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
     },
+    maxTokens: INTERVIEW_MAX_TOKENS,
   };
 }
 
@@ -323,9 +334,12 @@ export const CALIBRATION_GENERATION_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+export const CALIBRATION_GENERATION_MAX_TOKENS = 1024;
+
 export interface CalibrationGenerationResult {
   prompts: string[];
   usage: { inputTokens: number; outputTokens: number };
+  maxTokens?: number;
 }
 
 function anchorContextLine(anchor: AnchorStageData): string {
@@ -340,7 +354,7 @@ function anchorContextLine(anchor: AnchorStageData): string {
 export async function runCalibrationGeneration(anchor: AnchorStageData): Promise<CalibrationGenerationResult> {
   const response = await anthropicClient().messages.create({
     model: ONBOARDING_MODEL,
-    max_tokens: 1024,
+    max_tokens: CALIBRATION_GENERATION_MAX_TOKENS,
     system: CALIBRATION_GENERATION_SYSTEM_PROMPT,
     tools: CALIBRATION_GENERATION_TOOLS,
     messages: [{ role: "user", content: anchorContextLine(anchor) }],
@@ -357,6 +371,7 @@ export async function runCalibrationGeneration(anchor: AnchorStageData): Promise
   return {
     prompts,
     usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
+    maxTokens: CALIBRATION_GENERATION_MAX_TOKENS,
   };
 }
 
