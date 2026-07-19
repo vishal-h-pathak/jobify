@@ -56,6 +56,10 @@ const CALIBRATION_STAGE_GENERIC_FALLBACK =
 const TARGETING_DIRECTION_FALLBACK =
   "Logistics locked. Now direction: name the two or three kinds of next role you'd actually " +
   "want — or describe the one you keep imagining.";
+// Live-fire fix v2 (2026-07-19, second loop): if the same canned question
+// would be appended twice in a row, ask this instead — never repeat.
+const LOOP_BREAKER_QUESTION =
+  "What's the one thing I haven't asked about that matters most for your search?";
 
 const DONE_FALLBACK_TEXT =
   'Your profile is built — head to your feed and hit "Run my hunt" to get your first results.';
@@ -146,7 +150,37 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     turnResult = await runTurn(history);
   }
 
-  const { extracted, stage, done } = applyToolCalls(turnResult.toolCalls, session.extracted, session.stage);
+  let { extracted, stage, done } = applyToolCalls(turnResult.toolCalls, session.extracted, session.stage);
+  const usages = [turnResult.usage];
+  let allToolCalls = [...turnResult.toolCalls];
+
+  let assistantText = turnResult.assistantText.trim();
+  // Live-fire fix v2 (2026-07-19, second loop): a non-empty turn with no
+  // question must be continued BY THE MODEL, not papered over with a canned
+  // append — deterministic repeats poison the history and self-sustain (the
+  // model imitates the ack-only pattern it sees). One re-prompt turn: cheap,
+  // honest, and it can also land the record_* call the ack forgot. The
+  // synthetic continue nudge is NOT persisted to history below.
+  if (assistantText !== "" && !done && stage !== "done" && !assistantText.includes("?")) {
+    const continueHistory: ChatMessage[] = [
+      ...history,
+      { role: "assistant", content: assistantText },
+      {
+        role: "user",
+        content:
+          "(Continue — in one message: call any record_* tool you already have enough to fill, then ask your next question.)",
+      },
+    ];
+    const followup = await runTurn(continueHistory);
+    usages.push(followup.usage);
+    const applied = applyToolCalls(followup.toolCalls, extracted, stage);
+    extracted = applied.extracted;
+    stage = applied.stage;
+    done = applied.done;
+    allToolCalls = [...allToolCalls, ...followup.toolCalls];
+    const followText = followup.assistantText.trim();
+    if (followText !== "") assistantText = `${assistantText} ${followText}`;
+  }
 
   // V3A-B2: mark range/evidence complete when their tool calls land this
   // turn. `{ modules }` matches markModuleComplete's `{ modules: ModulesState
@@ -155,8 +189,8 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
   // untouched (== session.modules) on a turn that fires neither tool, so a
   // later read via getOrCreateSession stays accurate.
   let modules: ModulesState = session.modules;
-  const firedCalibration = turnResult.toolCalls.some((c) => c.name === "record_calibration");
-  const firedResume = turnResult.toolCalls.some((c) => c.name === "record_resume");
+  const firedCalibration = allToolCalls.some((c) => c.name === "record_calibration");
+  const firedResume = allToolCalls.some((c) => c.name === "record_resume");
   if (firedCalibration) {
     const receipt = MODULE_REGISTRY.range.receipt(extracted as unknown as Record<string, unknown>);
     if (receipt) modules = markModuleComplete({ modules }, "range", receipt);
@@ -166,19 +200,19 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     if (receipt) modules = markModuleComplete({ modules }, "evidence", receipt);
   }
 
-  let assistantText = turnResult.assistantText.trim();
   if (assistantText === "") {
     console.warn("handleOnboardingTurn: empty assistant response survived retry, using stage fallback", {
       userId,
       stage,
     });
     assistantText = fallbackAssistantText(stage, extracted);
-  } else if (stage !== "done" && !assistantText.includes("?")) {
-    // Deterministic post-check (preferred over relying on the prompt alone):
-    // a non-empty turn that never asks anything — e.g. a bare "Good, moving
-    // on." acknowledgment — gets the next question appended so the user
-    // always has something to answer.
-    assistantText = `${assistantText} ${fallbackAssistantText(stage, extracted)}`;
+  } else if (stage !== "done" && !done && !assistantText.includes("?")) {
+    // Last-resort append (the model was already re-prompted once above and
+    // STILL asked nothing) — with the loop breaker: never the same canned
+    // question twice in a row.
+    const fallback = fallbackAssistantText(stage, extracted);
+    const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
+    assistantText = `${assistantText} ${lastAssistant.includes(fallback) ? LOOP_BREAKER_QUESTION : fallback}`;
   }
 
   const newMessages: ChatMessage[] = [...history, { role: "assistant", content: assistantText }];
@@ -191,12 +225,16 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     extracted.identity = { ...extracted.identity, email: userEmail };
   }
 
-  await recordOnboardingTurn(admin, {
-    userId,
-    model: ONBOARDING_MODEL,
-    inputTokens: turnResult.usage.inputTokens,
-    outputTokens: turnResult.usage.outputTokens,
-  });
+  // One ledger row per real LLM call (constitutional) — the continue
+  // re-prompt, when it fired, is its own call and its own row.
+  for (const usage of usages) {
+    await recordOnboardingTurn(admin, {
+      userId,
+      model: ONBOARDING_MODEL,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+    });
+  }
 
   // onboarding_sessions.extracted is a generic JSONB column (Record<string,
   // unknown> in Database); ExtractedState is the narrower shape this
