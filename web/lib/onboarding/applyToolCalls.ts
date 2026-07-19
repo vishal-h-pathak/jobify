@@ -55,24 +55,44 @@ export function applyToolCalls(
         // stopped being its own db stage (0010_onboarding_stage_v2.sql).
         if (stage === "resume") stage = "targeting";
         break;
-      case "record_identity":
+      case "record_identity": {
         // ONB-A: record_identity fires *during* the targeting stage now
         // (the logistics opener), so it never advances the stage itself —
         // only finish_interview (via record_targeting first) does.
+        //
+        // INTSIM fix (live bug): a correction turn re-calls record_identity
+        // with only the field(s) that changed — the model doesn't reliably
+        // restate every field verbatim every time. A wholesale replace here
+        // silently destroyed previously-recorded fields (most visibly
+        // location_and_compensation) whenever that happened. Merge into
+        // `previous.identity`, same pattern as record_calibration below,
+        // and merge location_and_compensation one level deeper too since
+        // it's the field most likely to be corrected piecemeal (e.g. just
+        // target_comp_usd after a new offer).
+        const previousLocAndComp = previous.identity?.location_and_compensation;
+        const incomingLocAndComp =
+          typeof call.input.location_and_compensation === "object" && call.input.location_and_compensation !== null
+            ? (call.input.location_and_compensation as LocationAndCompensation)
+            : undefined;
+        const mergedLocAndComp =
+          previousLocAndComp || incomingLocAndComp
+            ? { ...previousLocAndComp, ...incomingLocAndComp }
+            : undefined;
+
         extracted.identity = {
-          name: String(call.input.name ?? ""),
-          email: String(call.input.email ?? ""),
-          phone: typeof call.input.phone === "string" ? call.input.phone : undefined,
-          location_base: typeof call.input.location_base === "string" ? call.input.location_base : undefined,
-          linkedin: typeof call.input.linkedin === "string" ? call.input.linkedin : undefined,
-          website: typeof call.input.website === "string" ? call.input.website : undefined,
-          github: typeof call.input.github === "string" ? call.input.github : undefined,
-          location_and_compensation:
-            typeof call.input.location_and_compensation === "object" && call.input.location_and_compensation !== null
-              ? (call.input.location_and_compensation as LocationAndCompensation)
-              : undefined,
+          ...previous.identity,
+          name: String(call.input.name ?? previous.identity?.name ?? ""),
+          email: String(call.input.email ?? previous.identity?.email ?? ""),
+          phone: typeof call.input.phone === "string" ? call.input.phone : previous.identity?.phone,
+          location_base:
+            typeof call.input.location_base === "string" ? call.input.location_base : previous.identity?.location_base,
+          linkedin: typeof call.input.linkedin === "string" ? call.input.linkedin : previous.identity?.linkedin,
+          website: typeof call.input.website === "string" ? call.input.website : previous.identity?.website,
+          github: typeof call.input.github === "string" ? call.input.github : previous.identity?.github,
+          location_and_compensation: mergedLocAndComp,
         };
         break;
+      }
       case "record_targeting":
         extracted.targeting = {
           tiers: Array.isArray(call.input.tiers) ? (call.input.tiers as TargetingTier[]) : [],

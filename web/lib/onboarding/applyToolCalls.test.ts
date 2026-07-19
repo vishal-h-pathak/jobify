@@ -81,6 +81,79 @@ describe("applyToolCalls", () => {
     expect(result.stage).toBe("done");
   });
 
+  it("INTSIM MONOTONIC-STATE fix: a second record_identity call merges into the previous identity instead of wholesale-replacing it (live bug: a partial re-call destroyed location_and_compensation mid-interview)", () => {
+    const first = applyToolCalls(
+      [
+        {
+          name: "record_identity",
+          input: {
+            name: "Alex Quinn",
+            email: "alex.quinn@example.com",
+            location_and_compensation: {
+              base: "Denver, CO",
+              remote_acceptable: true,
+              target_comp_usd: "175000-205000",
+            },
+          },
+        },
+      ],
+      {},
+      "targeting"
+    );
+    expect(first.extracted.identity?.location_and_compensation?.target_comp_usd).toBe("175000-205000");
+
+    // A correction turn later re-calls record_identity with only the
+    // corrected field(s) — the model does not necessarily restate
+    // location_and_compensation verbatim every time.
+    const corrected = applyToolCalls(
+      [{ name: "record_identity", input: { name: "Alex Quinn", email: "alex.quinn@example.com" } }],
+      first.extracted,
+      "targeting"
+    );
+
+    expect(corrected.extracted.identity?.name).toBe("Alex Quinn");
+    expect(corrected.extracted.identity?.location_and_compensation?.target_comp_usd).toBe("175000-205000");
+    expect(corrected.extracted.identity?.location_and_compensation?.base).toBe("Denver, CO");
+  });
+
+  it("record_identity's location_and_compensation itself merges field-by-field (a correction to just target_comp_usd doesn't drop remote_acceptable)", () => {
+    const first = applyToolCalls(
+      [
+        {
+          name: "record_identity",
+          input: {
+            name: "Alex Quinn",
+            email: "alex.quinn@example.com",
+            location_and_compensation: { base: "Denver, CO", remote_acceptable: true, target_comp_usd: "175000-205000" },
+          },
+        },
+      ],
+      {},
+      "targeting"
+    );
+
+    const corrected = applyToolCalls(
+      [
+        {
+          name: "record_identity",
+          input: {
+            name: "Alex Quinn",
+            email: "alex.quinn@example.com",
+            location_and_compensation: { target_comp_usd: "190000-210000" },
+          },
+        },
+      ],
+      first.extracted,
+      "targeting"
+    );
+
+    expect(corrected.extracted.identity?.location_and_compensation).toEqual({
+      base: "Denver, CO",
+      remote_acceptable: true,
+      target_comp_usd: "190000-210000",
+    });
+  });
+
   it("preserves previously extracted state across calls through the full v2 chain", () => {
     const afterCalibration = applyToolCalls(
       [
