@@ -1,0 +1,44 @@
+<form id="application_form">
+  <div class="field">
+    <label for="first_name">First Name</label>
+    <input id="first_name" name="job_application[first_name]" type="text" required>
+  </div>
+  <div class="field">
+    <label for="last_name">Last Name</label>
+    <input id="last_name" name="job_application[last_name]" type="text" required>
+  </div>
+  <div class="field">
+    <label for="email">Email</label>
+    <input id="email" name="job_application[email]" type="email" required>
+  </div>
+  <div class="field">
+    <label for="phone">Phone</label>
+    <input id="phone" name="job_application[phone]" type="tel" required>
+  </div>
+  <div class="field">
+    <label for="linkedin">LinkedIn URL</label>
+    <input id="linkedin" name="job_application[urls][LinkedIn]" type="text">
+  </div>
+  <div class="field">
+    <label for="location">Location</label>
+    <input id="location" name="job_application[location]" type="text">
+  </div>
+  <div class="field">
+    <label for="how_heard">How did you hear about us?</label>
+    <select id="how_heard" name="job_application[source]">
+      <option value="">Select...</option>
+      <option value="referral">Referral</option>
+      <option value="job_board">Job Board</option>
+      <option value="company_site">Company Website</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="resume">Resume</label>
+    <input id="resume" type="file" name="job_application[resume]" required>
+  </div>
+  <div class="field">
+    <label for="cover_letter">Cover Letter</label>
+    <textarea id="cover_letter" name="job_application[cover_letter]"></textarea>
+  </div>
+  <button type="submit">Submit Application</button>
+</form>
