@@ -149,19 +149,15 @@ select,
 }
 
 /* V3C session 39 — the submit kit prints as a clean one-sheet crib. Scoped
-   to .submit-kit-print (web/components/submit/SubmitKit.tsx) so no other
-   page's print output changes; per-element print:hidden Tailwind utilities
-   inside that component hide buttons/nav that make no sense on paper. */
+   via body:has(.submit-kit-print) so only the submit-kit page's print output
+   changes; per-element print:hidden Tailwind utilities hide buttons/nav. */
 @media print {
-  header,
-  footer {
+  body:has(.submit-kit-print) header,
+  body:has(.submit-kit-print) footer {
     display: none;
   }
-  body {
+  body:has(.submit-kit-print) {
     background: white;
-    color: black;
-  }
-  .submit-kit-print {
     color: black;
   }
 }
