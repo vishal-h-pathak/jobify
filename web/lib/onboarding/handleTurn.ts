@@ -45,6 +45,15 @@ const RESUME_STAGE_FALLBACK = "Have a resume handy? Paste/upload it — or skip,
 const TARGETING_STAGE_FALLBACK =
   "Logistics, all in one go: where are you based, remote-only or is some onsite fine (and where), " +
   "and what's the salary floor below which you won't even look?";
+// Live-fire fix (2026-07-19): once record_identity has landed the logistics
+// block, the targeting fallback must nudge FORWARD into the generated
+// questions, never re-ask the logistics opener — the context-blind opener
+// turned one question-less model turn into an infinite re-ask loop (the
+// model acknowledged, the post-check appended the opener, the user answered
+// again, forever).
+const TARGETING_DIRECTION_FALLBACK =
+  "Logistics locked. Now direction: name the two or three kinds of next role you'd actually " +
+  "want — or describe the one you keep imagining.";
 const CALIBRATION_STAGE_GENERIC_FALLBACK =
   "Let's capture your range — tell me about the core of your work in a few sentences.";
 
@@ -75,7 +84,10 @@ function fallbackAssistantText(stage: InterviewStage, extracted: ExtractedState)
     case "anchor":
     case "identity":
     default:
-      return TARGETING_STAGE_FALLBACK;
+      // Logistics already recorded -> push forward, don't re-ask it.
+      return extracted.identity?.location_and_compensation
+        ? TARGETING_DIRECTION_FALLBACK
+        : TARGETING_STAGE_FALLBACK;
   }
 }
 
