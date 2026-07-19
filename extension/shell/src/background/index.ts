@@ -20,3 +20,8 @@ createBackground(
     },
   })
 );
+
+// No `default_popup` on the toolbar action (manifest.json) — clicking it
+// opens the side panel instead, per chrome.sidePanel's own documented
+// pattern for this exact setup.
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});

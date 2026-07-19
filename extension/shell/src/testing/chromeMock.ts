@@ -78,6 +78,7 @@ export function installChromeMock(): ChromeMock {
 
   const sidePanel = {
     setOptions: vi.fn(async () => undefined),
+    setPanelBehavior: vi.fn(async () => undefined),
     open: vi.fn(async () => undefined),
   };
 
