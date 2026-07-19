@@ -42,7 +42,14 @@ function oauthFetch(url: RequestInfo | URL, init?: RequestInit): Promise<Respons
   const isMessages = String(url).includes("/v1/messages");
   if (isMessages && init?.body && typeof init.body === "string") {
     try {
-      init = { ...init, body: injectIdentityBlock(init.body) };
+      const body = injectIdentityBlock(init.body);
+      // The SDK precomputes content-length for the ORIGINAL body; ours is
+      // longer after injection, and undici hard-fails on the mismatch
+      // (UND_ERR_REQ_CONTENT_LENGTH_MISMATCH — caught live 2026-07-19).
+      // Drop the stale header so fetch recomputes it from the new body.
+      const headers = new Headers(init.headers as HeadersInit | undefined);
+      headers.delete("content-length");
+      init = { ...init, body, headers };
     } catch {
       // Malformed/non-JSON body: send unmodified rather than break the call.
     }
