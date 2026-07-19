@@ -7,6 +7,7 @@
 
 import { findFieldElements } from "./dom.js";
 import { settle } from "./settle.js";
+import { resolveLabel } from "./survey.js";
 import type { EngineFiles, FillInstruction, SurveyField } from "./types.js";
 
 // Strategy escalation interface (native -> keystrokes). The union stays
@@ -100,16 +101,18 @@ function fillCheckbox(root: Document, field: SurveyField, value: string): boolea
   return true;
 }
 
-/** Matches by option label (wrapping <label> text or the radio's own
- * `value` attribute) among every radio survey() tagged into this group. */
+/** Matches by option label — resolved via survey.ts's own label ladder
+ * (`resolveLabel`), the exact rule that built `SurveyField.options` in the
+ * first place, so a radio labelled via `label[for]`/aria-label/etc. (not
+ * just a wrapping `<label>`) is still found — plus the radio's own
+ * `value` attribute as a last-resort match. */
 function fillRadioGroup(root: Document, field: SurveyField, value: string): boolean {
   const radios = findFieldElements(root, field) as HTMLInputElement[];
   if (!radios.length) return false;
   const norm = value.trim().toLowerCase();
   const match = radios.find((r) => {
-    if (r.value.trim().toLowerCase() === norm) return true;
-    const wrapping = r.closest("label")?.textContent?.trim().toLowerCase();
-    return wrapping === norm;
+    if (resolveLabel(r).trim().toLowerCase() === norm) return true;
+    return r.value.trim().toLowerCase() === norm;
   });
   if (!match) return false;
   match.click();

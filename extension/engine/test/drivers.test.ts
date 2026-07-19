@@ -181,6 +181,18 @@ describe("runDriver — radio_group", () => {
     expect((document.querySelector('input[value="yes"]') as HTMLInputElement).checked).toBe(false);
   });
 
+  it("matches by label[for] (non-wrapping) via the same ladder survey() used to build .options", async () => {
+    document.body.innerHTML = `
+      <input type="radio" name="work_auth" id="wa_yes" value="1" ${FIELD_ID_ATTR}="f1">
+      <label for="wa_yes">Yes</label>
+      <input type="radio" name="work_auth" id="wa_no" value="0" ${FIELD_ID_ATTR}="f1">
+      <label for="wa_no">No</label>`;
+    const ok = await runDriver(document, textField({ kind: "radio_group" }), instruction({ value: "Yes" }), NO_FILES, "native");
+    expect(ok).toBe(true);
+    expect((document.getElementById("wa_yes") as HTMLInputElement).checked).toBe(true);
+    expect((document.getElementById("wa_no") as HTMLInputElement).checked).toBe(false);
+  });
+
   it("matches by the radio's own value attribute when there is no wrapping label", async () => {
     document.body.innerHTML = `
       <input type="radio" name="wa" value="yes" ${FIELD_ID_ATTR}="f1">

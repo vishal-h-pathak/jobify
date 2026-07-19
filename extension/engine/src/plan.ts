@@ -10,11 +10,13 @@ import type { AtsMapKind, FillInstruction, Survey, SurveyField, SubmitPacket } f
 type ResolvedValue = { value: string; source: string };
 
 // Label -> SubmitPacket.identity key. `null` entries (Current Company/
-// Company/Current Title/Title/Source) have no packet source — the packet
-// carries contact identity only, not employment history or "how did you
-// hear about us" — so they always resolve to "" and are silently skipped,
-// exactly like `build_field_map` reading a form_answers key that was never
-// populated.
+// Company/Current Title/Title/Source) have no packet source — SubmitPacket
+// does carry `authorization`/`logistics`/`self_id` sections, but L0 maps
+// only ever join against `identity`; those other sections (and employment
+// history / "how did you hear about us", which the packet has no field for
+// at all) are deliberately deferred to a later layer — so these labels
+// always resolve to "" and are silently skipped, exactly like
+// `build_field_map` reading a form_answers key that was never populated.
 const LABEL_TO_IDENTITY_KEY: Record<string, keyof SubmitPacket["identity"] | null> = {
   "First Name": "first_name",
   "Last Name": "last_name",
@@ -77,7 +79,13 @@ function kindMatchesType(kind: SurveyField["kind"], type: FieldType): boolean {
   if (type === "file") return kind === "file";
   if (type === "textarea") return kind === "textarea";
   if (type === "select") return kind === "select" || kind === "combobox";
-  return true; // "text": Python's fill_text never constrained kind either
+  // "text": genuinely text-like kinds only. The Python ancestor's actual
+  // selectors (`input[name="..."]`) were tag-qualified and could never
+  // match a <select>/<checkbox>/radio group sharing the same name or
+  // fuzzy-name — matching kind-agnostically here would let e.g. a
+  // "Location" spec's fuzzy name selector accidentally toggle an unrelated
+  // checkbox that happens to share a name substring.
+  return kind === "text" || kind === "date" || kind === "combobox";
 }
 
 /**
@@ -143,7 +151,22 @@ function findMatchingField(s: Survey, spec: FieldSpec, label: string): SurveyFie
 const requiredEmptyByPlan = new WeakMap<FillInstruction[], string[]>();
 
 export function requiredEmptyForPlan(plan: FillInstruction[]): string[] {
-  return requiredEmptyByPlan.get(plan) ?? [];
+  const found = requiredEmptyByPlan.get(plan);
+  if (found) return found;
+  // A real planFills() call always registers an entry — even an empty
+  // array gets `.set(instructions, [])` below — so a miss on a non-empty
+  // plan means this exact array isn't the one planFills returned (it was
+  // filtered/copied/reserialized, or hand-built). That silently drops
+  // required-and-empty tracking; warn instead of failing quietly, since
+  // there's no way to *require* passing the exact reference through the
+  // pinned executeFills(root, s, plan, files) signature.
+  if (plan.length > 0) {
+    console.warn(
+      "[jobify-engine] requiredEmptyForPlan: plan is not the exact array planFills() returned " +
+        "(filtered/copied/reserialized?) — required-and-empty tracking for it is lost.",
+    );
+  }
+  return [];
 }
 
 export function planFills(s: Survey, packet: SubmitPacket, ats: AtsMapKind | "generic"): FillInstruction[] {

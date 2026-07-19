@@ -6,7 +6,7 @@ import { findFieldElements } from "./dom.js";
 import { isTruthyCheckboxValue, runDriver, type Strategy } from "./drivers.js";
 import { requiredEmptyForPlan } from "./plan.js";
 import { settle } from "./settle.js";
-import { readValue } from "./survey.js";
+import { readValue, resolveLabel } from "./survey.js";
 import type { EngineFiles, FillInstruction, FillOutcome, FillReport, Survey, SurveyField } from "./types.js";
 
 const TEXT_LIKE_KINDS = new Set<SurveyField["kind"]>(["text", "textarea", "date"]);
@@ -39,7 +39,10 @@ function readBackMatches(root: Document, field: SurveyField, instr: FillInstruct
   if (field.kind === "radio_group") {
     const checked = (els as HTMLInputElement[]).find((r) => r.checked);
     if (!checked) return false;
-    const label = checked.closest("label")?.textContent?.trim() || checked.value || "";
+    // Same label resolution the driver matched against — a radio labelled
+    // via `label[for]`/aria-label rather than a wrapping <label> must
+    // read back as a match the same way it was filled as one.
+    const label = resolveLabel(checked) || checked.value || "";
     return normalize(label) === normalize(instr.value);
   }
 

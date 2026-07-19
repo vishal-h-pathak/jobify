@@ -81,17 +81,33 @@ function collectFieldsIn(
         continue;
       }
       emittedRadioGroups.add(groupKey);
-      fields.push(buildRadioGroupField(scanRoot, name, framePath, counter, seen));
+      // Group by name when there is one; a nameless radio can't be found
+      // by any later selector query anyway, so it's a one-element group
+      // built from what we already have in hand rather than a re-query
+      // that would come back empty.
+      const groupRadios = name
+        ? Array.from(scanRoot.querySelectorAll(`input[type="radio"][name="${escapeCss(name)}"]`))
+        : [el];
+      fields.push(buildRadioGroupField(groupRadios, name, framePath, counter, seen));
       continue;
     }
 
     seen.add(el);
     // A combobox container may wrap its own text input for typing (Ashby/
-    // React-select pattern) — that inner input is part of THIS field, not
-    // a separate one, so mark it seen too.
+    // React-select pattern), and react-select-style markup commonly nests
+    // a second combobox-matching element inside the outer container (e.g.
+    // an outer `[role="combobox"]` wrapping an inner `.select__control`
+    // display div) — both are part of THIS one field, not a separate one,
+    // so every combobox-matching descendant is claimed here too. Document
+    // order guarantees the outer element is visited before its
+    // descendants, so this always runs before the inner one would
+    // otherwise be re-processed as its own field.
     if (matchesCombobox(el)) {
       const inner = el.querySelector("input, textarea");
       if (inner) seen.add(inner);
+      for (const nested of Array.from(el.querySelectorAll(COMBOBOX_SELECTOR))) {
+        seen.add(nested);
+      }
     }
 
     fields.push(buildField(el, framePath, counter));
@@ -158,16 +174,13 @@ function buildField(el: Element, framePath: string, counter: Counter): SurveyFie
 }
 
 function buildRadioGroupField(
-  scanRoot: Document | ShadowRoot,
+  radios: Element[],
   name: string,
   framePath: string,
   counter: Counter,
   seen: Set<Element>,
 ): SurveyField {
   const id = `f${++counter.field}`;
-  const radios = name
-    ? Array.from(scanRoot.querySelectorAll(`input[type="radio"][name="${escapeCss(name)}"]`))
-    : [];
 
   let checkedLabel = "";
   const options: string[] = [];
@@ -281,7 +294,13 @@ function readOptions(el: Element, kind: SurveyField["kind"]): string[] | undefin
 // aria-label / aria-labelledby → placeholder → nearest preceding text /
 // fieldset legend. Falls back to name/id/tag if every rung misses, so a
 // field never carries an empty label into downstream matching.
-function resolveLabel(el: Element): string {
+//
+// Exported so drivers.ts's radio_group driver and fill.ts's read-back can
+// resolve an individual radio's option label the exact same way survey()
+// built `SurveyField.options` in the first place — matching against a
+// narrower rule (e.g. wrapping-label-only) would silently diverge from
+// what the Survey already promised the caller.
+export function resolveLabel(el: Element): string {
   const root = el.getRootNode() as Document | ShadowRoot;
 
   const id = (el as HTMLElement).id;

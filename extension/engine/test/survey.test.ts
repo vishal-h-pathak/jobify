@@ -124,6 +124,23 @@ describe("survey — ashby-like fixture (shadow root, fuzzy names, combobox, rad
     expect(source.options).toEqual(["Referral", "Job Board", "Company Website"]);
   });
 
+  it("does not produce a duplicate ghost field for the nested .select__control display div", () => {
+    // The fixture nests a `.select__control` div (itself combobox-
+    // matching) inside the outer `[role="combobox"]` container — the
+    // real react-select shape. Without claiming that inner div as part of
+    // the outer field, it survives as its own spurious combobox field
+    // (falling back to its tag name "div" as a label, since it has no
+    // aria-label/id/siblings of its own).
+    const s = survey(document);
+    const ghosts = s.fields.filter((f) => f.kind === "combobox" && f.label === "div");
+    expect(ghosts).toEqual([]);
+
+    // 10 logical fields total: First/Last/Email/Phone, the shadow-hosted
+    // Location, the work_auth radio_group, the agree checkbox, the
+    // combobox, the resume file, and the cover letter — no extras.
+    expect(s.fields).toHaveLength(10);
+  });
+
   it("surveys the file input hidden behind a dropzone despite zero-opacity styling", () => {
     const s = survey(document);
     const resume = field(s, "Resume");
@@ -267,5 +284,27 @@ describe("survey — kind detection", () => {
     document.body.innerHTML = `<input type="checkbox" name="agree">`;
     const s = survey(document);
     expect(s.fields[0]!.kind).toBe("checkbox");
+  });
+});
+
+describe("survey — radio_group edge cases", () => {
+  it("resolves option labels via label[for] (non-wrapping), not just a wrapping <label>", () => {
+    document.body.innerHTML = `
+      <input type="radio" name="work_auth" id="wa_yes" value="1">
+      <label for="wa_yes">Yes</label>
+      <input type="radio" name="work_auth" id="wa_no" value="0">
+      <label for="wa_no">No</label>`;
+    const s = survey(document);
+    expect(s.fields).toHaveLength(1);
+    expect(s.fields[0]!.kind).toBe("radio_group");
+    expect(s.fields[0]!.options).toEqual(["Yes", "No"]);
+  });
+
+  it("still tags a nameless radio so it can be found and filled (one-element group)", () => {
+    document.body.innerHTML = `<input type="radio" value="only">`;
+    const s = survey(document);
+    expect(s.fields).toHaveLength(1);
+    const el = document.querySelector('input[type="radio"]')!;
+    expect(el.getAttribute("data-jf-id")).toBe(s.fields[0]!.id);
   });
 });

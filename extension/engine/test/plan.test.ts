@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { planFills, requiredEmptyForPlan } from "../src/plan.js";
 import { survey } from "../src/survey.js";
 import type { FillInstruction, SurveyField } from "../src/types.js";
@@ -71,6 +71,18 @@ describe("planFills — greenhouse", () => {
     const s = survey(document);
     const plan = planFills(s, alexQuinnPacket(), "greenhouse");
     expect(requiredEmptyForPlan(plan)).toEqual([]);
+  });
+
+  it("a text-type spec never matches a <select> sharing its name (kindMatchesType must stay kind-aware)", () => {
+    mountHtmlFixture("greenhouse.html");
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      `<select name="job_application[location]"><option value="atl">Atlanta</option></select>`,
+    );
+    const s = survey(document);
+    const plan = planFills(s, alexQuinnPacket(), "greenhouse");
+    const selectField = s.fields.find((f) => f.kind === "select" && f.name === "job_application[location]")!;
+    expect(plan.some((i) => i.fieldId === selectField.id)).toBe(false);
   });
 
   it("requiredEmpty reports a required label whose packet value is missing", () => {
@@ -168,5 +180,18 @@ describe("requiredEmptyForPlan", () => {
   it("degrades gracefully for a plan array not produced by planFills", () => {
     const handBuilt: FillInstruction[] = [{ fieldId: "f1", value: "x", source: "identity.email" }];
     expect(requiredEmptyForPlan(handBuilt)).toEqual([]);
+  });
+
+  it("warns when a non-empty plan isn't the exact array planFills returned (e.g. copied/filtered)", () => {
+    mountHtmlFixture("greenhouse.html");
+    const s = survey(document);
+    const plan = planFills(s, alexQuinnPacket(), "greenhouse");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const copy = [...plan]; // a new array reference — the WeakMap can't find it
+    expect(requiredEmptyForPlan(copy)).toEqual([]);
+    expect(warn).toHaveBeenCalledOnce();
+
+    warn.mockRestore();
   });
 });
