@@ -39,6 +39,38 @@ describe("applyToolCalls", () => {
     expect(result.extracted.calibration?.prompts).toEqual(["depth?", "breadth?", "range?", "evidence?"]);
   });
 
+  it("INTSIM live-run fix: a malformed/incomplete record_calibration re-call (e.g. a truncated tool call) falls back to the previously-recorded fields instead of wiping them to empty", () => {
+    const previous = {
+      calibration: {
+        prompts: ["depth?", "breadth?", "range?", "evidence?"],
+        skills: ["Go", "Python"],
+        evidence: ["Shipped the Kafka pipeline rebuild"],
+        range_statement: "Open to adjacent work",
+        background_summary: "Backend engineer with platform depth.",
+      },
+    };
+    // Simulates a truncated response: skills/evidence/range_statement/
+    // background_summary all missing from this call's input, as would
+    // happen if the tool call itself got cut off mid-generation.
+    const result = applyToolCalls([{ name: "record_calibration", input: {} }], previous, "resume");
+
+    expect(result.extracted.calibration?.skills).toEqual(["Go", "Python"]);
+    expect(result.extracted.calibration?.evidence).toEqual(["Shipped the Kafka pipeline rebuild"]);
+    expect(result.extracted.calibration?.range_statement).toBe("Open to adjacent work");
+    expect(result.extracted.calibration?.background_summary).toBe("Backend engineer with platform depth.");
+  });
+
+  it("a record_calibration call with a genuinely empty skills/evidence array still records that empty array (not a fallback case)", () => {
+    const previous = { calibration: { skills: ["Go"], evidence: ["old evidence"] } };
+    const result = applyToolCalls(
+      [{ name: "record_calibration", input: { skills: [], evidence: [], range_statement: "r", background_summary: "b" } }],
+      previous,
+      "calibration"
+    );
+    expect(result.extracted.calibration?.skills).toEqual([]);
+    expect(result.extracted.calibration?.evidence).toEqual([]);
+  });
+
   it("ONB-A: advances resume -> targeting on record_resume (resume no longer feeds a separate identity stage)", () => {
     const result = applyToolCalls(
       [{ name: "record_resume", input: { cv_markdown: "# CV" } }],

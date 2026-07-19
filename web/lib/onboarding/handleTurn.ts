@@ -144,19 +144,21 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
   // greeting to prepend anymore — session.messages is the full history.
   const history: ChatMessage[] = [...session.messages, { role: "user", content: userMessage }];
   let turnResult = await runTurn(history);
+  const usages = [turnResult.usage];
 
   // FIX-1: a model turn that comes back empty/whitespace-only must never
   // reach the user as a blank bubble. Retry once (still one real attempt at
   // getting substantive text); if it's still empty, the caller below falls
-  // back to a deterministic stage-appropriate question. The turn is still
-  // billed either way — that's acceptable, the user must just never see
-  // nothing.
+  // back to a deterministic stage-appropriate question. INTSIM live-run fix:
+  // the first (empty) attempt is still a real, billed Anthropic call — push
+  // its usage before the retry, don't let reassigning `turnResult` below
+  // silently drop it. One ledger row per real LLM call, no exceptions.
   if (turnResult.assistantText.trim() === "") {
     turnResult = await runTurn(history);
+    usages.push(turnResult.usage);
   }
 
   let { extracted, stage, done } = applyToolCalls(turnResult.toolCalls, session.extracted, session.stage);
-  const usages = [turnResult.usage];
   let allToolCalls = [...turnResult.toolCalls];
 
   let assistantText = turnResult.assistantText.trim();

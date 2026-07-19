@@ -29,15 +29,26 @@ export function applyToolCalls(
         // Preserve the already-generated `prompts` (set by
         // runCalibrationGeneration before this ingest turn ever fires) —
         // this is a merge into the existing calibration object, not a
-        // replacement of it.
+        // replacement of it. INTSIM live-run fix: a malformed/incomplete
+        // re-call (e.g. a truncated tool call) must fall back to the
+        // PREVIOUSLY-recorded field, not a hard default — an invalid
+        // field is never evidence the real value should be erased. A
+        // genuinely-empty array from the model is still a valid array
+        // and is recorded as given, same as before.
         extracted.calibration = {
           ...previous.calibration,
-          skills: Array.isArray(call.input.skills) ? (call.input.skills as string[]) : [],
-          evidence: Array.isArray(call.input.evidence) ? (call.input.evidence as string[]) : [],
+          skills: Array.isArray(call.input.skills) ? (call.input.skills as string[]) : previous.calibration?.skills ?? [],
+          evidence: Array.isArray(call.input.evidence)
+            ? (call.input.evidence as string[])
+            : previous.calibration?.evidence ?? [],
           range_statement:
-            typeof call.input.range_statement === "string" ? call.input.range_statement : undefined,
+            typeof call.input.range_statement === "string"
+              ? call.input.range_statement
+              : previous.calibration?.range_statement,
           background_summary:
-            typeof call.input.background_summary === "string" ? call.input.background_summary : undefined,
+            typeof call.input.background_summary === "string"
+              ? call.input.background_summary
+              : previous.calibration?.background_summary,
         };
         if (stage === "calibration") stage = "resume";
         break;

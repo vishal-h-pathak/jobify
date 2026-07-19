@@ -234,11 +234,10 @@ describe("handleOnboardingTurn", () => {
   });
 
   it("FIX-1: retries once on an empty assistant response, then falls back to a deterministic stage-appropriate question if still empty", async () => {
-    const runTurn = vi.fn(async () => ({
-      assistantText: "",
-      toolCalls: [],
-      usage: { inputTokens: 5, outputTokens: 0 },
-    }));
+    const runTurn = vi
+      .fn()
+      .mockResolvedValueOnce({ assistantText: "", toolCalls: [], usage: { inputTokens: 5, outputTokens: 0 } })
+      .mockResolvedValueOnce({ assistantText: "", toolCalls: [], usage: { inputTokens: 6, outputTokens: 0 } });
 
     const result = await handleOnboardingTurn({
       userId: "user-1",
@@ -264,8 +263,22 @@ describe("handleOnboardingTurn", () => {
     expect(savedMessages.every((m) => m.content.trim() !== "")).toBe(true);
     expect(savedMessages.at(-1)?.content).toBe(result.assistantText);
 
-    // Still exactly one budget_ledger row, even though runTurn fired twice.
-    expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(1);
+    // INTSIM live-run fix: BOTH real calls get their own budget_ledger row —
+    // the empty first attempt's tokens were real spend and must not be
+    // dropped just because its text never reached the user. Matches the
+    // "one ledger row per real LLM call, constitutional" rule the v2
+    // continue-reprompt path already honors above.
+    expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(2);
+    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(
+      1,
+      fakeClient,
+      expect.objectContaining({ inputTokens: 5, outputTokens: 0 })
+    );
+    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(
+      2,
+      fakeClient,
+      expect.objectContaining({ inputTokens: 6, outputTokens: 0 })
+    );
   });
 
   it("FIX-1: does not retry when the first assistant response is non-empty", async () => {
