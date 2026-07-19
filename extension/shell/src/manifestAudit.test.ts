@@ -66,10 +66,10 @@ describe("extension/manifest.json audit", () => {
     expect((manifest.action as { default_popup?: string })?.default_popup).toBeUndefined();
   });
 
-  it("background service worker is background.js as a module", () => {
+  it("background service worker is background.js (bundled as a self-contained IIFE, no import/export)", () => {
     const manifest = readManifest();
-    const background = manifest.background as { service_worker: string; type: string };
+    const background = manifest.background as { service_worker: string; type?: string };
     expect(background.service_worker).toBe("background.js");
-    expect(background.type).toBe("module");
+    expect(background.type).toBeUndefined();
   });
 });
