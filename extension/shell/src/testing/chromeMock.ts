@@ -81,8 +81,19 @@ export function installChromeMock(): ChromeMock {
     open: vi.fn(async () => undefined),
   };
 
+  // Present so code that (wrongly) reaches for `.local` fails a spy
+  // assertion rather than a `chrome.storage.local is undefined` crash —
+  // this package must only ever use `chrome.storage.session` (memory-backed;
+  // see `auth/chromeSessionStorage.ts`'s header comment for why).
+  const storageLocal = {
+    get: vi.fn(async () => ({})),
+    set: vi.fn(async () => undefined),
+    remove: vi.fn(async () => undefined),
+    clear: vi.fn(async () => undefined),
+  };
+
   const fakeChrome = {
-    storage: { session: storageSession },
+    storage: { session: storageSession, local: storageLocal },
     runtime,
     tabs,
     sidePanel,
@@ -103,6 +114,10 @@ export function installChromeMock(): ChromeMock {
       tabs.sendMessage.mockClear();
       sidePanel.setOptions.mockClear();
       sidePanel.open.mockClear();
+      storageLocal.get.mockClear();
+      storageLocal.set.mockClear();
+      storageLocal.remove.mockClear();
+      storageLocal.clear.mockClear();
     },
   };
 }
