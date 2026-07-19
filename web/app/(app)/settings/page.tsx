@@ -10,7 +10,7 @@ import { ApplicationDefaultsCard } from "@/components/submit/ApplicationDefaults
 const PROVENANCE_COPY = {
   resume: "Your profile's resume is from the resume you provided.",
   interview: "Your profile's resume was built from your interview answers.",
-  none: "No resume on file yet.",
+  none: "No resume on file yet — upload one below and it becomes the source for your dossier and every tailored application.",
 } as const;
 
 // Reads the signed-in user's own budget/key rows on every request — cost

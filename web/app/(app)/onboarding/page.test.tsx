@@ -435,7 +435,7 @@ describe("OnboardingView — PhaseRail + hunt status chip wiring", () => {
   it("passes modules/stage/sweeping through to PhaseRail", () => {
     const state: OnboardingState = { ...initialOnboardingState, loading: false, modules: PHASE_ONE_DONE, stage: "calibration" };
     const [railWrapper] = header(state).props.children;
-    const rail = railWrapper.props.children;
+    const [, rail] = railWrapper.props.children;
     expect(rail.type).toBe(PhaseRail);
     expect(rail.props.modules).toEqual(PHASE_ONE_DONE);
     expect(rail.props.stage).toBe("calibration");
@@ -445,7 +445,8 @@ describe("OnboardingView — PhaseRail + hunt status chip wiring", () => {
   it("sweeping mirrors interstitialPending", () => {
     const state: OnboardingState = { ...initialOnboardingState, loading: false, interstitialPending: true, modules: PHASE_ONE_DONE };
     const [railWrapper] = header(state).props.children;
-    expect(railWrapper.props.children.props.sweeping).toBe(true);
+    const [, rail] = railWrapper.props.children;
+    expect(rail.props.sweeping).toBe(true);
   });
 
   it("no status chip before the checkpoint fires", () => {
@@ -459,6 +460,23 @@ describe("OnboardingView — PhaseRail + hunt status chip wiring", () => {
     const state: OnboardingState = { ...initialOnboardingState, loading: false, modules, matchCount: 2 };
     const [, chip] = header(state).props.children;
     expect(chip.props.children).toBe("2 matches waiting");
+  });
+
+  it("shows no welcome-back line by default (fresh visit, or the session was touched recently)", () => {
+    const state: OnboardingState = { ...initialOnboardingState, loading: false };
+    const [railWrapper] = header(state).props.children;
+    const [welcomeBackLine] = railWrapper.props.children;
+    expect(welcomeBackLine).toBeFalsy();
+  });
+
+  it("shows 'Welcome back — picking up at <module label>.' over the rail on a stale return visit", () => {
+    const state: OnboardingState = { ...initialOnboardingState, loading: false };
+    const view = OnboardingView({ state, ...baseViewProps, welcomeBack: { moduleLabel: "energy" } });
+    const [, contentDiv] = view.props.children;
+    const [headerRow] = contentDiv.props.children;
+    const [railWrapper] = headerRow.props.children;
+    const [welcomeBackLine] = railWrapper.props.children;
+    expect(welcomeBackLine.props.children).toEqual(["Welcome back — picking up at ", "energy", "."]);
   });
 });
 
