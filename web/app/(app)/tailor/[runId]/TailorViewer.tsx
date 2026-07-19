@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
@@ -12,6 +13,7 @@ import { CoverLetterView } from "@/components/tailor/CoverLetterView";
 import { HonestyDrawer } from "@/components/tailor/HonestyDrawer";
 import { TemplateSwitcher } from "@/components/tailor/TemplateSwitcher";
 import type { ClaimsJson, ClaimUnit } from "@/components/tailor/types";
+import { kitHref } from "@/components/submit/links";
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -248,6 +250,9 @@ function SucceededPanel({ run, postingId }: { run: PolledTailorRun; postingId: s
           <Button variant="ghost" onClick={() => navigator.clipboard.writeText(materials.coverLetterText)}>
             Copy letter text
           </Button>
+          <Link href={kitHref(postingId)} className="text-sm text-amber hover:text-amber-hover">
+            Prepare to apply
+          </Link>
         </div>
       </div>
 
