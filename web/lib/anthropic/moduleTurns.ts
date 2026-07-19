@@ -91,6 +91,7 @@ export async function runVoiceIngestTurn(sample: string): Promise<VoiceTurnResul
     max_tokens: 2048,
     system: VOICE_INGEST_SYSTEM_PROMPT,
     tools: VOICE_INGEST_TOOLS,
+    tool_choice: { type: "tool", name: "record_voice" }, // pure extractor — force (see mirror note)
     messages: [{ role: "user", content: sample }],
   });
 
@@ -219,6 +220,7 @@ export async function runMetricsExtractionTurn(searchableText: string): Promise<
     max_tokens: 4096, // was 2048 — hit flush in prod (see cap-audit note above)
     system: METRICS_EXTRACTION_SYSTEM_PROMPT,
     tools: METRICS_EXTRACTION_TOOLS,
+    tool_choice: { type: "tool", name: "record_metric_claims" }, // pure extractor — force (see mirror note)
     messages: [{ role: "user", content: searchableText }],
   });
 
@@ -308,6 +310,18 @@ function isTwoStringTuple(value: unknown): value is [string, string] {
   return Array.isArray(value) && value.length === 2 && value.every((v) => typeof v === "string");
 }
 
+/** Lenient companion to the strict tuple check: a model that returns 3 short
+ * paragraphs or one merged block shouldn't zero the whole mirror — take the
+ * first two non-empty strings; exact-two remains the schema's ask. */
+function coerceTwoParagraphs(value: unknown): [string, string] | null {
+  if (isTwoStringTuple(value)) return value;
+  if (Array.isArray(value)) {
+    const strings = value.filter((v): v is string => typeof v === "string" && v.trim() !== "");
+    if (strings.length >= 2) return [strings[0]!, strings[1]!];
+  }
+  return null;
+}
+
 export async function runMirrorGenerationTurn(inputs: MirrorGenerationInput): Promise<MirrorGenerationResult> {
   const response = await anthropicClient().messages.create({
     model: ONBOARDING_MODEL,
@@ -317,6 +331,14 @@ export async function runMirrorGenerationTurn(inputs: MirrorGenerationInput): Pr
     max_tokens: 4096,
     system: MIRROR_GENERATION_SYSTEM_PROMPT,
     tools: MIRROR_GENERATION_TOOLS,
+    // Live-fire fix (2026-07-19, the night's last villain): the prompt asks
+    // for record_mirror as the entire output, but nothing FORCED it — the
+    // OAuth transport's persona wrote the mirror as prose text instead, the
+    // parser found no tool_use, and 523 tokens of (probably good) mirror
+    // were discarded as an empty draft. These module turns are pure
+    // extractors with no conversational text, so forcing is correct here
+    // (unlike the interview chat, where forcing would suppress the text).
+    tool_choice: { type: "tool", name: "record_mirror" },
     messages: [{ role: "user", content: inputs.extractedSummary }],
   });
 
@@ -325,7 +347,8 @@ export async function runMirrorGenerationTurn(inputs: MirrorGenerationInput): Pr
   for (const block of response.content) {
     if (block.type === "tool_use" && block.name === "record_mirror") {
       const input = block.input as { paragraphs?: unknown; quoted_phrases?: unknown };
-      if (isTwoStringTuple(input.paragraphs)) paragraphs = input.paragraphs;
+      const coerced = coerceTwoParagraphs(input.paragraphs);
+      if (coerced) paragraphs = coerced;
       if (Array.isArray(input.quoted_phrases)) quoted_phrases = input.quoted_phrases as string[];
     }
   }
