@@ -5,6 +5,7 @@ import { getProfileDoc } from "@/lib/db/profiles";
 import { deriveCvProvenance } from "@/lib/settings/cvProvenance";
 import { KeyForm } from "./KeyForm";
 import { ResumeForm } from "./ResumeForm";
+import { ApplicationDefaultsCard } from "@/components/submit/ApplicationDefaultsCard";
 
 const PROVENANCE_COPY = {
   resume: "Your profile's resume is from the resume you provided.",
@@ -63,6 +64,15 @@ export default async function SettingsPage() {
         <h2 className="font-medium text-ink">Resume</h2>
         <p className="text-sm text-ink-muted">{PROVENANCE_COPY[cvProvenance]}</p>
         <ResumeForm />
+      </section>
+
+      <section className="flex flex-col gap-3 rounded-lg border border-line bg-surface p-4">
+        <h2 className="font-medium text-ink">Application defaults</h2>
+        <p className="text-sm text-ink-muted">
+          Contact info, work authorization, logistics, and voluntary self-identification — used to fill every submit
+          kit automatically.
+        </p>
+        <ApplicationDefaultsCard />
       </section>
     </div>
   );
