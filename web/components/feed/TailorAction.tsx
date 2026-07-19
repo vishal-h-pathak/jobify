@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { deriveTailorState, type TailorCardState } from "@/components/tailor/types";
 import { interpretTailorResponse } from "@/app/(app)/feed/tailorOutcome";
 import type { PolledTailorRun } from "@/lib/tailor/pollRuns";
+import { kitHref } from "@/components/submit/links";
 
 function tailorHref(runId: string, postingId: string): string {
   return `/tailor/${runId}?posting=${encodeURIComponent(postingId)}`;
@@ -65,12 +66,20 @@ export function TailorAction({ postingId }: { postingId: string }) {
 
   if (state.kind === "materials") {
     return (
-      <Link
-        href={tailorHref(state.runId, postingId)}
-        className="inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium text-amber hover:text-amber-hover"
-      >
-        Materials
-      </Link>
+      <div className="flex items-center gap-2">
+        <Link
+          href={tailorHref(state.runId, postingId)}
+          className="inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium text-amber hover:text-amber-hover"
+        >
+          Materials
+        </Link>
+        <Link
+          href={kitHref(postingId)}
+          className="inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium text-ink-muted hover:text-ink"
+        >
+          Prepare to apply
+        </Link>
+      </div>
     );
   }
 

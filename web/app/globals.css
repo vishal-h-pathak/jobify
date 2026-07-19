@@ -147,3 +147,17 @@ select,
     opacity: 0;
   }
 }
+
+/* V3C session 39 — the submit kit prints as a clean one-sheet crib. Scoped
+   via body:has(.submit-kit-print) so only the submit-kit page's print output
+   changes; per-element print:hidden Tailwind utilities hide buttons/nav. */
+@media print {
+  body:has(.submit-kit-print) header,
+  body:has(.submit-kit-print) footer {
+    display: none;
+  }
+  body:has(.submit-kit-print) {
+    background: white;
+    color: black;
+  }
+}
