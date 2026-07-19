@@ -10,13 +10,14 @@ import {
   summarizeApplicationProfile,
   resolveReturnTo,
   EMPTY_APPLICATION_FORM_VALUES,
+  type SubmitStepKey,
 } from "./wizard";
 import type { ApplicationProfile } from "./types";
 
 describe("step navigation", () => {
   it("walks contact -> authorization -> logistics -> self_id -> review -> null", () => {
-    let step = SUBMIT_STEP_ORDER[0];
-    const visited = [step];
+    let step: SubmitStepKey = SUBMIT_STEP_ORDER[0];
+    const visited: SubmitStepKey[] = [step];
     let next = nextStepKey(step);
     while (next) {
       visited.push(next);

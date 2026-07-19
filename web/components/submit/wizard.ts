@@ -1,9 +1,9 @@
 // web/components/submit/wizard.ts
 import type { ApplicationProfile } from "./types";
 
-export type SubmitStepKey = "contact" | "authorization" | "logistics" | "self_id" | "review";
+export const SUBMIT_STEP_ORDER = ["contact", "authorization", "logistics", "self_id", "review"] as const;
 
-export const SUBMIT_STEP_ORDER: readonly SubmitStepKey[] = ["contact", "authorization", "logistics", "self_id", "review"];
+export type SubmitStepKey = (typeof SUBMIT_STEP_ORDER)[number];
 
 export const SUBMIT_STEP_LABELS: Record<SubmitStepKey, string> = {
   contact: "Contact",
