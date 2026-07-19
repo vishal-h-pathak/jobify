@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { hasClaimedInvite } from "@/lib/db/invites";
 import { isAdmin } from "@/lib/admin/isAdmin";
+import { HandoffEmitter } from "@/components/extension/HandoffEmitter";
 import { NavLinks } from "./NavLinks";
 import { SignOutButton } from "./SignOutButton";
 
@@ -24,6 +25,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-full flex-col">
+      <HandoffEmitter />
       <header className="border-b border-line px-6 py-4">
         {/* Width decision (ONBOARDING_REDESIGN.md §1.9/§3): the app shell standardizes
             on max-w-3xl, matching /feed (web/app/(app)/feed/page.tsx:77). Onboarding

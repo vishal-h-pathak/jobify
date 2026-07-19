@@ -1,0 +1,12 @@
+{
+  "name": "jobify-extension",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Root build for the jobify submitter extension — bundles engine/ (session 41) + shell/ (this session) into dist/, a loadable-unpacked MV3 extension.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

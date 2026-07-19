@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "jobify submitter",
+  "version": "0.1.0",
+  "description": "Fills in job application forms from your tailored jobify materials. Stops before every final submit — you always click Submit yourself.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxDI2vUUezFGvq1/dYGzj+2McYQ14RDD4+S+/wl7n1AlFvbOW2hcRVJTtD4f81bO/hy2RONHlBFFKIEfY0RpbktAmZV9BJeC9qMgJwvgDwvwxpG0xyAhmB3pKh0j9NVXehQH1fR/A+vFFRHjEUOJeAQzaNLjIePNISpsRknteEeyhclDrLQnz9oM/eP0uhJwP1kpAm6BDi1JcXWnR3HMgvYSmw6xHuSifT2qhoUUeZev1VS3Cltfn3Ep3HNMhLzj9NEpT6Yr4m/iDm6YnluTBTtN9AcrVtfAUTCtvD8iPkFILz5xra3Ry3RROoDOIgib7otn3LmW0XAe1NadrSQw5RwIDAQAB",
+  "permissions": ["storage", "sidePanel", "activeTab"],
+  "host_permissions": ["__APP_ORIGIN__/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "jobify"
+  },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.greenhouse.io/*", "*://*.lever.co/*", "*://*.ashbyhq.com/*", "*://*.myworkdayjobs.com/*", "*://*.workday.com/*"],
+      "js": ["content/atsFillBridge.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["__APP_ORIGIN__/*"],
+      "js": ["content/handoffRelay.js"],
+      "all_frames": false,
+      "run_at": "document_idle"
+    }
+  ]
+}
