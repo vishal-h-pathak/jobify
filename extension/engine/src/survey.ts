@@ -244,7 +244,10 @@ function isRequired(el: Element): boolean {
   return (el as HTMLInputElement).required === true || el.getAttribute("aria-required") === "true";
 }
 
-function readValue(el: Element, kind: SurveyField["kind"]): string {
+/** Exported for fill.ts's read-back verification, which re-reads a live
+ * element the same way survey() first read it — kept as one implementation
+ * so the two never drift apart. */
+export function readValue(el: Element, kind: SurveyField["kind"]): string {
   if (kind === "checkbox") return (el as HTMLInputElement).checked ? "true" : "";
   if (kind === "file") {
     const files = (el as HTMLInputElement).files;

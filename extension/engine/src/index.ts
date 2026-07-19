@@ -2,6 +2,7 @@
 // package root (constitution.test.ts asserts this).
 export { survey } from "./survey.js";
 export { planFills } from "./plan.js";
+export { executeFills } from "./fill.js";
 export type {
   AtsMapKind,
   EngineFiles,

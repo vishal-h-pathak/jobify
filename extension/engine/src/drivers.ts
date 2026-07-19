@@ -17,6 +17,12 @@ export type Strategy = "native" | "keystrokes" | (string & {});
 
 const CHECKED_TRUE_VALUES = new Set(["true", "1", "yes", "on", "checked"]);
 
+/** Shared with fill.ts's read-back so "does the checkbox match the
+ * instruction" uses the exact same truthy-string rule the driver wrote. */
+export function isTruthyCheckboxValue(value: string): boolean {
+  return CHECKED_TRUE_VALUES.has(value.trim().toLowerCase());
+}
+
 function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
   const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
@@ -89,7 +95,7 @@ function fillSelect(root: Document, field: SurveyField, value: string): boolean 
 function fillCheckbox(root: Document, field: SurveyField, value: string): boolean {
   const el = findFieldElements(root, field)[0] as HTMLInputElement | undefined;
   if (!el) return false;
-  const want = CHECKED_TRUE_VALUES.has(value.trim().toLowerCase());
+  const want = isTruthyCheckboxValue(value);
   if (el.checked !== want) el.click();
   return true;
 }
