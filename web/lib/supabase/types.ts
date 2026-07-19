@@ -355,6 +355,74 @@ export interface Database {
         };
         Relationships: [];
       };
+      // V3c P0 (0013_v3c_submit.sql): one row per user — the submitter's
+      // contact/EEO/work-auth answers etc., stored as `encrypted_payload`
+      // ciphertext in the keycrypt `v1:...` wire format. Service-role only
+      // per the SQL's RLS comment (no `authenticated` policy at all) — the
+      // web route authenticates the user, then reads/writes via the
+      // service-role admin client, encrypting/decrypting server-side.
+      application_profiles: {
+        Row: {
+          user_id: string;
+          encrypted_payload: string;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          encrypted_payload: string;
+          updated_at?: string;
+        };
+        Update: {
+          encrypted_payload?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      // V3c P0 (0013_v3c_submit.sql): per-attempt kit/extension submit
+      // telemetry. `field_outcomes` is labels/layer/outcome only — NEVER
+      // the filled field value. RLS: own-row SELECT; INSERT/UPDATE/DELETE
+      // are service-role only. Nothing in this plan writes this table yet
+      // — Row is typed here for schema completeness, Insert/Update are
+      // left as `never` shapes until a later phase writes to it.
+      submit_events: {
+        Row: {
+          id: string;
+          user_id: string;
+          posting_id: string;
+          source: "kit" | "extension";
+          final_state: string | null;
+          pages: number | null;
+          field_outcomes: Array<{ label: string; layer: string; outcome: string }>;
+          walls: Record<string, unknown> | null;
+          advance_agreement: Record<string, unknown> | null;
+          cost_usd: number | null;
+          created_at: string;
+        };
+        Insert: { [key: string]: never };
+        Update: { [key: string]: never };
+        Relationships: [];
+      };
+      // V3c P0 (0013_v3c_submit.sql): shared, structure-only field-mapping
+      // cache keyed by `(hostname, field_signature)`. `mapping` is
+      // structure only (selectors/labels) — NEVER values. Service-role
+      // only (no `authenticated` policy) — served via a read API in E3.
+      // Nothing in this plan reads or writes this table yet — Row is typed
+      // here for schema completeness, Insert/Update are left as `never`
+      // shapes until a later phase writes to it.
+      learned_field_maps: {
+        Row: {
+          id: string;
+          hostname: string;
+          ats_kind: string | null;
+          field_signature: string;
+          mapping: Record<string, unknown>;
+          verified_count: number;
+          last_verified_at: string | null;
+        };
+        Insert: { [key: string]: never };
+        Update: { [key: string]: never };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {

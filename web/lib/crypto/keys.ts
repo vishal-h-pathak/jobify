@@ -11,9 +11,13 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
  * than carried as a separate field — Python's `cryptography.AESGCM` expects
  * that exact concatenated shape, so the two sides need no extra framing.
  *
- * `decryptKey` only exists here for this module's own roundtrip test
- * (`keys.test.ts`); production decryption always happens on the Python
- * side (`jobify.hosted.fanout`), never in the web app.
+ * `decryptKey`/`decryptJson` are exercised by this module's own roundtrip
+ * test (`keys.test.ts`) and will be called in production, from the web
+ * app, once `web/lib/submit/applicationProfile.ts` (V3c, Task 3) lands,
+ * to read back the `application_profiles` table's `encrypted_payload`
+ * column. Python-side
+ * decryption (`jobify.hosted.fanout`) still uses the same wire format via
+ * `jobify/hosted/keycrypt.py` for the H6 BYO-key case.
  */
 
 const WIRE_VERSION = "v1";
@@ -59,4 +63,18 @@ export function decryptKey(blob: string): string {
 /** Last 4 characters of a plaintext key, for the settings UI's "...last4" display. */
 export function last4(plaintext: string): string {
   return plaintext.slice(-4);
+}
+
+/**
+ * JSON-value wrappers around `encryptKey`/`decryptKey`, for callers that need
+ * to encrypt a whole object (e.g. `application_profiles.encrypted_payload`,
+ * V3c) rather than a single opaque string like a BYO Anthropic key. Same
+ * wire format, same secret — just a `JSON.stringify`/`JSON.parse` shim.
+ */
+export function encryptJson<T>(value: T): string {
+  return encryptKey(JSON.stringify(value));
+}
+
+export function decryptJson<T>(blob: string): T {
+  return JSON.parse(decryptKey(blob)) as T;
 }
