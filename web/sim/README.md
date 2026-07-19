@@ -108,6 +108,15 @@ Each is a named, independently-reportable check (`sim/repeatDetector.ts`,
   silently destroyed `location_and_compensation` (fixed in
   `applyToolCalls.ts`, same session — the `corrective` persona is the
   regression test for it).
+- **TRUNCATION** (`sim/truncationDetector.ts`) — any real model call whose
+  `output_tokens` exactly equals the `max_tokens` cap it was sent with
+  fails the run. Token count alone can't distinguish "the model finished
+  naturally" from "the response was cut off at the cap" — a truncated
+  tool call reads exactly like an empty or malformed turn downstream, with
+  no signal of its own. Motivating live bug: `record_targeting` was
+  decapitated at the 1536-token cap. `runInterviewTurn` /
+  `runCalibrationGeneration` additively expose `maxTokens` on their result
+  (`lib/anthropic/interview.ts`) so the sim can tell the two apart.
 
 ## Run modes
 

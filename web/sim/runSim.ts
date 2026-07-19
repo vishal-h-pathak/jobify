@@ -23,6 +23,7 @@ import {
   checkLedgerInvariant,
   type TurnRecord,
 } from "./turnInvariants";
+import { checkTruncationInvariant, type TruncationEvent } from "./truncationDetector";
 import { formatVerdictTable, type PersonaVerdict } from "./report";
 import { loadDotEnvLocalIntoProcessEnv } from "./envFile";
 import { handleOnboardingTurn, type SessionSnapshot } from "../lib/onboarding/handleTurn";
@@ -101,16 +102,27 @@ async function runPersona(personaName: PersonaName, maxTurns: number): Promise<P
   });
 
   let modelCallCount = 0;
+  let turnIndex = 0;
+  const truncationEvents: TruncationEvent[] = [];
+
+  function recordTruncationIfCapped(result: { usage: { outputTokens: number }; maxTokens?: number }): void {
+    if (result.maxTokens !== undefined && result.usage.outputTokens === result.maxTokens) {
+      truncationEvents.push({ turnIndex, outputTokens: result.usage.outputTokens, maxTokens: result.maxTokens });
+    }
+  }
+
   const countedRunTurn = async (history: ChatMessage[]) => {
     modelCallCount++;
-    return runInterviewTurn(history);
+    const result = await runInterviewTurn(history);
+    recordTruncationIfCapped(result);
+    return result;
   };
   const countedRunGeneration: typeof runCalibrationGeneration = async (anchor) => {
     modelCallCount++;
-    return runCalibrationGeneration(anchor);
+    const result = await runCalibrationGeneration(anchor);
+    recordTruncationIfCapped(result);
+    return result;
   };
-
-  let turnIndex = 0;
 
   try {
     await maybeGenerateCalibrationPrompts({
@@ -212,6 +224,9 @@ async function runPersona(personaName: PersonaName, maxTurns: number): Promise<P
 
     const ledger = checkLedgerInvariant(fakeDb.getLedgerRows().length, modelCallCount);
     if (!ledger.passed) for (const f of ledger.failures) failureSummary.push(`LEDGER: ${f}`);
+
+    const truncation = checkTruncationInvariant(truncationEvents);
+    if (!truncation.passed) for (const f of truncation.failures) failureSummary.push(`TRUNCATION: ${f}`);
 
     if (recoveryPointsFired.length === 0) {
       failureSummary.push(`RECOVERY: no recovery points fired (requested turns ${recoveryPoints.join(",")}, run only reached turn ${turnIndex})`);
