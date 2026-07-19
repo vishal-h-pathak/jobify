@@ -18,7 +18,7 @@ const MORE_OF_DONE_WITH_ANSWER =
 const COMPANIES_ANSWER = "Stripe and Datadog, loosely.";
 const GENERIC_ANSWER = "Already covered above, but happy to add detail if useful.";
 
-// The owner's real "I'm actually in Atlanta" move, reproduced generically
+// Reproduces the owner's real mid-interview self-correction move generically
 // (Alex Quinn data only, per session-prompt 45 task 2): give a real
 // logistics answer, then correct one fact on a LATER turn — the exact
 // shape that destroyed location_and_compensation mid-interview before

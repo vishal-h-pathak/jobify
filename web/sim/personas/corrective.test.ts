@@ -27,7 +27,7 @@ describe("createCorrectivePersona", () => {
     expect(answer.toLowerCase()).not.toContain("correction");
   });
 
-  it("the owner's 'I'm actually in Atlanta' move: corrects the salary floor on the very next targeting turn, exactly once", () => {
+  it("the owner's real mid-interview self-correction move: corrects the salary floor on the very next targeting turn, exactly once", () => {
     const persona = createCorrectivePersona();
     persona.answer({
       stage: "targeting",
