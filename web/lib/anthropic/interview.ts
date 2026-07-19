@@ -241,11 +241,24 @@ export interface InterviewTurnResult {
 export async function runInterviewTurn(history: ChatMessage[]): Promise<InterviewTurnResult> {
   const response = await anthropicClient().messages.create({
     model: ONBOARDING_MODEL,
-    max_tokens: 1536,
+    // Live-fire fix (2026-07-19): was 1536, which decapitated the interview's
+    // biggest turn — record_targeting (tiers + disqualifiers + thesis
+    // paragraph) + finish_interview + the closing summary — at EXACTLY the
+    // cap, three times in a row in production (ledger rows at 1536 on the
+    // nose). A truncated tool_use block arrives as no tool call and no
+    // text, so the turn looked empty and the fallback loop fired. 4096
+    // costs fractions of a cent more and only when actually used.
+    max_tokens: 4096,
     system: INTERVIEW_SYSTEM_PROMPT,
     tools: INTERVIEW_TOOLS,
     messages: history.map((m) => ({ role: m.role, content: m.content })),
   });
+
+  if (response.stop_reason === "max_tokens") {
+    console.warn("runInterviewTurn: response truncated at max_tokens — tool calls may be lost", {
+      outputTokens: response.usage.output_tokens,
+    });
+  }
 
   const textParts: string[] = [];
   const toolCalls: InterviewToolCall[] = [];
