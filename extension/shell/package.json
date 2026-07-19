@@ -1,0 +1,18 @@
+{
+  "name": "@jobify/extension-shell",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "V3c E1B: the MV3 wrapper (manifest, auth handoff, panel, packet plumbing) around the fill engine built in the parallel session. Standalone TS package — own tsconfig/vitest, no dependency on web/.",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/node": "^20",
+    "jsdom": "^25.0.1",
+    "typescript": "^5",
+    "vitest": "^3.2.6"
+  }
+}
