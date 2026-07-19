@@ -44,3 +44,5 @@ cache/
 # subagent-driven-development scratch workspace (task briefs, reports,
 # review packages) — never commit.
 .superpowers/
+/node_modules/
+/package-lock.json
