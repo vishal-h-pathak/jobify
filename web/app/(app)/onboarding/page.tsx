@@ -600,7 +600,6 @@ function renderActivePanel(props: OnboardingViewProps) {
         );
       case "resume":
       case "targeting":
-      case "identity":
       default:
         return (
           <ChatStageView

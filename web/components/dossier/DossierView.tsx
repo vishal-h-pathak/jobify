@@ -5,6 +5,7 @@ import { MirrorSlot } from "./MirrorSlot";
 import { ChangeLog } from "./ChangeLog";
 import { ValidationBanner } from "./ValidationBanner";
 import { LogisticsEditor } from "./LogisticsEditor";
+import { DossierExportRow } from "./DossierExportRow";
 
 function BandLabel({ children }: { children: string }) {
   return (
@@ -29,7 +30,7 @@ function Row({ label, value, source }: { label: string; value: string | null; so
  * fields); everything else is a calm, read-only render of the derived view
  * model, staggered `panel-enter` per band.
  */
-export function DossierView({ dossier }: { dossier: DossierViewModel }) {
+export function DossierView({ dossier, copyBlock }: { dossier: DossierViewModel; copyBlock: string }) {
   const { header, mirror, facts, wants, texture, completeness, validation, events } = dossier;
 
   return (
@@ -39,6 +40,8 @@ export function DossierView({ dossier }: { dossier: DossierViewModel }) {
         {header.anchorLine && <p className="text-lg text-ink-muted">{header.anchorLine}</p>}
         <p className="text-sm text-ink-muted">{header.statusLine}</p>
       </header>
+
+      <DossierExportRow copyBlock={copyBlock} />
 
       <ValidationBanner validation={validation} />
 

@@ -51,9 +51,21 @@ export function shouldRedirectToSetup(outcome: SubmitPacketOutcome | null): bool
   return outcome?.kind === "needs_setup";
 }
 
+/**
+ * UX1-B paper cut 2: the "I applied" click's in-flight guard, isolated as
+ * a pure predicate (same pattern as `shouldRedirectToSetup`) so it's
+ * testable without a DOM. `onApply` below is the real backstop — the
+ * button's `busy={applying}` also disables it, so a double-click can't
+ * double-fire `markApplied`.
+ */
+export function canFireAppliedClick(applying: boolean): boolean {
+  return !applying;
+}
+
 export function SubmitKit({ postingId, userId }: { postingId: string; userId: string }) {
   const [outcome, setOutcome] = useState<SubmitPacketOutcome | null>(null);
   const [applied, setApplied] = useState(false);
+  const [applying, setApplying] = useState(false);
   const [appliedError, setAppliedError] = useState("");
   const [supabase] = useState(() => createSupabaseBrowserClient());
 
@@ -76,8 +88,11 @@ export function SubmitKit({ postingId, userId }: { postingId: string; userId: st
   }, [outcome, postingId]);
 
   async function onApply() {
+    if (!canFireAppliedClick(applying)) return;
+    setApplying(true);
     setAppliedError("");
     const result = await handleAppliedClick(supabase, userId, postingId);
+    setApplying(false);
     if (result.ok) setApplied(true);
     else setAppliedError(result.error);
   }
@@ -163,7 +178,7 @@ export function SubmitKit({ postingId, userId }: { postingId: string; userId: st
         {applied ? (
           <p className="text-sm text-success">Marked applied.</p>
         ) : (
-          <Button variant="primary" onClick={onApply}>
+          <Button variant="primary" busy={applying} onClick={onApply}>
             I applied
           </Button>
         )}

@@ -68,9 +68,8 @@ const DONE_FALLBACK_TEXT =
  * at all. `calibration`'s fallback re-surfaces the first of the four
  * already-generated prompts (extracted.calibration.prompts) rather than a
  * fixed string, since the ingest turn's only real content IS those
- * prompts; `anchor`/legacy `identity` never reach a chat turn in v2 (the
- * anchor stage is a zero-LLM form, and no session is ever written back
- * into 'identity'), so they fall back to the targeting text defensively.
+ * prompts; `anchor` never reaches a chat turn in v2 (the anchor stage is a
+ * zero-LLM form), so it falls back to the targeting text defensively.
  */
 function fallbackAssistantText(stage: InterviewStage, extracted: ExtractedState): string {
   switch (stage) {
@@ -82,7 +81,6 @@ function fallbackAssistantText(stage: InterviewStage, extracted: ExtractedState)
       return RESUME_STAGE_FALLBACK;
     case "targeting":
     case "anchor":
-    case "identity":
     default:
       // Logistics already recorded -> push forward, don't re-ask it.
       return extracted.identity?.location_and_compensation
