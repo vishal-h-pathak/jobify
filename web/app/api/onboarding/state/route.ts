@@ -54,10 +54,13 @@ export async function GET() {
 
   // Cheap exact count, not a full row fetch — powers the ambient status
   // chip ("N matches waiting"). RLS + the explicit filter both scope this
-  // to the caller's own rows.
+  // to the caller's own rows. NOTE: `matches` has a composite key
+  // (user_id, posting_id) and NO `id` column — count over "*" with
+  // head:true fetches zero rows. (Live-fire fix 2026-07-19: select("id")
+  // 400'd on PostgREST for every user, killing this whole route.)
   const { count: matchCount, error: matchCountError } = await supabase
     .from("matches")
-    .select("id", { count: "exact", head: true })
+    .select("*", { count: "exact", head: true })
     .eq("user_id", user.id);
   if (matchCountError) throw matchCountError;
 
