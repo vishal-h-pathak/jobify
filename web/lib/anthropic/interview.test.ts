@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import {
+import { describe, expect, it, vi } from "vitest";
+
+const createMock = vi.fn();
+vi.mock("./client", () => ({
+  anthropicClient: () => ({ messages: { create: createMock } }),
+  ONBOARDING_MODEL: "claude-sonnet-5",
+}));
+
+const {
   CALIBRATION_GENERATION_SYSTEM_PROMPT,
   CALIBRATION_GENERATION_TOOLS,
   INTERVIEW_SYSTEM_PROMPT,
@@ -7,7 +14,44 @@ import {
   RESUME_EXTRACTION_SYSTEM_PROMPT,
   RESUME_EXTRACTION_TOOLS,
   SEEDED_GREETING,
-} from "./interview";
+  runInterviewTurn,
+  runCalibrationGeneration,
+} = await import("./interview");
+
+function usageResponse(content: unknown[], usage = { input_tokens: 111, output_tokens: 22 }) {
+  return { content, usage };
+}
+
+// INTSIM reviewer addendum 2: TRUNCATION invariant — the sim needs to know
+// each real call's max_tokens cap to tell "the model stopped naturally" from
+// "the response was decapitated at the cap" (motivating live bug:
+// record_targeting truncated at the (then-)1536 cap, indistinguishable
+// downstream from an empty turn — since raised to 8192, cap audit
+// 2026-07-19). Additive: exposes the same max_tokens value already passed
+// to messages.create(), nothing else changes.
+describe("runInterviewTurn — exposes maxTokens on the result", () => {
+  it("returns maxTokens matching the cap passed to messages.create", async () => {
+    createMock.mockResolvedValue(usageResponse([{ type: "text", text: "Got it — what's next?" }]));
+
+    const result = await runInterviewTurn([{ role: "user", content: "hi" }]);
+
+    expect(result.maxTokens).toBe(8192);
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ max_tokens: 8192 }));
+  });
+});
+
+describe("runCalibrationGeneration — exposes maxTokens on the result", () => {
+  it("returns maxTokens matching the cap passed to messages.create", async () => {
+    createMock.mockResolvedValue(
+      usageResponse([{ type: "tool_use", name: "record_calibration_prompts", input: { prompts: ["a", "b", "c", "d"] } }])
+    );
+
+    const result = await runCalibrationGeneration({ current_title: "Engineer", current_company: "Acme" });
+
+    expect(result.maxTokens).toBe(2048);
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ max_tokens: 2048 }));
+  });
+});
 
 describe("SEEDED_GREETING — kept only for pre-B onboarding UI compile compatibility", () => {
   it("is still a non-empty exported string (page.tsx imports it; v2 flow never produces it)", () => {

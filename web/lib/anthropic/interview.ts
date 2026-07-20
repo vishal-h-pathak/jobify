@@ -232,23 +232,34 @@ export interface InterviewToolCall {
   input: Record<string, unknown>;
 }
 
+// INTSIM reviewer addendum 2: named (not magic-number) caps, each also
+// returned on its call's result below as `maxTokens` — a TRUNCATION-
+// invariant check needs to know the cap a response was measured against,
+// not just its token count, to tell "the model stopped naturally" from
+// "the response was decapitated at the cap" (motivating live bug:
+// record_targeting truncated at this cap, indistinguishable downstream
+// from an empty turn).
+// Live-fire fix (2026-07-19): was 1536, which decapitated the interview's
+// biggest turn — record_targeting (tiers + disqualifiers + thesis
+// paragraph) + finish_interview + the closing summary — at EXACTLY the
+// cap, three times in a row in production (ledger rows at 1536 on the
+// nose). A truncated tool_use block arrives as no tool call and no
+// text, so the turn looked empty and the fallback loop fired. Raised to
+// 4096, then to 8192 after prod hit that flush twice too (cap audit
+// 2026-07-19).
+export const INTERVIEW_MAX_TOKENS = 8192;
+
 export interface InterviewTurnResult {
   assistantText: string;
   toolCalls: InterviewToolCall[];
   usage: { inputTokens: number; outputTokens: number };
+  maxTokens?: number;
 }
 
 export async function runInterviewTurn(history: ChatMessage[]): Promise<InterviewTurnResult> {
   const response = await anthropicClient().messages.create({
     model: ONBOARDING_MODEL,
-    // Live-fire fix (2026-07-19): was 1536, which decapitated the interview's
-    // biggest turn — record_targeting (tiers + disqualifiers + thesis
-    // paragraph) + finish_interview + the closing summary — at EXACTLY the
-    // cap, three times in a row in production (ledger rows at 1536 on the
-    // nose). A truncated tool_use block arrives as no tool call and no
-    // text, so the turn looked empty and the fallback loop fired. 4096
-    // costs fractions of a cent more and only when actually used.
-    max_tokens: 8192, // was 4096 after the first raise — prod hit THAT flush twice too (cap audit 2026-07-19)
+    max_tokens: INTERVIEW_MAX_TOKENS,
     system: INTERVIEW_SYSTEM_PROMPT,
     tools: INTERVIEW_TOOLS,
     messages: history.map((m) => ({ role: m.role, content: m.content })),
@@ -276,6 +287,7 @@ export async function runInterviewTurn(history: ChatMessage[]): Promise<Intervie
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
     },
+    maxTokens: INTERVIEW_MAX_TOKENS,
   };
 }
 
@@ -336,9 +348,13 @@ export const CALIBRATION_GENERATION_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+// Cap audit (2026-07-19): was 1024, raised alongside INTERVIEW_MAX_TOKENS above.
+export const CALIBRATION_GENERATION_MAX_TOKENS = 2048;
+
 export interface CalibrationGenerationResult {
   prompts: string[];
   usage: { inputTokens: number; outputTokens: number };
+  maxTokens?: number;
 }
 
 function anchorContextLine(anchor: AnchorStageData): string {
@@ -353,7 +369,7 @@ function anchorContextLine(anchor: AnchorStageData): string {
 export async function runCalibrationGeneration(anchor: AnchorStageData): Promise<CalibrationGenerationResult> {
   const response = await anthropicClient().messages.create({
     model: ONBOARDING_MODEL,
-    max_tokens: 2048, // was 1024 (cap audit 2026-07-19)
+    max_tokens: CALIBRATION_GENERATION_MAX_TOKENS,
     system: CALIBRATION_GENERATION_SYSTEM_PROMPT,
     tools: CALIBRATION_GENERATION_TOOLS,
     messages: [{ role: "user", content: anchorContextLine(anchor) }],
@@ -370,6 +386,7 @@ export async function runCalibrationGeneration(anchor: AnchorStageData): Promise
   return {
     prompts,
     usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
+    maxTokens: CALIBRATION_GENERATION_MAX_TOKENS,
   };
 }
 

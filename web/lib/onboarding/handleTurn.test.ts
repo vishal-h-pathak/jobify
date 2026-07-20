@@ -234,11 +234,10 @@ describe("handleOnboardingTurn", () => {
   });
 
   it("FIX-1: retries once on an empty assistant response, then falls back to a deterministic stage-appropriate question if still empty", async () => {
-    const runTurn = vi.fn(async () => ({
-      assistantText: "",
-      toolCalls: [],
-      usage: { inputTokens: 5, outputTokens: 0 },
-    }));
+    const runTurn = vi
+      .fn()
+      .mockResolvedValueOnce({ assistantText: "", toolCalls: [], usage: { inputTokens: 5, outputTokens: 0 } })
+      .mockResolvedValueOnce({ assistantText: "", toolCalls: [], usage: { inputTokens: 6, outputTokens: 0 } });
 
     const result = await handleOnboardingTurn({
       userId: "user-1",
@@ -264,8 +263,22 @@ describe("handleOnboardingTurn", () => {
     expect(savedMessages.every((m) => m.content.trim() !== "")).toBe(true);
     expect(savedMessages.at(-1)?.content).toBe(result.assistantText);
 
-    // Still exactly one budget_ledger row, even though runTurn fired twice.
-    expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(1);
+    // INTSIM live-run fix: BOTH real calls get their own budget_ledger row —
+    // the empty first attempt's tokens were real spend and must not be
+    // dropped just because its text never reached the user. Matches the
+    // "one ledger row per real LLM call, constitutional" rule the v2
+    // continue-reprompt path already honors above.
+    expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(2);
+    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(
+      1,
+      fakeClient,
+      expect.objectContaining({ inputTokens: 5, outputTokens: 0 })
+    );
+    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(
+      2,
+      fakeClient,
+      expect.objectContaining({ inputTokens: 6, outputTokens: 0 })
+    );
   });
 
   it("FIX-1: does not retry when the first assistant response is non-empty", async () => {
@@ -286,6 +299,40 @@ describe("handleOnboardingTurn", () => {
     });
 
     expect(runTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("Adversarial-review fix (F1/CRITICAL): does not retry when text is empty but a tool call landed — and bills exactly one ledger row", async () => {
+    const runTurn = vi.fn(async () => ({
+      assistantText: "",
+      toolCalls: [{ name: "record_targeting", input: { tiers: [{ key: "tier_1", label: "Tier 1" }], thesis_summary: "..." } }],
+      usage: { inputTokens: 20, outputTokens: 15 },
+    }));
+
+    const result = await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "ok",
+      session: baseSession({ stage: "targeting" }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    // The old guard retried on empty text alone, discarding a first attempt
+    // whose entire output was a real record_* tool call — double-billing and
+    // losing recorded data. The retry must be gated on toolCalls.length === 0
+    // too, so a text-empty-but-tool-call-bearing turn is never retried.
+    expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(1);
+    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(
+      1,
+      fakeClient,
+      expect.objectContaining({ inputTokens: 20, outputTokens: 15 })
+    );
+    // The tool call's data must have been applied, not discarded.
+    const saved = saveSessionMock.mock.calls[0][2] as { extracted: { targeting?: { thesis_summary?: string } } };
+    expect(saved.extracted.targeting?.thesis_summary).toBe("...");
+    expect(result.done).toBe(false);
   });
 
   it("FIX-1: recovers if the retry attempt returns real text (uses the retry's text, not the fallback)", async () => {
@@ -545,6 +592,138 @@ describe("handleOnboardingTurn", () => {
       expect(savedArg.modules.evidence?.receipt).toBe("built from your answers");
     });
 
+  });
+
+  describe("INTSIM task 4: fallback_kind telemetry", () => {
+    it("fallback_kind is undefined on a normal turn (question present, no fallback fired)", async () => {
+      const runTurn = vi.fn(async () => ({
+        assistantText: "Thanks — tell me about your background?",
+        toolCalls: [],
+        usage: { inputTokens: 100, outputTokens: 50 },
+      }));
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "here is my resume",
+        session: baseSession(),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.fallback_kind).toBeUndefined();
+    });
+
+    it("sets fallback_kind to 'reprompt' when the v2 continue re-prompt fires, and warns a structured line", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const runTurn = vi
+        .fn()
+        .mockResolvedValueOnce({
+          assistantText: "Got it — that gives real shape to direction.",
+          toolCalls: [],
+          usage: { inputTokens: 100, outputTokens: 40 },
+        })
+        .mockResolvedValueOnce({
+          assistantText: "Which of those directions would you pick first?",
+          toolCalls: [],
+          usage: { inputTokens: 120, outputTokens: 30 },
+        });
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "I'd want roles applying frontier AI across my interest areas.",
+        session: baseSession({ stage: "targeting" }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.fallback_kind).toBe("reprompt");
+      expect(warnSpy).toHaveBeenCalledWith(
+        "onboarding_fallback",
+        expect.objectContaining({ userId: "user-1", stage: "targeting", kind: "reprompt" })
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("sets fallback_kind to 'fallback' when the empty-response retry survives (still empty)", async () => {
+      const runTurn = vi.fn(async () => ({
+        assistantText: "",
+        toolCalls: [],
+        usage: { inputTokens: 5, outputTokens: 0 },
+      }));
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "ok",
+        session: baseSession({ stage: "targeting" }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.fallback_kind).toBe("fallback");
+    });
+
+    it("sets fallback_kind to 'fallback' on the first last-resort append (non-empty ack-only turn)", async () => {
+      const runTurn = vi.fn(async () => ({
+        assistantText: "Good, moving on.",
+        toolCalls: [{ name: "record_resume", input: { cv_markdown: "# CV" } }],
+        usage: { inputTokens: 40, outputTokens: 10 },
+      }));
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "This is good.",
+        session: baseSession({ stage: "resume" }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.fallback_kind).toBe("fallback");
+    });
+
+    it("sets fallback_kind to 'loop_breaker' when the same canned fallback would repeat consecutively", async () => {
+      // The prior assistant turn already ends with the canned targeting
+      // fallback text (session-prompt 45's second live loop) — a new
+      // ack-only turn must get the loop-breaker question, not the same
+      // canned text again.
+      const priorFallback =
+        "Logistics, all in one go: where are you based, remote-only or is some onsite fine (and where), " +
+        "and what's the salary floor below which you won't even look?";
+      const runTurn = vi.fn(async () => ({
+        assistantText: "Noted, thanks.",
+        toolCalls: [],
+        usage: { inputTokens: 20, outputTokens: 10 },
+      }));
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "here's more context",
+        session: baseSession({
+          stage: "targeting",
+          messages: [
+            { role: "user", content: "hi" },
+            { role: "assistant", content: priorFallback },
+          ],
+        }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.fallback_kind).toBe("loop_breaker");
+      expect(result.assistantText).toContain("What's the one thing I haven't asked about that matters most");
+    });
+  });
+
+  describe("V3A-B2: module-completion glue", () => {
     it("preserves session.modules unchanged in saveSession when a turn fires neither record_calibration nor record_resume", async () => {
       const runTurn = vi.fn(async () => ({
         assistantText: "Got it — what's your target comp?",

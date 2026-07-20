@@ -32,6 +32,11 @@ export interface HandleTurnResult {
   stage: InterviewStage;
   done: boolean;
   validation?: { status: "valid" | "invalid"; errors: string[] };
+  // INTSIM task 4: set whenever the re-prompt or a fallback fires this
+  // turn, so the sim (and later, admin telemetry) can see it without
+  // parsing assistantText. Undefined on an ordinary turn. No schema change
+  // — this is a return-value field only, never persisted.
+  fallback_kind?: "reprompt" | "fallback" | "loop_breaker";
 }
 
 // ONB-A: an explicit Skip button sends this reserved sentinel through the
@@ -139,6 +144,7 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
   // greeting to prepend anymore — session.messages is the full history.
   const history: ChatMessage[] = [...session.messages, { role: "user", content: userMessage }];
   let turnResult = await runTurn(history);
+  const usages = [turnResult.usage];
 
   // FIX-1: a model turn that comes back empty/whitespace-only must never
   // reach the user as a blank bubble. Retry once (still one real attempt at
@@ -151,15 +157,22 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
   // on empty text alone, silently DISCARDING a first attempt whose entire
   // output was a perfect record_* tool call (the model's normal tool-use
   // shape), double-billing and losing recorded data.
+  // INTSIM live-run fix: the first (empty) attempt is still a real, billed
+  // Anthropic call — push its usage before the retry, don't let reassigning
+  // `turnResult` below silently drop it. One ledger row per real LLM call,
+  // no exceptions.
   if (turnResult.assistantText.trim() === "" && turnResult.toolCalls.length === 0) {
     turnResult = await runTurn(history);
+    usages.push(turnResult.usage);
   }
 
   let { extracted, stage, done } = applyToolCalls(turnResult.toolCalls, session.extracted, session.stage);
-  const usages = [turnResult.usage];
   let allToolCalls = [...turnResult.toolCalls];
 
   let assistantText = turnResult.assistantText.trim();
+  // INTSIM task 4: additive telemetry — set (and console.warn'd) at whichever
+  // site below actually fires this turn; undefined on an ordinary turn.
+  let fallbackKind: HandleTurnResult["fallback_kind"];
   // Live-fire fix v2 (2026-07-19, second loop): a non-empty turn with no
   // question must be continued BY THE MODEL, not papered over with a canned
   // append — deterministic repeats poison the history and self-sustain (the
@@ -167,6 +180,8 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
   // honest, and it can also land the record_* call the ack forgot. The
   // synthetic continue nudge is NOT persisted to history below.
   if (assistantText !== "" && !done && stage !== "done" && !assistantText.includes("?")) {
+    fallbackKind = "reprompt";
+    console.warn("onboarding_fallback", { userId, stage, kind: "reprompt" });
     const continueHistory: ChatMessage[] = [
       ...history,
       { role: "assistant", content: assistantText },
@@ -229,6 +244,8 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
       userId,
       stage,
     });
+    fallbackKind = "fallback";
+    console.warn("onboarding_fallback", { userId, stage, kind: "fallback" });
     assistantText = fallbackAssistantText(stage, extracted);
   } else if (stage !== "done" && !done && !assistantText.includes("?")) {
     // Last-resort append (the model was already re-prompted once above and
@@ -236,7 +253,10 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     // question twice in a row.
     const fallback = fallbackAssistantText(stage, extracted);
     const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
-    assistantText = `${assistantText} ${lastAssistant.includes(fallback) ? LOOP_BREAKER_QUESTION : fallback}`;
+    const usingLoopBreaker = lastAssistant.includes(fallback);
+    fallbackKind = usingLoopBreaker ? "loop_breaker" : "fallback";
+    console.warn("onboarding_fallback", { userId, stage, kind: fallbackKind });
+    assistantText = `${assistantText} ${usingLoopBreaker ? LOOP_BREAKER_QUESTION : fallback}`;
   }
 
   const newMessages: ChatMessage[] = [...history, { role: "assistant", content: assistantText }];
@@ -286,5 +306,5 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     });
   }
 
-  return { assistantText, stage, done, validation };
+  return { assistantText, stage, done, validation, fallback_kind: fallbackKind };
 }
