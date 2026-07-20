@@ -11,10 +11,14 @@ cd "$JOBIFY"
 git rev-parse --verify feat/hunt2-s1 >/dev/null 2>&1 || { echo "ERROR: branch feat/hunt2-s1 not found."; exit 1; }
 git rev-parse --verify feat/hunt2-s2 >/dev/null 2>&1 || { echo "ERROR: branch feat/hunt2-s2 not found."; exit 1; }
 
+# pytest lives in the repo venv, not necessarily on the shell PATH.
+if [ -x "$JOBIFY/.venv/bin/pytest" ]; then PYTEST="$JOBIFY/.venv/bin/pytest";
+else PYTEST="python3 -m pytest"; fi
+
 verify() {
   local stage="$1"
   echo "── verify after $stage ──"
-  pytest -q || { echo "FAIL: pytest after $stage"; exit 1; }
+  $PYTEST -q || { echo "FAIL: pytest after $stage"; exit 1; }
   ( cd web && npx tsc --noEmit && npx vitest run && npm run build ) || { echo "FAIL: web suites after $stage"; exit 1; }
   bash scripts/scrub_gate.sh || { echo "FAIL: scrub gate after $stage"; exit 1; }
   echo "── $stage GREEN ──"

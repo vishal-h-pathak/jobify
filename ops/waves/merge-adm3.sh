@@ -7,8 +7,11 @@ cd "$JOBIFY"
 [ -z "$(git status --porcelain)" ] || { echo "ERROR: main tree not clean."; exit 1; }
 git rev-parse --verify feat/adm3 >/dev/null 2>&1 || { echo "ERROR: branch feat/adm3 not found."; exit 1; }
 
+if [ -x "$JOBIFY/.venv/bin/pytest" ]; then PYTEST="$JOBIFY/.venv/bin/pytest";
+else PYTEST="python3 -m pytest"; fi
+
 git merge --no-ff feat/adm3 -m "merge feat/adm3: ADM-3 admin panel + onboarding auto-seed hook (session 49)"
-pytest -q || { echo "FAIL: pytest"; exit 1; }
+$PYTEST -q || { echo "FAIL: pytest"; exit 1; }
 ( cd web && npx tsc --noEmit && npx vitest run && npm run build ) || { echo "FAIL: web suites"; exit 1; }
 bash scripts/scrub_gate.sh || { echo "FAIL: scrub gate"; exit 1; }
 
