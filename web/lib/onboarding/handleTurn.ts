@@ -7,6 +7,7 @@ import { buildProfileDoc, type ExtractedState } from "../profile/buildDoc";
 import { saveSession } from "../db/onboardingSession";
 import { upsertProfileDoc } from "../db/profiles";
 import { recordOnboardingTurn } from "../db/ledger";
+import { seedUserPortals } from "../profile/seedUserPortals";
 import { markModuleComplete, MODULE_REGISTRY, type ModulesState } from "./moduleRegistry";
 
 export interface SessionSnapshot {
@@ -65,6 +66,21 @@ const TARGETING_DIRECTION_FALLBACK =
 // would be appended twice in a row, ask this instead — never repeat.
 const LOOP_BREAKER_QUESTION =
   "What's the one thing I haven't asked about that matters most for your search?";
+
+// ADM-3 Part 2: exported so admin telemetry (lib/admin/onboardingOverview.ts)
+// can best-effort-detect a fallback-tainted turn by scanning stored
+// `messages` content for these exact strings — `fallback_kind` itself is a
+// return-value-only field (see HandleTurnResult), never persisted. Only
+// "fallback" and "loop_breaker" leave a durable textual marker this way;
+// "reprompt" lets the model continue in its own words, so it's invisible to
+// this technique and undercounted in that admin view.
+export const FALLBACK_TEXT_MARKERS = [
+  RESUME_STAGE_FALLBACK,
+  TARGETING_STAGE_FALLBACK,
+  CALIBRATION_STAGE_GENERIC_FALLBACK,
+  TARGETING_DIRECTION_FALLBACK,
+] as const;
+export { LOOP_BREAKER_QUESTION };
 
 const DONE_FALLBACK_TEXT =
   'Your profile is built — head to your feed and hit "Run my hunt" to get your first results.';
@@ -296,6 +312,17 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
       status: "complete",
       modules,
     });
+    // ADM-3 Part 0: seed portals.yml (dream-company probe + tier pack)
+    // right on completion, so a friend's feed isn't empty until an admin
+    // manually runs reseedPortals.ts. Fail-open — a seeding error must
+    // never break the user's final onboarding turn; the row it reads is
+    // now fully committed (both the profile doc upsert and the session
+    // save above have landed), so it never acts on stale state.
+    try {
+      await seedUserPortals(admin, userId);
+    } catch (err) {
+      console.error("onboarding seedUserPortals failed", { userId, err });
+    }
   } else {
     await saveSession(supabase, userId, {
       messages: newMessages,

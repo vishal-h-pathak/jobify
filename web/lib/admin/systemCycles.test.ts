@@ -25,7 +25,7 @@ describe("listRecentHuntCycles", () => {
           triggered_by: "cron",
           users_scored: 3,
           postings_upserted: 10,
-          counters: { stage4_calls: 7 },
+          counters: { stage4_calls: 7, boards_total: 40, boards_fetched: 38, boards_skipped_empty: 2 },
           cost_usd: 1.5,
           error: null,
         },
@@ -56,6 +56,9 @@ describe("listRecentHuntCycles", () => {
         stage4Calls: 7,
         costUsd: 1.5,
         error: null,
+        boardsTotal: 40,
+        boardsFetched: 38,
+        boardsSkippedEmpty: 2,
       },
       {
         id: 1,
@@ -67,6 +70,9 @@ describe("listRecentHuntCycles", () => {
         stage4Calls: 0,
         costUsd: 0,
         error: "boom",
+        boardsTotal: 0,
+        boardsFetched: 0,
+        boardsSkippedEmpty: 0,
       },
     ]);
   });

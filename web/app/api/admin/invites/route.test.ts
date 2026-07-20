@@ -46,10 +46,10 @@ describe("POST /api/admin/invites", () => {
     expect(mintInvitesMock).not.toHaveBeenCalled();
   });
 
-  it("403s when signed in but not an admin — never constructs the service-role client", async () => {
+  it("404s when signed in but not an admin — never constructs the service-role client", async () => {
     requireAdminMock.mockResolvedValueOnce({ ok: false, reason: "forbidden" });
     const res = await POST(jsonRequest({ n: 3 }));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
     expect(createSupabaseAdminClientMock).not.toHaveBeenCalled();
     expect(mintInvitesMock).not.toHaveBeenCalled();
   });

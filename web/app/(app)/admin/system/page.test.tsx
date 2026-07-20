@@ -3,7 +3,10 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 const redirectMock = vi.fn((url: string) => {
   throw new Error(`REDIRECT:${url}`);
 });
-vi.mock("next/navigation", () => ({ redirect: redirectMock }));
+const notFoundMock = vi.fn(() => {
+  throw new Error("NOT_FOUND");
+});
+vi.mock("next/navigation", () => ({ redirect: redirectMock, notFound: notFoundMock }));
 
 const requireAdminMock = vi.fn();
 vi.mock("@/lib/admin/requireAdmin", () => ({ requireAdmin: requireAdminMock }));
@@ -76,6 +79,7 @@ function findCardByHeading(node: unknown, heading: string): { props: { children:
 describe("/admin/system page", () => {
   beforeEach(() => {
     redirectMock.mockClear();
+    notFoundMock.mockClear();
     requireAdminMock.mockReset();
     createSupabaseAdminClientMock.mockClear();
     listRecentHuntCyclesMock.mockClear();
@@ -108,9 +112,10 @@ describe("/admin/system page", () => {
     expect(createSupabaseAdminClientMock).not.toHaveBeenCalled();
   });
 
-  it("redirects non-admins to /feed, without touching the service-role client", async () => {
+  it("404s non-admins (never redirects — that would confirm the panel exists), without touching the service-role client", async () => {
     requireAdminMock.mockResolvedValue({ ok: false, reason: "forbidden" });
-    await expect(AdminSystemPage()).rejects.toThrow("REDIRECT:/feed");
+    await expect(AdminSystemPage()).rejects.toThrow("NOT_FOUND");
+    expect(redirectMock).not.toHaveBeenCalled();
     expect(createSupabaseAdminClientMock).not.toHaveBeenCalled();
   });
 

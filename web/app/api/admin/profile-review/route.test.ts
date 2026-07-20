@@ -48,10 +48,10 @@ describe("GET /api/admin/profile-review", () => {
     expect(getUserProfileReviewMock).not.toHaveBeenCalled();
   });
 
-  it("403s when signed in but not an admin — never constructs the service-role client", async () => {
+  it("404s when signed in but not an admin — never constructs the service-role client", async () => {
     requireAdminMock.mockResolvedValueOnce({ ok: false, reason: "forbidden" });
     const res = await GET(req("user-1"));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
     expect(createSupabaseAdminClientMock).not.toHaveBeenCalled();
     expect(getUserProfileReviewMock).not.toHaveBeenCalled();
   });

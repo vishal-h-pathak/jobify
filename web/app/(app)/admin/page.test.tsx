@@ -4,7 +4,10 @@ import type { UserOverviewRow } from "@/lib/admin/users";
 const redirectMock = vi.fn((url: string) => {
   throw new Error(`REDIRECT:${url}`);
 });
-vi.mock("next/navigation", () => ({ redirect: redirectMock }));
+const notFoundMock = vi.fn(() => {
+  throw new Error("NOT_FOUND");
+});
+vi.mock("next/navigation", () => ({ redirect: redirectMock, notFound: notFoundMock }));
 
 const requireAdminMock = vi.fn();
 vi.mock("@/lib/admin/requireAdmin", () => ({ requireAdmin: requireAdminMock }));
@@ -38,12 +41,24 @@ const getPoolHealthMock = vi.fn(async () => ({
 }));
 vi.mock("@/lib/admin/poolHealth", () => ({ getPoolHealth: getPoolHealthMock }));
 
+const getSpendOverviewMock = vi.fn(async () => ({
+  allTimeTotalUsd: 0,
+  byEvent: {},
+  byUser: [] as Array<{ userId: string; costUsd: number }>,
+  last14Days: [] as Array<{ date: string; costUsd: number }>,
+}));
+vi.mock("@/lib/admin/spend", () => ({ getSpendOverview: getSpendOverviewMock }));
+
+const getOnboardingOverviewMock = vi.fn(async () => new Map());
+vi.mock("@/lib/admin/onboardingOverview", () => ({ getOnboardingOverview: getOnboardingOverviewMock }));
+
 const { default: AdminPage } = await import("./page");
 const { ProfileReviewRow } = await import("./ProfileReviewRow");
 
 describe("/admin page", () => {
   beforeEach(() => {
     redirectMock.mockClear();
+    notFoundMock.mockClear();
     requireAdminMock.mockReset();
     createSupabaseAdminClientMock.mockClear();
     listAllUserEmailsMock.mockClear();
@@ -51,6 +66,8 @@ describe("/admin page", () => {
     listInvitesForAdminMock.mockClear();
     listAllowlistedEmailsMock.mockClear();
     getPoolHealthMock.mockClear();
+    getSpendOverviewMock.mockClear();
+    getOnboardingOverviewMock.mockClear();
   });
 
   it("redirects signed-out visitors to /login, without touching the service-role client", async () => {
@@ -59,19 +76,21 @@ describe("/admin page", () => {
     expect(createSupabaseAdminClientMock).not.toHaveBeenCalled();
   });
 
-  it("redirects non-admins to /feed, without touching the service-role client", async () => {
+  it("404s non-admins (never redirects — that would confirm the panel exists), without touching the service-role client", async () => {
     requireAdminMock.mockResolvedValue({ ok: false, reason: "forbidden" });
-    await expect(AdminPage()).rejects.toThrow("REDIRECT:/feed");
+    await expect(AdminPage()).rejects.toThrow("NOT_FOUND");
+    expect(redirectMock).not.toHaveBeenCalled();
     expect(createSupabaseAdminClientMock).not.toHaveBeenCalled();
   });
 
-  it("renders the four cards for an admin", async () => {
+  it("renders the five cards for an admin", async () => {
     requireAdminMock.mockResolvedValue({ ok: true, user: { id: "admin-1" }, supabase: {} });
 
     const result = await AdminPage();
-    const [heading, invitesCard, friendsCard, usersCard, poolCard] = result.props.children;
+    const [heading, spendCard, invitesCard, friendsCard, usersCard, poolCard] = result.props.children;
 
     expect(heading.props.children).toBe("Admin");
+    expect(spendCard.props.children[0].props.children).toBe("Spend");
     expect(invitesCard.props.children[0].props.children).toBe("Invites");
     expect(friendsCard.props.children[0].props.children).toBe("Friends");
     expect(usersCard.props.children[0].props.children).toBe("Users");
@@ -80,7 +99,7 @@ describe("/admin page", () => {
     expect(listAllowlistedEmailsMock).toHaveBeenCalled();
   });
 
-  it("renders one ProfileReviewRow per user, passing the row data through (Review-profile wiring)", async () => {
+  it("renders one ProfileReviewRow per user, enriched with all-time spend and onboarding data", async () => {
     requireAdminMock.mockResolvedValue({ ok: true, user: { id: "admin-1" }, supabase: {} });
     const userRow = {
       userId: "user-1",
@@ -91,9 +110,33 @@ describe("/admin page", () => {
       hasByoKey: false,
     };
     listUsersOverviewMock.mockResolvedValue([userRow]);
+    getSpendOverviewMock.mockResolvedValue({
+      allTimeTotalUsd: 9.5,
+      byEvent: { onboarding_turn: 9.5 },
+      byUser: [{ userId: "user-1", costUsd: 9.5 }],
+      last14Days: [],
+    });
+    getOnboardingOverviewMock.mockResolvedValue(
+      new Map([
+        [
+          "user-1",
+          {
+            userId: "user-1",
+            stage: "targeting",
+            status: "in_progress",
+            completedAt: null,
+            lastActivityAt: "2026-07-20T10:00:00Z",
+            turnCount: 4,
+            fallbackCount: 0,
+            loopBreakerCount: 0,
+            modules: [],
+          },
+        ],
+      ])
+    );
 
     const result = await AdminPage();
-    const [, , , usersCard] = result.props.children;
+    const [, , , , usersCard] = result.props.children;
     const tableWrapper = usersCard.props.children[1];
     const table = tableWrapper.props.children;
     const [, tbody] = table.props.children;
@@ -101,6 +144,13 @@ describe("/admin page", () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0].type).toBe(ProfileReviewRow);
-    expect(rows[0].props.user).toEqual(userRow);
+    expect(rows[0].props.user).toEqual({
+      ...userRow,
+      spendUsdAllTime: 9.5,
+      onboardingStage: "targeting",
+      onboardingStatus: "in_progress",
+      onboardingCompletedAt: null,
+      lastActivityAt: "2026-07-20T10:00:00Z",
+    });
   });
 });
