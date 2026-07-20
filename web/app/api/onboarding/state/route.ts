@@ -58,10 +58,14 @@ export async function GET() {
   // (user_id, posting_id) and NO `id` column — count over "*" with
   // head:true fetches zero rows. (Live-fire fix 2026-07-19: select("id")
   // 400'd on PostgREST for every user, killing this whole route.)
+  // P0.5 (HUNT2 session 47): `matches` now carries a row per scored
+  // posting, most of them rejected — the "N matches waiting" chip must
+  // only count surfaced ones, same filter every other read applies.
   const { count: matchCount, error: matchCountError } = await supabase
     .from("matches")
     .select("*", { count: "exact", head: true })
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .eq("status", "surfaced");
   if (matchCountError) throw matchCountError;
 
   return NextResponse.json({

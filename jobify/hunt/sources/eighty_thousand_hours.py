@@ -26,9 +26,9 @@ import os
 
 import requests
 
-from jobify.config import is_local_or_remote, location_filter_enabled
 from jobify.shared.html import clean_html_to_text
 from jobify.shared.jobid import make_job_id
+from sources.remote_infer import infer_remote
 
 logger = logging.getLogger("sources.eighty_thousand_hours")
 
@@ -188,11 +188,6 @@ def fetch():
                 continue
             if not _matches(f"{title} {description}"):
                 continue
-            # Honor mode filter consistent with greenhouse / ashby. 80kh
-            # supplies a lot of city-specific roles (Pittsburgh, Vienna,
-            # Cambridge UK); ``local_remote`` keeps only Atlanta or remote.
-            if location_filter_enabled() and not is_local_or_remote(location):
-                continue
 
             jid = make_job_id(link, title, str(company))
             if jid in seen_local:
@@ -206,6 +201,7 @@ def fetch():
                 "title": title,
                 "company": str(company),
                 "location": str(location),
+                "remote": infer_remote(str(location), None),
                 "description": description[:3000],
                 "url": link,
             }

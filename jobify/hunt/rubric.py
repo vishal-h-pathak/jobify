@@ -54,13 +54,20 @@ _REQUIRED_TOP_LEVEL_KEYS = (
 @dataclass(frozen=True)
 class RubricResult:
     """Output of `score_posting`. `score` is 0.0-1.0; 0.0 whenever
-    `disqualified` is True (a disqualifier or a failed hard gate)."""
+    `disqualified` is True (a disqualifier or a failed hard gate).
+
+    `location_tier` (P0.7, HUNT2 session 47): 1/2/3 location-fit ranking
+    dimension, or `None` when scoring short-circuited before it was
+    computed (disqualified postings never reach the tiering step — a
+    disqualified posting never surfaces regardless of its location, so a
+    tier for it is meaningless)."""
 
     score: float
     tier_hint: Optional[Any]
     reasons: list[str]
     disqualified: bool
     breakdown: dict[str, float] = field(default_factory=dict)
+    location_tier: Optional[int] = None
 
 
 # ── Schema validation ────────────────────────────────────────────────────
@@ -323,6 +330,41 @@ def _degree_gate_hit(text: str) -> bool:
     )
 
 
+def _location_tier(loc_gate: Optional[dict], remote: Optional[bool], location: str) -> int:
+    """P0.7 (HUNT2 session 47, owner directive) location-fit ranking
+    dimension — 1 (best) / 2 / 3 (worst), never a disqualifier.
+
+    Reuses the compiled rubric's existing `gates.location` fields
+    (`base_location_substring`, `remote_acceptable`) as the sole
+    preferred-metro signal — `profile.yml` only has one `base` city today
+    (no metros list), so the compiler's single base-metro substring IS
+    "the preferred metro" per session 47's scope decision. This used to
+    back a hard reject (see `score_posting`'s gates block); here it's
+    read-only ranking input.
+
+    tier 1: remote and the user accepts remote, OR onsite/hybrid inside
+            the user's base metro.
+    tier 2: `remote` is unknown (`None`) — ambiguous location signal.
+    tier 3: everything else — onsite/hybrid outside the base metro (or
+            with no base metro stated at all), or remote when the user
+            doesn't accept remote.
+    """
+    if remote is None:
+        return 2
+    if not isinstance(loc_gate, dict):
+        # No location preference was ever compiled for this user — remote
+        # is a known signal, but there's no base-metro signal to rank an
+        # onsite posting against.
+        return 1 if remote else 2
+    remote_acceptable = bool(loc_gate.get("remote_acceptable", True))
+    base_substr = str(loc_gate.get("base_location_substring") or "").lower()
+    if remote:
+        return 1 if remote_acceptable else 3
+    if base_substr and base_substr in location.lower():
+        return 1
+    return 3
+
+
 def score_posting(rubric: dict, posting: dict) -> RubricResult:
     """Pure, deterministic scorer: same `(rubric, posting)` always yields
     an identical `RubricResult`. No I/O, no tokens.
@@ -362,29 +404,23 @@ def score_posting(rubric: dict, posting: dict) -> RubricResult:
                 breakdown=breakdown,
             )
 
-    # ── Gates — location/remote and comp floor are hard rejects (thesis:
-    # "violating any of these = score floor, do not surface"). The degree
-    # gate is a soft flag, matching jobify.hunt.scorer's existing
-    # semantics — a degree-gated posting is still surfaced, just labeled.
+    # ── Gates — comp floor is a hard reject (thesis: "violating this =
+    # score floor, do not surface"). The degree gate is a soft flag,
+    # matching jobify.hunt.scorer's existing semantics — a degree-gated
+    # posting is still surfaced, just labeled.
+    #
+    # Location used to be a hard gate here too (P0.1/P0.7, HUNT2 session
+    # 47 — owner directive): a posting outside the compiled
+    # `base_location_substring` and not acceptable-remote was disqualified
+    # outright, which is exactly the discovery-time Atlanta filter's
+    # scoring-time twin — it silently starved every user's pool of
+    # legitimate out-of-metro roles. Replaced by `_location_tier` below:
+    # location is now a ranking dimension, not a filter. A posting is
+    # still disqualified for its location ONLY via the ordinary
+    # disqualifiers-regex loop above (i.e. the user's own dealbreakers.yml
+    # said so explicitly) — never automatically by this gate.
     gates = rubric.get("gates", {}) or {}
     gate_failed = False
-
-    loc_gate = gates.get("location")
-    if isinstance(loc_gate, dict):
-        remote_acceptable = loc_gate.get("remote_acceptable", True)
-        base_substr = str(loc_gate.get("base_location_substring") or "").lower()
-        if remote is True:
-            location_ok = bool(remote_acceptable)
-        elif base_substr:
-            location_ok = base_substr in location.lower()
-        else:
-            location_ok = True
-        if not location_ok:
-            gate_failed = True
-            reasons.append(
-                f"gate:location — {location or 'unspecified location'!r} does not "
-                "satisfy the remote/base-location constraint"
-            )
 
     comp_floor = gates.get("comp_floor_usd")
     if isinstance(comp_floor, (int, float)):
@@ -451,6 +487,7 @@ def score_posting(rubric: dict, posting: dict) -> RubricResult:
         reasons=reasons,
         disqualified=False,
         breakdown=breakdown,
+        location_tier=_location_tier(gates.get("location"), remote, location),
     )
 
 

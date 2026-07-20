@@ -116,7 +116,11 @@ def _fixed_verdict_llm(monkeypatch, score: float = 0.7, reason: str = "good fit"
 # ── Stage 1: title pre-filter ────────────────────────────────────────────
 
 
-def test_stage1_title_filter_failure_gets_no_matches_row(tmp_path, monkeypatch):
+def test_stage1_title_filter_failure_gets_rejected_title_row(tmp_path, monkeypatch):
+    """P0.5 (HUNT2 session 47): a title-filter failure used to get NO
+    matches row at all — the "invisible funnel" bug. It now gets a
+    `rejected_title` row so the pool->scored->surfaced shape is
+    reconstructable after the fact."""
     d = _profile_dir(tmp_path, "user-a", portals_yaml=(
         "title_filter:\n  reject_substrings: ['intern']\n"
     ))
@@ -137,14 +141,22 @@ def test_stage1_title_filter_failure_gets_no_matches_row(tmp_path, monkeypatch):
     counters = fanout.run_fanout_cycle(["user-a"])
 
     written_ids = {pid for pid, _kw in upserts}
-    assert written_ids == {"p-real"}
+    assert written_ids == {"p-intern", "p-real"}
+    rejected = next(kw for pid, kw in upserts if pid == "p-intern")
+    assert rejected["status"] == "rejected_title"
+    assert rejected["reject_reason"] == "failed title filter"
     assert counters["postings_scored"] == 1  # only the survivor reached stage 2
 
 
 # ── Stage 2: compiled rubric ─────────────────────────────────────────────
 
 
-def test_stage2_hard_disqualify_gets_no_matches_row(tmp_path, monkeypatch):
+def test_stage2_hard_disqualify_gets_rejected_rubric_row(tmp_path, monkeypatch):
+    """P0.5 (HUNT2 session 47): a hard-disqualified posting used to get
+    NO matches row at all. It now gets a `rejected_rubric` row with a
+    `reject_reason` naming the disqualifier — same "invisible funnel"
+    fix as stage 1, P0.3's dealbreakers->disqualified-before-LLM contract
+    is unaffected (still zero LLM calls for this posting)."""
     d = _profile_dir(tmp_path, "user-a")
     monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
     monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
@@ -169,7 +181,10 @@ def test_stage2_hard_disqualify_gets_no_matches_row(tmp_path, monkeypatch):
     fanout.run_fanout_cycle(["user-a"])
 
     written_ids = {pid for pid, _kw in upserts}
-    assert written_ids == {"p-real"}, "a hard-disqualified posting must get NO matches row"
+    assert written_ids == {"p-crypto", "p-real"}
+    rejected = next(kw for pid, kw in upserts if pid == "p-crypto")
+    assert rejected["status"] == "rejected_rubric"
+    assert "disqualified" in rejected["reject_reason"] and "not interested" in rejected["reject_reason"]
 
 
 def test_stage2_writes_rubric_score_and_reason(tmp_path, monkeypatch):
@@ -193,6 +208,139 @@ def test_stage2_writes_rubric_score_and_reason(tmp_path, monkeypatch):
     assert stage2_write["rubric_score"] == 1.0
     assert stage2_write["embed_score"] is None
     assert "matched:core" in stage2_write["reason"]
+    assert stage2_write["status"] == "rejected_rerank"
+
+
+# ── P0.5 full funnel: status enum + P0.7 location_tier persistence ───────
+
+
+def test_stage4_good_verdict_gets_surfaced(tmp_path, monkeypatch):
+    d = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-1")])
+
+    _fixed_verdict_llm(monkeypatch, score=0.7, reason="good fit")
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    fanout.run_fanout_cycle(["user-a"])
+
+    stage4_write = next(kw for pid, kw in upserts if pid == "p-1" and kw.get("reason_source") == "llm")
+    assert stage4_write["status"] == "surfaced"
+    assert stage4_write["reject_reason"] is None
+
+
+def test_stage4_unparseable_verdict_gets_rejected_llm(tmp_path, monkeypatch):
+    """P0.5: real tokens were spent (the ledger row still lands) but the
+    response wasn't usable JSON — this used to leave the row exactly as
+    stage 2 left it, undercounting spend against visible funnel state."""
+    d = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    ledger_calls: list[tuple] = []
+    monkeypatch.setattr(
+        db, "insert_budget_ledger_row",
+        lambda user_id, event, **kw: ledger_calls.append((user_id, event)),
+    )
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-1")])
+
+    monkeypatch.setattr(
+        llm, "complete_with_usage",
+        lambda **kw: ("not json", CompletionUsage(input_tokens=100, output_tokens=20)),
+    )
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    fanout.run_fanout_cycle(["user-a"])
+
+    assert any(event == "llm_verdict" for _uid, event in ledger_calls), (
+        "tokens were spent — the ledger row must still be written even on a bad response"
+    )
+    stage4_write = next(
+        kw for pid, kw in upserts if pid == "p-1" and kw.get("status") == "rejected_llm"
+    )
+    assert stage4_write["reject_reason"] == "LLM verdict unparseable"
+
+
+def test_stage2_survivor_not_in_top_n_stays_rejected_rerank(tmp_path, monkeypatch):
+    """A posting that passes the rubric but doesn't make the stage-4
+    top-N cut keeps its stage-2 `rejected_rerank` write untouched — zero
+    extra DB writes for "scored fine, just not this cycle's LLM budget"."""
+    d = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+    monkeypatch.setattr(fanout, "HOSTED_STAGE4_TOP_N", 1)
+
+    rubric = {
+        "rubric_version": 1,
+        "term_groups": [
+            {"group": "a", "weight": 3.0, "terms": ["platform"]},
+            {"group": "b", "weight": 1.0, "terms": ["engineer"]},
+        ],
+        "disqualifiers": [], "gates": {}, "tier_hints": [],
+    }
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: rubric)
+    postings = [
+        _posting("best", title="Senior Role", description="platform engineer role"),  # 1.0
+        _posting("low", title="Senior Role", description="engineer role"),            # 0.25
+    ]
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: postings)
+
+    _fixed_verdict_llm(monkeypatch)
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    fanout.run_fanout_cycle(["user-a"])
+
+    low_writes = [kw for pid, kw in upserts if pid == "low"]
+    assert len(low_writes) == 1, "the non-top-N survivor must get exactly one write, not a second stage-4 update"
+    assert low_writes[0]["status"] == "rejected_rerank"
+    best_write = next(kw for pid, kw in upserts if pid == "best" and kw.get("reason_source") == "llm")
+    assert best_write["status"] == "surfaced"
+
+
+def test_location_tier_persisted_on_stage2_row(tmp_path, monkeypatch):
+    """P0.7 (owner directive): location_tier is on the matches row at
+    scoring time, sourced straight from RubricResult.location_tier."""
+    d = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    rubric = {
+        "rubric_version": 1,
+        "term_groups": [{"group": "core", "weight": 1.0, "terms": ["engineer"]}],
+        "disqualifiers": [], "gates": {"location": {"remote_acceptable": True, "base_location_substring": "denver"}},
+        "tier_hints": [],
+    }
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: rubric)
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+    postings = [
+        _posting("tier1", location="Remote", remote=True),
+        _posting("tier3", location="Austin, TX", remote=False),
+    ]
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: postings)
+
+    _fixed_verdict_llm(monkeypatch)
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    fanout.run_fanout_cycle(["user-a"])
+
+    tiers = {pid: kw["location_tier"] for pid, kw in upserts if kw.get("reason_source") == "rubric"}
+    assert tiers["tier1"] == 1
+    assert tiers["tier3"] == 3
 
 
 # ── Ladder ordering: stage 4 only touches the top-N ──────────────────────
@@ -238,6 +386,64 @@ def test_ladder_ordering_stage4_only_scores_top_n(tmp_path, monkeypatch):
     assert counters["stage4_calls"] == 1
     assert len(calls) == 1
     assert "platform kubernetes engineer role" in calls[0]["prompt"]
+
+
+def test_stage4_selection_ranks_by_tier_before_score_under_cap(tmp_path, monkeypatch):
+    """P0.7 addendum: with the old gate:location hard reject gone, a
+    tier-3 posting can out-score a tier-1 one and must NOT be allowed to
+    take its stage-4 slot. Synthetic pool: three tier-3 postings that all
+    out-score the one tier-1 posting on raw content, cap=2 (fewer slots
+    than the tier-3 count) — the tier-1 posting must still win a slot."""
+    d = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+    monkeypatch.setattr(fanout, "HOSTED_STAGE4_TOP_N", 2)  # cap < tier-3 count (3)
+
+    rubric = {
+        "rubric_version": 1,
+        "term_groups": [
+            {"group": "a", "weight": 3.0, "terms": ["platform"]},
+            {"group": "b", "weight": 2.0, "terms": ["kubernetes"]},
+            {"group": "c", "weight": 1.0, "terms": ["engineer"]},
+        ],
+        "disqualifiers": [],
+        "gates": {"location": {"remote_acceptable": True, "base_location_substring": "denver"}},
+        "tier_hints": [],
+    }
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: rubric)
+
+    # Three tier-3 postings (onsite, outside Denver) that all out-score
+    # the single tier-1 posting (remote) on raw content.
+    postings = [
+        _posting("tier3-a", title="Senior Role", location="Austin, TX", remote=False,
+                 description="platform kubernetes engineer role"),  # 1.0
+        _posting("tier3-b", title="Senior Role", location="Austin, TX", remote=False,
+                 description="platform kubernetes engineer role"),  # 1.0
+        _posting("tier3-c", title="Senior Role", location="Austin, TX", remote=False,
+                 description="platform kubernetes engineer role"),  # 1.0
+        _posting("tier1", title="Senior Role", location="Remote", remote=True,
+                 description="engineer role"),  # 1/6 ~= 0.167 — lowest raw score of the four
+    ]
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: postings)
+
+    _fixed_verdict_llm(monkeypatch)
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert counters["stage4_calls"] == 2  # cap enforced
+    surfaced_ids = {pid for pid, kw in upserts if kw.get("status") == "surfaced"}
+    assert "tier1" in surfaced_ids, (
+        "the tier-1 posting must win a stage-4 slot even though every "
+        "tier-3 posting outscored it on raw content"
+    )
+    assert len(surfaced_ids & {"tier3-a", "tier3-b", "tier3-c"}) == 1, (
+        "exactly one tier-3 posting fills the remaining slot after tier-1 is admitted"
+    )
 
 
 # ── Budget stop ────────────────────────────────────────────────────────

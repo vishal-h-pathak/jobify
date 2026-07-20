@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import {
   groupMatches,
   markSeenBulk,
-  sortByBestScore,
+  sortByTierThenScore,
   type MatchRow,
   type MatchWithPosting,
   type PostingRow,
@@ -35,10 +35,15 @@ export default async function FeedPage() {
   // written by the onboarding chat's final turn) -> send them there.
   if (!profile) redirect("/onboarding");
 
+  // P0.5 (HUNT2 session 47): `matches` now carries a row for every
+  // scored posting (rejected_title/rejected_rubric/rejected_rerank/
+  // rejected_llm/surfaced) — filter to surfaced-only so rejected rows
+  // never leak into the feed.
   const { data: matchesData, error: matchesError } = await supabase
     .from("matches")
     .select("*")
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .eq("status", "surfaced");
   if (matchesError) throw matchesError;
   const matches: MatchRow[] = matchesData ?? [];
 
@@ -57,10 +62,10 @@ export default async function FeedPage() {
   });
 
   const grouped = groupMatches(withPosting);
-  const newSorted = sortByBestScore(grouped.new);
-  const savedSorted = sortByBestScore(grouped.saved);
-  const appliedSorted = sortByBestScore(grouped.applied);
-  const dismissedSorted = sortByBestScore(grouped.dismissed);
+  const newSorted = sortByTierThenScore(grouped.new);
+  const savedSorted = sortByTierThenScore(grouped.saved);
+  const appliedSorted = sortByTierThenScore(grouped.applied);
+  const dismissedSorted = sortByTierThenScore(grouped.dismissed);
 
   // Batched, not per-card: mark every 'new' row about to render as 'seen'
   // in one UPDATE before the response streams out.

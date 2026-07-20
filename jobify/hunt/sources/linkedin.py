@@ -26,7 +26,6 @@ import time
 
 import requests
 
-from jobify.config import get_mode
 from jobify.shared.jobid import make_job_id
 
 logger = logging.getLogger("sources.linkedin")
@@ -48,11 +47,11 @@ QUERIES = [
     "agentic AI engineer",
 ]
 
-_LOCAL_REMOTE_LOCATIONS = (
-    {"location": "Atlanta, Georgia, United States", "label": "Atlanta, GA"},
+# Discovery is location-agnostic (P0.1, HUNT2 session 47 — owner
+# directive) — no hardcoded per-user metro, even in this
+# KEEP-DISABLED reference module.
+_LOCATIONS = (
     {"location": "United States", "label": "Remote", "remote": True},
-)
-_US_EXTRA_LOCATIONS = (
     {"location": "United States", "label": "United States"},
 )
 
@@ -66,12 +65,6 @@ MAX_PAGES = 1  # LinkedIn results past page 1 rarely add signal.
 MAX_SEARCHES_PER_RUN = int(os.environ.get("LINKEDIN_MAX_SEARCHES", "8"))
 
 
-def _locations_for_mode():
-    if get_mode() == "us_wide":
-        return _LOCAL_REMOTE_LOCATIONS + _US_EXTRA_LOCATIONS
-    return _LOCAL_REMOTE_LOCATIONS
-
-
 def fetch():
     """Yield job dicts from LinkedIn postings via SerpAPI Google Jobs."""
     api_key = os.environ.get("SERPAPI_KEY")
@@ -79,7 +72,7 @@ def fetch():
         logger.warning("SERPAPI_KEY not set — skipping linkedin source")
         return
 
-    locations = _locations_for_mode()
+    locations = _LOCATIONS
     seen_local: set[str] = set()
     searches_issued = 0
     yielded = 0

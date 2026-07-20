@@ -102,9 +102,18 @@ export function aggregateEngagement(
   };
 }
 
-/** Every `matches` row's state + timestamps, aggregated for the admin System page's engagement card. */
+/**
+ * Every surfaced `matches` row's state + timestamps, aggregated for the
+ * admin System page's engagement card. P0.5 (HUNT2 session 47): most
+ * `matches` rows are now rejected (never shown to the user, so `state`
+ * never leaves its DB default `'new'`) — without the surfaced filter
+ * this card would be dominated by noise the user never saw.
+ */
 export async function getEngagementSnapshot(admin: SupabaseClient<Database>): Promise<EngagementSnapshot> {
-  const { data, error } = await admin.from("matches").select("user_id, state, state_changed_at");
+  const { data, error } = await admin
+    .from("matches")
+    .select("user_id, state, state_changed_at")
+    .eq("status", "surfaced");
   if (error) throw error;
   return aggregateEngagement(data ?? []);
 }

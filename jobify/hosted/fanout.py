@@ -9,11 +9,19 @@ through four increasingly expensive stages (see `docs/SCORING.md`):
     3. Embedding rerank    cosine(profile embedding, posting embedding)
     4. LLM verdict         Haiku-class, top-N survivors only, budget-gated
 
-A posting that fails stage 1 (title filter) or is hard-disqualified by
-stage 2 (rubric) gets NO `matches` row for that user — not a zero-score
-row. Surfacing every rejected posting at score 0 would pollute the feed
-with noise the user never asked to see; the single-user pipeline's own
-title pre-filter has the same "just never surfaced" semantics.
+Every posting this module considers gets a `matches` row (P0.5, HUNT2
+session 47 — "invisible funnel" fix): `status` records which stage it
+fell out at (`rejected_title` / `rejected_rubric` / `rejected_rerank` /
+`rejected_llm`), or `surfaced` if it made it all the way through a real
+stage-4 LLM verdict — see `jobify.shared.match_status` for the canonical
+enum. Rejected rows are never zero-score noise in the user's feed: the
+web layer filters every read to `status = 'surfaced'`
+(`web/lib/db/matches.ts` callers) — a rejected row exists purely so a
+cycle's pooled->scored->surfaced shape is reconstructable after the fact
+(`select status, count(*) from matches where user_id = ...`), which was
+previously impossible. `location_tier` (P0.7 — owner directive) is
+persisted on stage-2-survivor rows from `RubricResult.location_tier` and
+is what the web feed orders surfaced results by, ahead of score.
 
 Cross-user isolation (the known gotcha this task exists to close): every
 profile read in this module goes through `jobify.profile_loader`'s
@@ -543,11 +551,21 @@ def _run_user_ladder(
     # path) rather than raising — see `_resolve_byo_key`.
     byo_key = _resolve_byo_key(user_id)
 
-    # ── Stage 1: title pre-filter. A failure gets no matches row. ───────
-    survivors = [
-        p for p in postings
-        if passes_title_filter(p.get("title") or "", profile_dir)
-    ]
+    # ── Stage 1: title pre-filter. A failure gets a `rejected_title` row
+    # (P0.5) — the ONLY effect this has going forward is that
+    # `get_unmatched_postings` won't hand this posting back to this user
+    # again; it is never re-title-filtered on a later cycle. ────────────
+    survivors: list[dict] = []
+    for p in postings:
+        if passes_title_filter(p.get("title") or "", profile_dir):
+            survivors.append(p)
+        else:
+            db.upsert_match(
+                user_id, p["id"],
+                status="rejected_title",
+                reject_reason="failed title filter",
+            )
+            counters["matches_written"] += 1
     counters["passed_title_filter"] += len(survivors)
 
     # ── Stage 2: compiled rubric. Deferred compile: if this cycle has
@@ -579,7 +597,21 @@ def _run_user_ladder(
             counters["postings_scored"] += 1
             result = rubric_module.score_posting(rubric_dict, posting)
             if result.disqualified:
-                continue  # hard disqualify -> no matches row, not a zero-score row
+                # Hard disqualify -> `rejected_rubric` row (P0.5), not a
+                # zero-score row. `result.reasons` already reads like the
+                # dealbreakers.yml/thesis.md source line that triggered it
+                # (rubric.py's disqualifier/gate messages) — good enough
+                # as the short `reject_reason` P0.5 asks for.
+                db.upsert_match(
+                    user_id, posting["id"],
+                    rubric_score=result.score,
+                    reason="; ".join(result.reasons),
+                    reason_source="rubric",
+                    status="rejected_rubric",
+                    reject_reason="; ".join(result.reasons)[:500],
+                )
+                counters["matches_written"] += 1
+                continue
             stage2_survivors.append((posting, result))
 
     # ── Stage 3: embedding rerank (skips cleanly when disabled). ────────
@@ -589,6 +621,15 @@ def _run_user_ladder(
     )
     counters["embedded"] += len(embed_scores)
 
+    # Every stage-2 survivor gets written now, status=`rejected_rerank`
+    # (P0.5) — "passed rubric, not yet vetted by an LLM verdict this
+    # cycle." Stage 4 below UPDATES this same row (same PK, partial
+    # upsert) to `surfaced` for whichever ones make the top-N cut and get
+    # a usable verdict; anything that doesn't make the cut (budget/global
+    # cap, ranked below HOSTED_STAGE4_TOP_N) simply keeps this status —
+    # zero extra writes for the common case of "scored fine, just not
+    # this cycle's LLM budget." `location_tier` (P0.7) is the compiled
+    # rubric's location-fit ranking dimension the web feed orders by.
     for posting, result in stage2_survivors:
         db.upsert_match(
             user_id, posting["id"],
@@ -596,6 +637,8 @@ def _run_user_ladder(
             embed_score=embed_scores.get(posting["id"]),
             reason="; ".join(result.reasons),
             reason_source="rubric",
+            status="rejected_rerank",
+            location_tier=result.location_tier,
         )
         counters["matches_written"] += 1
 
@@ -628,10 +671,25 @@ def _run_user_ladder(
 
             if not per_user_capped:
                 thesis = load_thesis(profile_dir)
+                # P0.7 addendum: with the old gate:location hard reject
+                # gone (see rubric.py), tier-3 postings now reach
+                # stage2_survivors and would otherwise compete for the
+                # capped stage-4 slots on raw score alone — a high-scoring
+                # tier-3 posting could displace a lower-scoring tier-1/
+                # tier-2 one from ever getting an LLM verdict. Sort
+                # location_tier ascending FIRST (a missing tier — should
+                # never happen for a non-disqualified survivor, but
+                # treated as worst-case rather than crashing — sorts
+                # last), composite score descending second, THEN slice
+                # to HOSTED_STAGE4_TOP_N — same ordering the web feed
+                # applies to surfaced results, just enforced earlier so
+                # it also governs cap admission, not only display order.
                 ranked = sorted(
                     stage2_survivors,
-                    key=lambda pr: _composite_score(pr[1].score, embed_scores.get(pr[0]["id"])),
-                    reverse=True,
+                    key=lambda pr: (
+                        pr[1].location_tier if pr[1].location_tier is not None else 4,
+                        -_composite_score(pr[1].score, embed_scores.get(pr[0]["id"])),
+                    ),
                 )
                 for i, (posting, _result) in enumerate(ranked[:HOSTED_STAGE4_TOP_N], start=1):
                     try:
@@ -646,11 +704,32 @@ def _run_user_ladder(
                         continue
                     counters["stage4_calls"] += 1
                     if verdict is not None:
+                        # A real, parseable verdict — P0.5: this is the
+                        # only path that ever sets `surfaced`. Score is a
+                        # continuum, not a second reject threshold (P0
+                        # non-goal: "more scoring sophistication" is out
+                        # of scope) — a low-scoring verdict still
+                        # surfaces, just sorts low; the LLM's own `reason`
+                        # already explains a poor fit when applicable.
                         db.upsert_match(
                             user_id, posting["id"],
                             llm_score=verdict["score"],
                             reason=verdict["reason"],
                             reason_source="llm",
+                            status="surfaced",
+                            reject_reason=None,
+                        )
+                    else:
+                        # Real tokens were spent (ledger row already
+                        # written by `_stage4_verdict`) but the response
+                        # wasn't usable JSON — P0.5: this used to leave
+                        # the row exactly as stage 2 left it (silently
+                        # undercounting spend against visible funnel
+                        # state); now it's an explicit `rejected_llm` row.
+                        db.upsert_match(
+                            user_id, posting["id"],
+                            status="rejected_llm",
+                            reject_reason="LLM verdict unparseable",
                         )
 
                     # Mid-batch hard-cap recheck (H6) — BYO bypasses this

@@ -14,6 +14,13 @@ export interface MatchRow {
   state: "new" | "seen" | "saved" | "dismissed" | "applied";
   state_changed_at: string;
   created_at: string;
+  // P0.5/P0.7 (HUNT2 session 47): funnel status (distinct from `state`
+  // above) + the location-fit ranking dimension. Every read of this
+  // table must filter `.eq("status", "surfaced")` — rejected rows exist
+  // so a cycle's funnel is reconstructable, never to leak into a feed.
+  status: "rejected_title" | "rejected_rubric" | "rejected_rerank" | "rejected_llm" | "surfaced";
+  reject_reason: string | null;
+  location_tier: 1 | 2 | 3 | null;
 }
 
 export interface PostingRow {
@@ -41,11 +48,22 @@ export function bestScore(m: Pick<MatchRow, "llm_score" | "embed_score" | "rubri
   return m.llm_score ?? m.embed_score ?? m.rubric_score ?? null;
 }
 
-/** Descending by bestScore; matches with no score at all sort last. */
-export function sortByBestScore<T extends Pick<MatchRow, "llm_score" | "embed_score" | "rubric_score">>(
-  matches: T[]
-): T[] {
+/**
+ * P0.7 (owner directive, HUNT2 session 47): `location_tier` ascending is
+ * the primary sort key (1 = preferred metro / acceptable-remote ranks
+ * above everything else; `null` — a tier was never computed, e.g. a row
+ * that predates this migration's backfill — sorts last, after tier 3),
+ * `bestScore` descending breaks ties within a tier. Every tier-1 match
+ * ranks above every tier-3 match regardless of raw score; tier-2 never
+ * outranks tier-1.
+ */
+export function sortByTierThenScore<
+  T extends Pick<MatchRow, "llm_score" | "embed_score" | "rubric_score" | "location_tier">,
+>(matches: T[]): T[] {
   return [...matches].sort((a, b) => {
+    const tierA = a.location_tier ?? 4;
+    const tierB = b.location_tier ?? 4;
+    if (tierA !== tierB) return tierA - tierB;
     const scoreA = bestScore(a);
     const scoreB = bestScore(b);
     if (scoreA === null && scoreB === null) return 0;

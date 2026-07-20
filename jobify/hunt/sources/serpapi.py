@@ -1,9 +1,8 @@
 """
 sources/serpapi.py — Google Jobs results via SerpAPI.
 
-Cost discipline matters here: SerpAPI's free tier is 100 searches/month, and
-the previous configuration burned ~72 searches per run (12 queries × 2 locs ×
-3 pages). Three guards now enforce a per-run budget:
+Cost discipline matters here: SerpAPI's free tier is 100 searches/month.
+Three guards enforce a per-run budget:
 
 1. ``MAX_SEARCHES_PER_RUN`` hard cap. We stop iterating once we hit it and
    log a clear "budget exhausted" message rather than silently truncating.
@@ -12,7 +11,16 @@ the previous configuration burned ~72 searches per run (12 queries × 2 locs ×
 3. Per-run logging of total searches issued so the budget shows up in
    ``agent.log``.
 
-The query list and locations are mode-aware via ``config.get_mode()``.
+Queries are per-user template expansion (P0.6, HUNT2 session 47), not a
+hardcoded list: the hosted discovery worker (``jobify.hosted.discovery``)
+passes the deduped, capped union of every user's queries via ``queries=``;
+the single-user CLI path (``fetch()`` called with no argument) derives
+queries from whichever ONE profile is currently active
+(``sources.query_templates.queries_for_active_profile``). Discovery is
+location-agnostic (P0.1) — a query's location intent (if any: "remote",
+a metro name) is baked into the query string itself by the template, so
+there is no separate location matrix or mode branch here anymore; the
+SerpAPI ``location`` param is always the broad "United States" default.
 """
 
 from __future__ import annotations
@@ -23,37 +31,11 @@ import time
 
 import requests
 
-from jobify.config import get_mode
 from jobify.shared.jobid import make_job_id
+from sources.query_templates import queries_for_active_profile
+from sources.remote_infer import infer_remote
 
 logger = logging.getLogger("sources.serpapi")
-
-QUERIES = [
-    "neuromorphic engineer",
-    "computational neuroscience",
-    "spiking neural network",
-    "connectomics",
-    "sales engineer AI startup",
-    "solutions engineer machine learning",
-    "developer relations AI",
-    # Tier 1.5 — agentic / applied-AI discovery (added feat/hunt-agentic-discovery).
-    # Paid: each query × location × page is billable, so keep this set tight.
-    "AI agent engineer",
-    "applied AI engineer",
-    "forward deployed engineer",
-    "agentic AI engineer",
-]
-
-# Mode-aware locations. ``label`` is what we record on the row; ``location``
-# is what SerpAPI sees; ``remote`` flag appends "remote" to the query so
-# Google biases toward remote-friendly listings.
-_LOCAL_REMOTE_LOCATIONS = (
-    {"location": "Atlanta, Georgia, United States", "label": "Atlanta, GA"},
-    {"location": "United States", "label": "Remote", "remote": True},
-)
-_US_EXTRA_LOCATIONS = (
-    {"location": "United States", "label": "United States"},
-)
 
 ENDPOINT = "https://serpapi.com/search.json"
 
@@ -64,110 +46,114 @@ ENDPOINT = "https://serpapi.com/search.json"
 # via the env var if you want a wider sweep.
 MAX_SEARCHES_PER_RUN = int(os.environ.get("SERPAPI_MAX_SEARCHES", "8"))
 
-# Cap pages per (query, location). Most relevant results appear on page 1.
+# Cap pages per query. Most relevant results appear on page 1.
 MAX_PAGES = 2
 
-
-def _locations_for_mode():
-    if get_mode() == "us_wide":
-        return _LOCAL_REMOTE_LOCATIONS + _US_EXTRA_LOCATIONS
-    return _LOCAL_REMOTE_LOCATIONS
+# Broad, provider-side default — real location targeting now lives in the
+# query string itself (P0.6's template appends "remote" or a metro name).
+_LOCATION = "United States"
 
 
-def fetch():
-    """Yield job dicts from SerpAPI's Google Jobs endpoint with pagination."""
+def fetch(queries: list[str] | None = None):
+    """Yield job dicts from SerpAPI's Google Jobs endpoint with pagination.
+
+    ``queries`` defaults to the active single-user profile's template
+    queries (CLI path); the hosted discovery worker always passes an
+    explicit, pre-deduped, pre-capped list.
+    """
     api_key = os.environ.get("SERPAPI_KEY")
     if not api_key:
         logger.warning("SERPAPI_KEY not set — skipping serpapi source")
         return
 
-    locations = _locations_for_mode()
+    if queries is None:
+        queries = queries_for_active_profile()
+    if not queries:
+        logger.info("serpapi: no queries to run — skipping")
+        return
+
     seen_local: set[str] = set()
     searches_issued = 0
     yielded = 0
 
     budget_exhausted = False
-    for q in QUERIES:
+    for query in queries:
         if budget_exhausted:
             break
-        for loc in locations:
-            if budget_exhausted:
-                break
-            query = f"{q} remote" if loc.get("remote") else q
-            for page in range(MAX_PAGES):
-                if searches_issued >= MAX_SEARCHES_PER_RUN:
-                    logger.warning(
-                        "serpapi: budget exhausted at %d searches "
-                        "(MAX_SEARCHES_PER_RUN=%d) — stopping",
-                        searches_issued, MAX_SEARCHES_PER_RUN,
-                    )
-                    budget_exhausted = True
-                    break
-
-                params = {
-                    "engine": "google_jobs",
-                    "q": query,
-                    "location": loc["location"],
-                    "api_key": api_key,
-                    "start": page * 10,
-                }
-                try:
-                    resp = requests.get(ENDPOINT, params=params, timeout=30)
-                    searches_issued += 1
-                    resp.raise_for_status()
-                    data = resp.json()
-                except Exception as exc:
-                    logger.warning(
-                        "serpapi: request failed q=%r loc=%r page=%d: %s",
-                        query, loc["label"], page, exc,
-                    )
-                    time.sleep(1)
-                    break  # stop paginating on error
-
-                results = data.get("jobs_results", []) or []
-                if not results:
-                    logger.info("serpapi: 0 results q=%r loc=%r page=%d (stop)",
-                                query, loc["label"], page)
-                    break  # no more pages
-
-                page_yield = 0
-                for job in results:
-                    title = job.get("title", "")
-                    company = job.get("company_name", "Unknown")
-                    location = job.get("location", loc["label"])
-                    description = job.get("description", "")
-                    link = ""
-                    for opt in job.get("apply_options", []) or []:
-                        if opt.get("link"):
-                            link = opt["link"]
-                            break
-                    if not link:
-                        link = job.get("share_link") or job.get("job_id", "")
-                    jid = make_job_id(link, title, company)
-                    if jid in seen_local:
-                        continue
-                    seen_local.add(jid)
-                    page_yield += 1
-                    yielded += 1
-                    yield {
-                        "id": jid,
-                        "source": "serpapi",
-                        "query": q,
-                        "title": title,
-                        "company": company,
-                        "location": location,
-                        "description": description,
-                        "url": link,
-                    }
-                logger.info(
-                    "serpapi: page yielded %d new q=%r loc=%r page=%d",
-                    page_yield, query, loc["label"], page,
+        for page in range(MAX_PAGES):
+            if searches_issued >= MAX_SEARCHES_PER_RUN:
+                logger.warning(
+                    "serpapi: budget exhausted at %d searches "
+                    "(MAX_SEARCHES_PER_RUN=%d) — stopping",
+                    searches_issued, MAX_SEARCHES_PER_RUN,
                 )
-                # Short-circuit if a page produced nothing new — pagination
-                # past that point is almost certainly more dupes.
-                if page_yield == 0:
-                    break
+                budget_exhausted = True
+                break
+
+            params = {
+                "engine": "google_jobs",
+                "q": query,
+                "location": _LOCATION,
+                "api_key": api_key,
+                "start": page * 10,
+            }
+            try:
+                resp = requests.get(ENDPOINT, params=params, timeout=30)
+                searches_issued += 1
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as exc:
+                logger.warning(
+                    "serpapi: request failed q=%r page=%d: %s",
+                    query, page, exc,
+                )
                 time.sleep(1)
+                break  # stop paginating on error
+
+            results = data.get("jobs_results", []) or []
+            if not results:
+                logger.info("serpapi: 0 results q=%r page=%d (stop)", query, page)
+                break  # no more pages
+
+            page_yield = 0
+            for job in results:
+                title = job.get("title", "")
+                company = job.get("company_name", "Unknown")
+                location = job.get("location", "")
+                description = job.get("description", "")
+                link = ""
+                for opt in job.get("apply_options", []) or []:
+                    if opt.get("link"):
+                        link = opt["link"]
+                        break
+                if not link:
+                    link = job.get("share_link") or job.get("job_id", "")
+                jid = make_job_id(link, title, company)
+                if jid in seen_local:
+                    continue
+                seen_local.add(jid)
+                page_yield += 1
+                yielded += 1
+                yield {
+                    "id": jid,
+                    "source": "serpapi",
+                    "query": query,
+                    "title": title,
+                    "company": company,
+                    "location": location,
+                    "remote": infer_remote(location, job),
+                    "description": description,
+                    "url": link,
+                }
+            logger.info(
+                "serpapi: page yielded %d new q=%r page=%d",
+                page_yield, query, page,
+            )
+            # Short-circuit if a page produced nothing new — pagination
+            # past that point is almost certainly more dupes.
+            if page_yield == 0:
+                break
+            time.sleep(1)
 
     logger.info(
         "serpapi total: %d unique entries from %d searches (budget=%d)",

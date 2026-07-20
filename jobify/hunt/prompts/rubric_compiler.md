@@ -56,7 +56,10 @@ shape exactly:
 - **gates.location**: set `remote_acceptable` from thesis.md's remote/hybrid
   language; `base_location_substring` should be a short lowercase substring
   (e.g. "denver") of the candidate's base metro, or "" if the candidate has
-  no location constraint (fully remote-only search).
+  no location constraint (fully remote-only search). Informational only as
+  of session 47 (HUNT2 P0.7, owner directive) — the scorer no longer
+  disqualifies a posting for its location; it ranks by a separate
+  location-tier dimension derived from these same two fields instead.
 - **gates.comp_floor_usd**: the candidate's stated "no pay cut" floor from
   thesis.md / profile.yml, or `null` if none is stated.
 - **gates.degree_gate**: `true` if thesis.md's degree-gate rule applies to

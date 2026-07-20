@@ -10,22 +10,21 @@ the LLM scorer ever sees it.
 Company list lives in `profile/portals.yml::ashby.companies`. The
 in-module `_FALLBACK_COMPANIES` is consulted only if portals.yml is
 missing.
+
+Discovery is location-agnostic (P0.1, HUNT2 session 47 — owner directive):
+location preference is enforced entirely per-user at scoring/ranking time
+(P0.7); every role this board publishes lands in the pool.
 """
 
 from __future__ import annotations
 
 import logging
 
-from jobify.config import is_local_or_remote
 from jobify.shared.html import strip_tags
 from jobify.shared.jobid import make_job_id
-from sources._http import (
-    fetch_json,
-    location_filter_enabled,
-    passes_title_filter,
-    sleep_between_requests,
-)
+from sources._http import fetch_json, passes_title_filter, sleep_between_requests
 from sources._portals import companies, title_signals
+from sources.remote_infer import infer_remote
 
 logger = logging.getLogger("sources.ashby")
 
@@ -50,7 +49,6 @@ def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
 
     raw = 0
     yielded = 0
-    skipped_loc = 0
     skipped_title = 0
     for job in data.get("jobs", []):
         if not job.get("isListed", True):
@@ -63,9 +61,6 @@ def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
 
         if apply_title_filter and not passes_title_filter(title):
             skipped_title += 1
-            continue
-        if location_filter_enabled() and not is_local_or_remote(location):
-            skipped_loc += 1
             continue
 
         signals = title_signals(title)
@@ -80,12 +75,13 @@ def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
             "title": title,
             "company": display_name,
             "location": location,
+            "remote": infer_remote(location, job),
             "description": description[:3000],
             "url": link,
         }
     logger.info(
-        "ashby: %s yielded=%d (raw=%d, title-filtered=%d, location-filtered=%d)",
-        slug, yielded, raw, skipped_title, skipped_loc,
+        "ashby: %s yielded=%d (raw=%d, title-filtered=%d)",
+        slug, yielded, raw, skipped_title,
     )
 
 

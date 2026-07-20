@@ -27,15 +27,21 @@ result in ONE fetch of that company, not two. This module:
        ever saw them. Per-user title filtering is a scoring-stage concern
        and happens downstream, in Task 3's fan-out (Stage 1), against the
        full pool.
-    4b. Also fetches the five non-portal `jobify.hunt.sources` fetchers
-       (`hn_whoshiring`, `eighty_thousand_hours`, `remoteok`, `jsearch`,
-       `serpapi`) exactly ONCE per cycle, zero-arg, same as
-       `jobify.hunt.agent.iter_all_jobs` does for the single-user path —
-       they run a fixed keyword search with no per-user configuration to
-       union, so there's nothing to materialize per user, but skipping
-       them here would silently drop those sources' postings for every
-       hosted user relative to what single-user `jobify-hunt` would have
-       found.
+    4b. Also fetches the three non-portal, non-query `jobify.hunt.sources`
+       fetchers (`hn_whoshiring`, `eighty_thousand_hours`, `remoteok`)
+       exactly ONCE per cycle, zero-arg — they run a fixed keyword search
+       with no per-user configuration to union, so there's nothing to
+       materialize per user, but skipping them here would silently drop
+       those sources' postings for every hosted user relative to what
+       single-user `jobify-hunt` would have found.
+    4c. `jsearch` and `serpapi` (paid, query-based) instead get the UNION
+       of every user's per-user template queries (P0.6): top ~3 target
+       titles per user's targeting tiers × remote/metro, deduped across
+       users, capped at `_PAID_QUERY_CAP` per provider
+       (`sources.query_templates.union_queries`). Replaces the old fixed,
+       single-persona query list — every hosted user's own search terms
+       now actually reach these two paid sources instead of one
+       hardcoded list serving everyone identically.
     5. Resolves links via `jobify.hunt.agent._resolve_link_and_liveness`
        (reused directly — the four sources above only ever yield direct
        ATS URLs, so this never issues an extra HTTP fetch; see
@@ -53,11 +59,11 @@ this module's only job is getting postings into the shared pool.
 Covers all nine `jobify.hunt.sources` fetchers that the single-user
 `jobify-hunt` pipeline (`jobify.hunt.agent.iter_all_jobs`) runs: the four
 portals.yml-configured ATS sources (greenhouse/lever/ashby/workday) are
-unioned per-user as described above; the five fixed keyword-search
-sources (hn_whoshiring, eighty_thousand_hours, remoteok, jsearch,
-serpapi) have no per-user configuration to union — every user would see
-an identical fetch — so they're simply called once per cycle, same as
-`iter_all_jobs` calls them unconditionally today.
+unioned per-user as described above; three keyword-search sources
+(hn_whoshiring, eighty_thousand_hours, remoteok) have no per-user
+configuration to union — every user would see an identical fetch — so
+they're simply called once per cycle; jsearch/serpapi get the per-user
+query-template union instead (P0.6, see module docstring §4c).
 """
 
 from __future__ import annotations
@@ -71,7 +77,7 @@ from jobify import db
 # `sources` imports below are safe even though `jobify/hosted/` itself was
 # never added to that path.
 from jobify.hunt.agent import _resolve_link_and_liveness
-from jobify.profile_loader import materialize_profile_dir
+from jobify.profile_loader import load_profile, materialize_profile_dir
 from sources import (
     ashby,
     eighty_thousand_hours,
@@ -84,14 +90,21 @@ from sources import (
     workday,
 )
 from sources._portals import companies, workday_tenants
+from sources.query_templates import union_queries
 
 logger = logging.getLogger("jobify.hosted.discovery")
 
-# Fixed keyword-search sources: no per-user `portals.yml` configuration to
-# union (every user's fetch would be identical), so each is called exactly
-# once per discovery cycle with no override — matching
-# `jobify.hunt.agent.SOURCES`'s free-then-paid ordering for these five.
-_FIXED_SOURCES = (hn_whoshiring, eighty_thousand_hours, remoteok, jsearch, serpapi)
+# Zero-config keyword-search sources: no per-user `portals.yml` (or query
+# template) configuration to union — every user's fetch would be
+# identical — so each is called exactly once per discovery cycle with no
+# override.
+_FIXED_SOURCES = (hn_whoshiring, eighty_thousand_hours, remoteok)
+
+# P0.6 acceptance criterion: "cap at 12 paid queries per provider per
+# discovery run." jsearch and serpapi each get their own cap off the same
+# deduped query set (a query dropped for jsearch isn't necessarily dropped
+# for serpapi — the cap is applied independently per provider).
+_PAID_QUERY_CAP = 12
 
 
 def _union_portal_targets(user_ids: list[str]) -> dict[str, list]:
@@ -142,6 +155,31 @@ def _union_portal_targets(user_ids: list[str]) -> dict[str, list]:
     }
 
 
+def _union_profiles(user_ids: list[str]) -> list[dict]:
+    """Materialize every user's profile and return the parsed
+    `profile.yml` dicts — input to `sources.query_templates.union_queries`
+    (P0.6). Separate from `_union_portal_targets` (different output
+    shape); `materialize_profile_dir` is cheap to call again here — it
+    only re-fetches from Supabase when the cached copy is stale, so this
+    isn't a second round-trip per user in the common case.
+
+    A user whose profile can't be materialized is skipped with a warning,
+    same resilience contract as `_union_portal_targets`.
+    """
+    profiles: list[dict] = []
+    for user_id in user_ids:
+        try:
+            profile_dir = materialize_profile_dir(user_id)
+        except Exception as exc:  # noqa: BLE001 — one bad profile must not abort the cycle
+            logger.warning(
+                "discovery: could not materialize profile for user_id=%s "
+                "(query templates): %s", user_id, exc,
+            )
+            continue
+        profiles.append(load_profile(profile_dir))
+    return profiles
+
+
 def _dedup_fetch(module, job_iter, seen_ids: set[str]):
     """Drive one source's fetch iterator, dropping ids already in
     ``seen_ids`` (cross-source dedup) and logging+swallowing a per-source
@@ -161,17 +199,26 @@ def _dedup_fetch(module, job_iter, seen_ids: set[str]):
         logger.error("discovery: [%s] error: %s", module.__name__, exc)
 
 
-def _iter_union_postings(union: dict[str, list]):
-    """Yield job dicts from every portal-based source's union target list
-    PLUS the five fixed keyword-search sources, cross-source deduped by
-    canonical job id.
+def _iter_union_postings(union: dict[str, list], paid_queries: list[str], board_counters: dict[str, int]):
+    """Yield job dicts from every portal-based source's union target list,
+    the three fixed keyword-search sources, and jsearch/serpapi's
+    per-user query union, cross-source deduped by canonical job id.
 
     Mirrors `jobify.hunt.agent.iter_all_jobs`'s cross-source dedup, now
     across the full nine-source set that single-user `jobify-hunt` runs:
     the four portals.yml-configured sources are called with the per-user
-    union target list; the five fixed sources (`_FIXED_SOURCES`) take no
-    arguments and are called exactly once regardless of how many users
-    exist.
+    union target list; the three fixed sources (`_FIXED_SOURCES`) take no
+    arguments and are called exactly once; jsearch/serpapi (P0.6) are
+    called once each with the same deduped `paid_queries` list — the cap
+    was already applied per-provider by the caller.
+
+    `board_counters` (P0.4, HUNT2 session 47): mutated in place —
+    `boards_total` / `boards_fetched` / `boards_skipped_empty` across the
+    four portal-type slots (greenhouse/lever/ashby/workday). A type with
+    an empty union target list (no user has any board configured for it
+    this cycle) used to be silently skipped; now it's WARN-logged and
+    counted, so an empty-sections user shows up in the run summary
+    instead of a discovery run that just quietly did less than expected.
     """
     seen_ids: set[str] = set()
     portal_fetchers = (
@@ -181,8 +228,15 @@ def _iter_union_postings(union: dict[str, list]):
         (workday, union["workday"]),
     )
     for module, targets in portal_fetchers:
+        board_counters["boards_total"] += 1
         if not targets:
+            board_counters["boards_skipped_empty"] += 1
+            logger.warning(
+                "discovery: %s has no boards configured by any user this "
+                "cycle — skipping fetch (empty union)", module.__name__,
+            )
             continue
+        board_counters["boards_fetched"] += 1
         # apply_title_filter=False: discovery's job is landing every
         # posting into the SHARED pool, not filtering by whichever one
         # profile happens to be process-global-active. Per-user title
@@ -195,25 +249,37 @@ def _iter_union_postings(union: dict[str, list]):
     for module in _FIXED_SOURCES:
         yield from _dedup_fetch(module, module.fetch(), seen_ids)
 
+    if paid_queries:
+        yield from _dedup_fetch(jsearch, jsearch.fetch(paid_queries), seen_ids)
+        yield from _dedup_fetch(serpapi, serpapi.fetch(paid_queries), seen_ids)
+
 
 def run_discovery_cycle() -> dict:
     """Run one global discovery cycle: union every user's `portals.yml`
     boards, fetch each real posting exactly once, resolve links, and
     upsert into the shared `postings` pool.
 
-    Returns a summary dict (`users`, `boards`, `fetched`, `upserted`,
-    `dead`) for the caller's cycle-summary log line (Task 4's entry
-    point). Zero LLM tokens; every DB write goes through
-    `jobify.db.upsert_posting` (service-role).
+    Returns a summary dict (`users`, `boards`, `paid_queries`, `fetched`,
+    `upserted`, `dead`, plus P0.4's `boards_total` / `boards_fetched` /
+    `boards_skipped_empty`) for the caller's cycle-summary log line (Task
+    4's entry point) — `jobify.hosted.worker` merges this whole dict into
+    the `hunt_cycles.counters` jsonb alongside the fan-out summary, the
+    same place `first_error` already lands, so an empty-sections user is
+    never a silent no-op again. Zero LLM tokens; every DB write goes
+    through `jobify.db.upsert_posting` (service-role).
     """
     user_ids = db.list_profile_user_ids()
     union = _union_portal_targets(user_ids)
+    paid_queries = union_queries(
+        _union_profiles(user_ids), cap=_PAID_QUERY_CAP, provider="jsearch/serpapi",
+    )
+    board_counters = {"boards_total": 0, "boards_fetched": 0, "boards_skipped_empty": 0}
 
     fetched = 0
     upserted = 0
     dead = 0
 
-    for job in _iter_union_postings(union):
+    for job in _iter_union_postings(union, paid_queries, board_counters):
         fetched += 1
 
         try:
@@ -235,9 +301,11 @@ def run_discovery_cycle() -> dict:
     summary = {
         "users": len(user_ids),
         "boards": {k: len(v) for k, v in union.items()},
+        "paid_queries": len(paid_queries),
         "fetched": fetched,
         "upserted": upserted,
         "dead": dead,
+        **board_counters,
     }
     logger.info("discovery cycle done: %s", summary)
     return summary

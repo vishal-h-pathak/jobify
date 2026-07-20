@@ -213,10 +213,13 @@ _EXPECTED_CONFIG_SYMBOLS: tuple[str, ...] = (
     "AUTO_SUBMIT_MIN_SCORE", "AUTO_SUBMIT_MIN_TIER",
     # Notify.
     "PORTFOLIO_BASE_URL",
-    # Hunter mode + location helpers.
+    # Hunter mode — kept as inert, backward-compatible CLI/env plumbing
+    # only (see jobify/config.py's header comment). The location-filter
+    # helpers (LOCAL_LOCATION_SUBSTRINGS, REMOTE_LOCATION_SUBSTRINGS,
+    # is_local_or_remote, location_filter_enabled) are gone as of P0.1
+    # (HUNT2 session 47, owner directive) — discovery is location-agnostic
+    # now, enforced per-user at scoring time (P0.7) instead.
     "Mode", "DEFAULT_MODE", "set_mode", "get_mode",
-    "LOCAL_LOCATION_SUBSTRINGS", "REMOTE_LOCATION_SUBSTRINGS",
-    "is_local_or_remote", "location_filter_enabled",
 )
 
 

@@ -86,17 +86,73 @@ def test_disqualifier_regex_short_circuits(alex_rubric):
     assert any("disqualified" in r and "Crypto" in r for r in result.reasons)
 
 
-# ── score_posting: gate rejection ────────────────────────────────────────
+# ── score_posting: location tier (P0.7, HUNT2 session 47) ────────────────
+# Location is a ranking dimension, not a disqualifier — an onsite posting
+# outside the candidate's base metro still surfaces (unlike the retired
+# `gate:location` hard reject this replaces), just ranked last.
 
 
-def test_location_gate_rejects_onsite_outside_base(alex_rubric):
+def test_onsite_outside_base_is_tier_3_not_disqualified(alex_rubric):
     posting = _posting(
         location="Austin, TX (on-site only)",
         remote=False,
     )
     result = rubric.score_posting(alex_rubric, posting)
+    assert not result.disqualified
+    assert result.location_tier == 3
+
+
+def test_onsite_inside_base_is_tier_1(alex_rubric):
+    posting = _posting(location="Denver, CO", remote=False)
+    result = rubric.score_posting(alex_rubric, posting)
+    assert not result.disqualified
+    assert result.location_tier == 1
+
+
+def test_remote_when_acceptable_is_tier_1(alex_rubric):
+    posting = _posting(location="Remote", remote=True)
+    result = rubric.score_posting(alex_rubric, posting)
+    assert not result.disqualified
+    assert result.location_tier == 1
+
+
+def test_remote_unknown_is_tier_2(alex_rubric):
+    posting = _posting(location="", remote=None)
+    result = rubric.score_posting(alex_rubric, posting)
+    assert not result.disqualified
+    assert result.location_tier == 2
+
+
+def test_tier_1_always_ranks_above_tier_3_regardless_of_raw_score(alex_rubric):
+    """Synthetic postings, per the P0.7 acceptance test: every tier-1
+    match must rank above every tier-3 match regardless of raw score, and
+    tier-2 must never outrank tier-1."""
+    tier1 = rubric.score_posting(alex_rubric, _posting(location="Denver, CO", remote=False))
+    tier2 = rubric.score_posting(alex_rubric, _posting(location="", remote=None))
+    tier3_high_score = rubric.score_posting(
+        alex_rubric, _posting(location="Austin, TX", remote=False)
+    )
+    assert tier1.location_tier < tier2.location_tier < tier3_high_score.location_tier
+    # A strong-content tier-3 posting still scores well on raw content —
+    # the ordering guarantee comes from sorting by (tier, score), not from
+    # tier-3 postings being suppressed on score alone.
+    assert tier3_high_score.score > 0.0
+
+
+def test_disqualified_by_dealbreaker_gets_no_location_tier(alex_rubric):
+    """A posting that fails the pre-existing disqualifiers regex loop
+    short-circuits before location tiering ever runs — the P0.7 spec's
+    "tier 3 ... DISQUALIFIED instead only if the user's dealbreakers say
+    so" exception is exactly this existing mechanism, untouched by P0.7."""
+    posting = _posting(
+        title="Senior Platform Engineer, Web3",
+        description="Own our crypto trading platform end-to-end.",
+        location="Austin, TX",
+        remote=False,
+    )
+    result = rubric.score_posting(alex_rubric, posting)
     assert result.disqualified
-    assert any("gate:location" in r for r in result.reasons)
+    assert result.location_tier is None
 
 
 def test_comp_gate_rejects_below_floor(alex_rubric):
