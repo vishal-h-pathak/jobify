@@ -227,6 +227,11 @@ function buildPortalsYaml(targeting?: TargetingStageData, anchor?: AnchorStageDa
       {
         tiers: targeting?.tiers ?? [],
         hard_disqualifiers: targeting?.hard_disqualifiers,
+        // Threaded through so it's no longer dropped on the floor — the
+        // sync placeholder here still ships empty company lists (network
+        // probing doesn't belong on this hot path); the real dream-company
+        // seed is assembled by portalsSeed.ts's seedPortalsCompanies.
+        dream_companies: targeting?.dream_companies,
       },
       anchor?.current_title
     ),

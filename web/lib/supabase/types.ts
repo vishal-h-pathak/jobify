@@ -423,6 +423,40 @@ export interface Database {
         Update: { [key: string]: never };
         Relationships: [];
       };
+      // HUNT2 P1 S2 (0015_board_catalog.sql): global curated ATS-board
+      // catalog, no user_id — seeded from jobify/data/board_catalog_seed.yml
+      // by web/scripts/importBoardCatalog.ts. RLS: authenticated SELECT
+      // (tier-pack computation reads this client-reachable), service-role
+      // ALL (only the import script and, later, S4's candidate-queue
+      // admission flow write here).
+      board_catalog: {
+        Row: {
+          id: string;
+          ats: "greenhouse" | "ashby" | "lever" | "workday";
+          slug: string;
+          company_name: string;
+          tags: string[];
+          status: string;
+          added_by: string;
+          verified_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          ats: "greenhouse" | "ashby" | "lever" | "workday";
+          slug: string;
+          company_name: string;
+          tags?: string[];
+          status?: string;
+          added_by?: string;
+          verified_at?: string | null;
+        };
+        Update: {
+          tags?: string[];
+          status?: string;
+          verified_at?: string | null;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
