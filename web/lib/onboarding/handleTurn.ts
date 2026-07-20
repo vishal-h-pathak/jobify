@@ -146,7 +146,12 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
   // back to a deterministic stage-appropriate question. The turn is still
   // billed either way — that's acceptable, the user must just never see
   // nothing.
-  if (turnResult.assistantText.trim() === "") {
+  // Adversarial-review fix (2026-07-19, F1/CRITICAL): only retry when the
+  // turn was TRULY empty — no text AND no tool calls. The old guard retried
+  // on empty text alone, silently DISCARDING a first attempt whose entire
+  // output was a perfect record_* tool call (the model's normal tool-use
+  // shape), double-billing and losing recorded data.
+  if (turnResult.assistantText.trim() === "" && turnResult.toolCalls.length === 0) {
     turnResult = await runTurn(history);
   }
 
