@@ -1,0 +1,226 @@
+# board_catalog_seed.yml — HUNT2 P1 S2 (planning/HUNT2_SOURCES.md §3.3)
+#
+# Initial seed for the global `board_catalog` table. Source: exactly the
+# ats/slug/name triples from the owner's job-pipeline
+# `jobpipe/hunt/profile/portals.yml` (51 hand-verified boards: 19
+# Greenhouse, 32 Ashby) — no other content from that file (title filters,
+# notes, the owner's name) was copied. `tags` are a curation-time judgment
+# call against the fixed vocabulary below, made fresh for this catalog —
+# see the S2 session report for uncertain calls (mostly hardware/biotech
+# companies the vocabulary doesn't have a clean tag for).
+#
+# tags vocabulary: infra, devtools, product, fintech, data-ai, enterprise,
+# growth-startup, big-tech-adjacent, remote-first
+#
+# Imported by web/scripts/importBoardCatalog.ts (idempotent upsert on
+# (ats, slug)). Not run by this commit — the cockpit runs it once 0015 is
+# applied live.
+
+boards:
+  # ── Greenhouse (19) ──────────────────────────────────────────────────
+  - ats: greenhouse
+    slug: neuralink
+    company_name: Neuralink
+    tags: [data-ai, growth-startup]
+  - ats: greenhouse
+    slug: anthropic
+    company_name: Anthropic
+    tags: [data-ai, big-tech-adjacent]
+  - ats: greenhouse
+    slug: deepmind
+    company_name: DeepMind
+    tags: [data-ai, big-tech-adjacent]
+  - ats: greenhouse
+    slug: scaleai
+    company_name: Scale AI
+    tags: [data-ai, growth-startup]
+  - ats: greenhouse
+    slug: recursionpharmaceuticals
+    company_name: Recursion
+    tags: [data-ai, enterprise]
+  - ats: greenhouse
+    slug: databricks
+    company_name: Databricks
+    tags: [infra, big-tech-adjacent]
+  - ats: greenhouse
+    slug: stabilityai
+    company_name: Stability AI
+    tags: [data-ai, growth-startup]
+  - ats: greenhouse
+    slug: atomwise
+    company_name: Atomwise
+    tags: [data-ai, growth-startup]
+  - ats: greenhouse
+    slug: isomorphiclabs
+    company_name: Isomorphic Labs
+    tags: [data-ai, big-tech-adjacent]
+  - ats: greenhouse
+    slug: gleanwork
+    company_name: Glean
+    tags: [product, enterprise]
+  - ats: greenhouse
+    slug: tenstorrent
+    company_name: Tenstorrent
+    tags: [infra, growth-startup]
+  - ats: greenhouse
+    slug: arizeai
+    company_name: Arize AI
+    tags: [devtools, growth-startup]
+  - ats: greenhouse
+    slug: togetherai
+    company_name: Together AI
+    tags: [infra, data-ai]
+  - ats: greenhouse
+    slug: worldlabs
+    company_name: World Labs
+    tags: [data-ai, growth-startup]
+  - ats: greenhouse
+    slug: imbue
+    company_name: Imbue
+    tags: [data-ai, growth-startup]
+  - ats: greenhouse
+    slug: coreweave
+    company_name: CoreWeave
+    tags: [infra, big-tech-adjacent]
+  - ats: greenhouse
+    slug: sourcegraph91
+    company_name: Sourcegraph
+    tags: [devtools, growth-startup]
+  - ats: greenhouse
+    slug: vercel
+    company_name: Vercel
+    tags: [devtools, infra]
+  - ats: greenhouse
+    slug: fireworksai
+    company_name: Fireworks AI
+    tags: [infra, data-ai]
+
+  # ── Ashby (32) ───────────────────────────────────────────────────────
+  - ats: ashby
+    slug: posthog
+    company_name: PostHog
+    tags: [devtools, remote-first]
+  - ats: ashby
+    slug: linear
+    company_name: Linear
+    tags: [product, remote-first]
+  - ats: ashby
+    slug: notion
+    company_name: Notion
+    tags: [product, big-tech-adjacent]
+  - ats: ashby
+    slug: decagon
+    company_name: Decagon
+    tags: [data-ai, growth-startup]
+  - ats: ashby
+    slug: sierra
+    company_name: Sierra
+    tags: [data-ai, growth-startup]
+  - ats: ashby
+    slug: weaviate
+    company_name: Weaviate
+    tags: [infra, devtools]
+  - ats: ashby
+    slug: modal
+    company_name: Modal Labs
+    tags: [infra, devtools]
+  - ats: ashby
+    slug: reka
+    company_name: Reka AI
+    tags: [data-ai, growth-startup]
+  - ats: ashby
+    slug: factory
+    company_name: Factory AI
+    tags: [devtools, data-ai]
+  - ats: ashby
+    slug: pinecone
+    company_name: Pinecone
+    tags: [infra, data-ai]
+  - ats: ashby
+    slug: anyscale
+    company_name: Anyscale
+    tags: [infra, devtools]
+  - ats: ashby
+    slug: runway
+    company_name: Runway
+    tags: [product, data-ai]
+  - ats: ashby
+    slug: insitro
+    company_name: Insitro
+    tags: [data-ai, enterprise]
+  - ats: ashby
+    slug: innatera
+    company_name: Innatera
+    tags: [infra, growth-startup]
+  - ats: ashby
+    slug: axelera
+    company_name: Axelera AI
+    tags: [infra, growth-startup]
+  - ats: ashby
+    slug: etched
+    company_name: Etched
+    tags: [infra, growth-startup]
+  - ats: ashby
+    slug: cerebras
+    company_name: Cerebras
+    tags: [infra, big-tech-adjacent]
+  - ats: ashby
+    slug: openai
+    company_name: OpenAI
+    tags: [data-ai, big-tech-adjacent]
+  - ats: ashby
+    slug: langchain
+    company_name: LangChain
+    tags: [devtools, data-ai]
+  - ats: ashby
+    slug: browserbase
+    company_name: Browserbase
+    tags: [infra, devtools]
+  - ats: ashby
+    slug: cognition
+    company_name: Cognition
+    tags: [devtools, data-ai]
+  - ats: ashby
+    slug: cursor
+    company_name: Cursor (Anysphere)
+    tags: [devtools, growth-startup]
+  - ats: ashby
+    slug: letta
+    company_name: Letta
+    tags: [devtools, data-ai]
+  - ats: ashby
+    slug: e2b
+    company_name: E2B
+    tags: [infra, devtools]
+  - ats: ashby
+    slug: writer
+    company_name: Writer
+    tags: [enterprise, data-ai]
+  - ats: ashby
+    slug: physicalintelligence
+    company_name: Physical Intelligence
+    tags: [data-ai, growth-startup]
+  - ats: ashby
+    slug: perplexity
+    company_name: Perplexity
+    tags: [product, data-ai]
+  - ats: ashby
+    slug: replit
+    company_name: Replit
+    tags: [devtools, growth-startup]
+  - ats: ashby
+    slug: baseten
+    company_name: Baseten
+    tags: [infra, devtools]
+  - ats: ashby
+    slug: cohere
+    company_name: Cohere
+    tags: [data-ai, enterprise]
+  - ats: ashby
+    slug: harvey
+    company_name: Harvey
+    tags: [enterprise, data-ai]
+  - ats: ashby
+    slug: dust
+    company_name: Dust
+    tags: [product, growth-startup]
