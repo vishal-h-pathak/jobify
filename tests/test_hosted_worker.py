@@ -247,7 +247,7 @@ def test_execute_persists_hunt_cycle_row_on_success(monkeypatch):
     assert row["users_scored"] == _FANOUT_SUMMARY["users_processed"]
     assert row["postings_fetched"] == _DISCOVERY_SUMMARY["fetched"]
     assert row["postings_upserted"] == _DISCOVERY_SUMMARY["upserted"]
-    assert row["counters"] == _FANOUT_SUMMARY
+    assert row["counters"] == {**_DISCOVERY_SUMMARY, **_FANOUT_SUMMARY}
     assert row["cost_usd"] == _FANOUT_SUMMARY.get("cost_usd", 0.0)
     assert row["started_at"] and row["finished_at"]
 

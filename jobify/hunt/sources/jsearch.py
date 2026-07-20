@@ -23,6 +23,16 @@ Setup:
 If ``JSEARCH_API_KEY`` is unset, the source no-ops with a single warning so
 the rest of the run is unaffected — you can ship this code before signing
 up.
+
+Queries are per-user template expansion (P0.6, HUNT2 session 47), not a
+hardcoded list: the hosted discovery worker (``jobify.hosted.discovery``)
+passes the deduped, capped union of every user's queries via ``queries=``;
+the single-user CLI path (``fetch()`` called with no argument) derives
+queries from whichever ONE profile is currently active
+(``sources.query_templates.queries_for_active_profile``). Discovery is
+location-agnostic (P0.1) — there is no hardcoded-metro-vs-nationwide mode
+branch here anymore; a query's location intent (if any) is baked into
+the query string itself by the template.
 """
 
 from __future__ import annotations
@@ -33,32 +43,13 @@ import time
 
 import requests
 
-from jobify.config import get_mode
 from jobify.shared.jobid import make_job_id
+from sources.query_templates import queries_for_active_profile
+from sources.remote_infer import infer_remote
 
 logger = logging.getLogger("sources.jsearch")
 
 ENDPOINT = "https://jsearch.p.rapidapi.com/search"
-
-# Same role-shape queries as the other sources. JSearch performs reasonable
-# semantic matching, so we don't need the matrix of (query × location) the
-# Google Jobs sources use — we let JSearch handle location via the query.
-QUERIES = [
-    "neuromorphic engineer",
-    "computational neuroscience",
-    "spiking neural network",
-    "connectomics researcher",
-    "BCI engineer",
-    "sales engineer AI startup",
-    "solutions engineer machine learning",
-    "developer relations AI",
-    # Tier 1.5 — agentic / applied-AI discovery (added feat/hunt-agentic-discovery).
-    # Paid: each query × location × page is billable, so keep this set tight.
-    "AI agent engineer",
-    "applied AI engineer",
-    "forward deployed engineer",
-    "agentic AI engineer",
-]
 
 # Hard cap so one run can't burn the monthly tier. Default sized for the
 # Basic plan (1,500/month) at one daily run. Override via env if you upgrade.
@@ -69,27 +60,22 @@ MAX_REQUESTS_PER_RUN = int(os.environ.get("JSEARCH_MAX_REQUESTS_PER_RUN", "8"))
 NUM_PAGES_PER_REQUEST = int(os.environ.get("JSEARCH_NUM_PAGES", "2"))
 
 
-def _query_for_mode(base_query: str) -> tuple[str, dict]:
-    """Build the JSearch query + extra params for the active hunter mode.
+def fetch(queries: list[str] | None = None):
+    """Yield job dicts from JSearch's aggregated Google Jobs feed.
 
-    local_remote → biases toward Atlanta or remote roles via a single call
-    with ``remote_jobs_only=false`` and an Atlanta hint in the query, plus
-    a separate remote-only call. ``us_wide`` drops the location qualifier
-    so JSearch returns nationwide hits.
+    ``queries`` defaults to the active single-user profile's template
+    queries (CLI path); the hosted discovery worker always passes an
+    explicit, pre-deduped, pre-capped list.
     """
-    if get_mode() == "us_wide":
-        return base_query, {}
-    # local_remote: append Atlanta + remote-friendly hint. JSearch tokenises
-    # this naturally; testing showed it doesn't drop matches when the hint
-    # is general.
-    return f"{base_query} Atlanta OR remote", {"remote_jobs_only": "true"}
-
-
-def fetch():
-    """Yield job dicts from JSearch's aggregated Google Jobs feed."""
     api_key = os.environ.get("JSEARCH_API_KEY")
     if not api_key:
         logger.info("jsearch: JSEARCH_API_KEY not set — skipping (this is fine)")
+        return
+
+    if queries is None:
+        queries = queries_for_active_profile()
+    if not queries:
+        logger.info("jsearch: no queries to run — skipping")
         return
 
     headers = {
@@ -101,7 +87,7 @@ def fetch():
     requests_issued = 0
     yielded = 0
 
-    for q in QUERIES:
+    for query in queries:
         if requests_issued >= MAX_REQUESTS_PER_RUN:
             logger.warning(
                 "jsearch: budget exhausted at %d requests "
@@ -110,14 +96,12 @@ def fetch():
             )
             break
 
-        query, extra_params = _query_for_mode(q)
         params = {
             "query": query,
             "page": "1",
             "num_pages": str(NUM_PAGES_PER_REQUEST),
             "country": "us",
             "date_posted": "month",
-            **extra_params,
         }
         try:
             resp = requests.get(ENDPOINT, headers=headers, params=params, timeout=30)
@@ -145,8 +129,11 @@ def fetch():
             city = job.get("job_city") or ""
             state = job.get("job_state") or ""
             country = job.get("job_country") or ""
-            is_remote = bool(job.get("job_is_remote"))
-            if is_remote:
+            # Tri-state remote (P0.2): JSearch's own `job_is_remote` field
+            # is used directly when present; a genuinely missing key means
+            # unknown, never coerced to False.
+            remote = bool(job["job_is_remote"]) if "job_is_remote" in job else None
+            if remote:
                 location = "Remote"
             elif city and state:
                 location = f"{city}, {state}"
@@ -164,10 +151,11 @@ def fetch():
             yield {
                 "id": jid,
                 "source": "jsearch",
-                "query": q,
+                "query": query,
                 "title": title,
                 "company": company,
                 "location": location,
+                "remote": remote,
                 "description": description[:3000],
                 "url": link,
             }

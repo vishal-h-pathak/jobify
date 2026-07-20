@@ -11,22 +11,20 @@ Company list lives in `profile/portals.yml::greenhouse.companies`. The
 in-module `_FALLBACK_COMPANIES` is consulted only if portals.yml is
 missing — keeps the hunter running during cutover.
 
-Mode handling: in `local_remote` mode roles whose location is neither
-Atlanta/GA nor remote-shaped are skipped. `us_wide` keeps everything.
+Discovery is location-agnostic (P0.1, HUNT2 session 47 — owner directive):
+this source used to skip roles whose location wasn't a hardcoded metro or
+remote-shaped. Location preference is now enforced entirely per-user at
+scoring/ranking time (P0.7); every role this board publishes lands in the
+pool.
 """
 
 import logging
 
-from jobify.config import is_local_or_remote
 from jobify.shared.html import strip_tags
 from jobify.shared.jobid import make_job_id
-from sources._http import (
-    fetch_json,
-    location_filter_enabled,
-    passes_title_filter,
-    sleep_between_requests,
-)
+from sources._http import fetch_json, passes_title_filter, sleep_between_requests
 from sources._portals import companies, title_signals
+from sources.remote_infer import infer_remote
 
 logger = logging.getLogger("sources.greenhouse")
 
@@ -56,7 +54,6 @@ def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
 
     raw = 0
     yielded = 0
-    skipped_loc = 0
     skipped_title = 0
     for job in data.get("jobs", []):
         raw += 1
@@ -68,10 +65,6 @@ def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
         # Cheap title-only filter before we look at description or score.
         if apply_title_filter and not passes_title_filter(title):
             skipped_title += 1
-            continue
-
-        if location_filter_enabled() and not is_local_or_remote(location):
-            skipped_loc += 1
             continue
 
         signals = title_signals(title)
@@ -86,12 +79,13 @@ def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
             "title": title,
             "company": display_name,
             "location": location,
+            "remote": infer_remote(location, job),
             "description": description[:3000],
             "url": link,
         }
     logger.info(
-        "greenhouse: %s yielded=%d (raw=%d, title-filtered=%d, location-filtered=%d)",
-        slug, yielded, raw, skipped_title, skipped_loc,
+        "greenhouse: %s yielded=%d (raw=%d, title-filtered=%d)",
+        slug, yielded, raw, skipped_title,
     )
 
 

@@ -68,7 +68,11 @@ export async function listUsersOverview(
 
   const [profilesRes, matchesRes, ledgerRes, keysRes] = await Promise.all([
     admin.from("profiles").select("user_id, validation_status"),
-    admin.from("matches").select("user_id, state"),
+    // P0.5 (HUNT2 session 47): `matches` now carries a row per scored
+    // posting, most of them rejected — the admin per-user match-count
+    // breakdown must only count surfaced ones, same filter every other
+    // read applies, or every user's counts balloon with rows they never saw.
+    admin.from("matches").select("user_id, state").eq("status", "surfaced"),
     admin.from("budget_ledger").select("user_id, cost_usd").eq("byo", false).gte("created_at", monthStartIso),
     admin.from("api_keys").select("user_id"),
   ]);

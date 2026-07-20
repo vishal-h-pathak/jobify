@@ -205,9 +205,13 @@ greenhouse:
     assert summary == {
         "users": 2,
         "boards": {"greenhouse": 1, "lever": 0, "ashby": 0, "workday": 0},
+        "paid_queries": 0,
         "fetched": 1,
         "upserted": 1,
         "dead": 0,
+        "boards_total": 4,
+        "boards_fetched": 1,
+        "boards_skipped_empty": 3,
     }
 
 
@@ -296,6 +300,38 @@ greenhouse:
     assert upserted[0]["link_status"] == "expired"
 
 
+def test_run_discovery_cycle_empty_sections_are_warned_and_counted(tmp_path, monkeypatch, caplog):
+    """P0.4: a user whose portals.yml has only a Greenhouse section
+    leaves lever/ashby/workday's union targets empty. That used to be a
+    silent `continue`; now it WARN-logs per empty type and the skip
+    count lands in the run summary."""
+    d = _portals_dir(tmp_path, "user-a", """
+greenhouse:
+  companies:
+    - slug: acmeco
+      name: Acme Co
+""")
+    monkeypatch.setattr(discovery, "materialize_profile_dir", lambda user_id: d)
+    monkeypatch.setattr(db, "list_profile_user_ids", lambda: ["user-a"])
+    monkeypatch.setattr(
+        greenhouse, "fetch", lambda targets=None, apply_title_filter=True: iter([_gh_job("acmeco")]),
+    )
+    monkeypatch.setattr(db, "upsert_posting", lambda job: None)
+
+    with caplog.at_level("WARNING", logger="jobify.hosted.discovery"):
+        summary = discovery.run_discovery_cycle()
+
+    assert summary["boards_total"] == 4
+    assert summary["boards_fetched"] == 1
+    assert summary["boards_skipped_empty"] == 3
+    warned_sources = {
+        rec.message.split("discovery: ")[1].split(" has no boards")[0]
+        for rec in caplog.records
+        if "has no boards configured" in rec.message
+    }
+    assert warned_sources == {"sources.lever", "sources.ashby", "sources.workday"}
+
+
 def test_run_discovery_cycle_no_users_is_a_clean_noop(monkeypatch):
     monkeypatch.setattr(db, "list_profile_user_ids", lambda: [])
     monkeypatch.setattr(greenhouse, "fetch", lambda targets=None, apply_title_filter=True: iter(()))
@@ -369,6 +405,12 @@ greenhouse:
             yield _fixed_job(jid, name)
         return _fetch
 
+    def _counting_query_fetch(name, jid):
+        def _fetch(queries=None):
+            call_counts[name] = call_counts.get(name, 0) + 1
+            yield _fixed_job(jid, name)
+        return _fetch
+
     monkeypatch.setattr(greenhouse, "fetch", _counting_portal_fetch("greenhouse", "gh-1"))
     monkeypatch.setattr(lever, "fetch", _counting_portal_fetch("lever", "lv-1"))
     monkeypatch.setattr(ashby, "fetch", _counting_portal_fetch("ashby", "as-1"))
@@ -378,8 +420,8 @@ greenhouse:
         eighty_thousand_hours, "fetch", _counting_fixed_fetch("eighty_thousand_hours", "e8-1"),
     )
     monkeypatch.setattr(remoteok, "fetch", _counting_fixed_fetch("remoteok", "ro-1"))
-    monkeypatch.setattr(jsearch, "fetch", _counting_fixed_fetch("jsearch", "js-1"))
-    monkeypatch.setattr(serpapi, "fetch", _counting_fixed_fetch("serpapi", "sp-1"))
+    monkeypatch.setattr(jsearch, "fetch", _counting_query_fetch("jsearch", "js-1"))
+    monkeypatch.setattr(serpapi, "fetch", _counting_query_fetch("serpapi", "sp-1"))
 
     # lever/ashby/workday also see the union'd board via portals.yml above
     # only for greenhouse; give them a nonempty union target too so their
@@ -393,6 +435,11 @@ greenhouse:
             "workday": [{"tenant": "acme", "site": "External", "dc": "wd1", "name": "Acme"}],
         },
     )
+    # jsearch/serpapi (P0.6) only run when there's at least one per-user
+    # query — stub the union directly so this test stays about "each
+    # source runs exactly once," not query-template content (that's
+    # tests/test_hunt_query_templates.py's job).
+    monkeypatch.setattr(discovery, "union_queries", lambda *a, **k: ["platform engineer"])
 
     upserted: list[dict] = []
     monkeypatch.setattr(db, "upsert_posting", lambda job: upserted.append(dict(job)))

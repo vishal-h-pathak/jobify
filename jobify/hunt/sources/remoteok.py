@@ -75,6 +75,7 @@ def fetch():
             "title": title,
             "company": company,
             "location": location,
+            "remote": True,  # remote-only by construction (P0.2) — every RemoteOK posting is remote.
             "description": description,
             "url": link,
         }

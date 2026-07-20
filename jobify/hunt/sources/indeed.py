@@ -33,7 +33,6 @@ from urllib.parse import urlencode
 
 import feedparser
 
-from jobify.config import get_mode
 from jobify.shared.html import strip_tags
 from jobify.shared.jobid import make_job_id
 
@@ -60,13 +59,12 @@ QUERIES = [
     "agentic AI engineer",
 ]
 
-# Mode-aware location set. ``us_wide`` adds the national fallback; the others
-# hold the high-signal locations we always want.
-_LOCAL_REMOTE_LOCATIONS = (
-    {"l": "Atlanta, GA", "label": "Atlanta, GA"},
+# Discovery is location-agnostic (P0.1, HUNT2 session 47 — owner
+# directive) — no hardcoded per-user metro, even in this
+# KEEP-DISABLED reference module. "Remote" + a broad national fallback,
+# not a location matrix keyed to one candidate's metro.
+_LOCATIONS = (
     {"l": "Remote", "label": "Remote"},
-)
-_US_EXTRA_LOCATIONS = (
     {"l": "United States", "label": "United States"},
 )
 
@@ -85,16 +83,10 @@ _REQUEST_HEADERS = {
 }
 
 
-def _locations_for_mode():
-    if get_mode() == "us_wide":
-        return _LOCAL_REMOTE_LOCATIONS + _US_EXTRA_LOCATIONS
-    return _LOCAL_REMOTE_LOCATIONS
-
-
 def fetch():
     """Yield job dicts from Indeed RSS across the keyword/location matrix."""
     seen_local: set[str] = set()
-    locations = _locations_for_mode()
+    locations = _LOCATIONS
     total_entries = 0
     empty_feeds = 0
 

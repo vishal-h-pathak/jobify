@@ -7,7 +7,9 @@ vi.mock("@/lib/supabase/server", () => ({
     auth: { getUser: getUserMock },
     from: vi.fn(() => ({
       select: vi.fn(() => ({
-        eq: vi.fn(() => matchCountResultMock()),
+        eq: vi.fn(() => ({
+          eq: vi.fn(() => matchCountResultMock()),
+        })),
       })),
     })),
   })),

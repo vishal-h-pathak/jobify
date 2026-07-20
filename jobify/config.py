@@ -256,7 +256,21 @@ PORTFOLIO_BASE_URL: Final[str] = os.environ.get(
 ).rstrip("/")
 
 
-# ── Hunter mode + location filters (promoted from jobify/hunt/config.py) ─
+# ── Hunter mode (promoted from jobify/hunt/config.py) ─────────────────────
+#
+# P0.1 (HUNT2 session 47 — owner directive): discovery is now
+# location-agnostic everywhere — no source filters postings by location at
+# fetch time; location preference is enforced entirely per-user at
+# scoring/ranking time (P0.7's location tier). `local_remote` vs `us_wide`
+# used to gate that filtering (`location_filter_enabled`, now removed,
+# and the Atlanta-vs-nationwide query shaping in jsearch.py/serpapi.py,
+# also removed in favor of P0.6's per-user query templates). The mode
+# machinery below is kept ONLY so `--mode`/`HUNTER_MODE` stay accepted,
+# inert, backward-compatible inputs — `.github/workflows/hunt.yml`
+# invokes `jobify-hunt --mode "${{ inputs.mode }}"` and this repo doesn't
+# own that workflow's cleanup in this session. Nothing branches on
+# `get_mode()`'s value anymore except that CI call site and an
+# informational log line in `jobify.hunt.agent`.
 
 Mode = Literal["local_remote", "us_wide"]
 DEFAULT_MODE: Mode = "local_remote"
@@ -288,49 +302,3 @@ def get_mode() -> Mode:
     if env in ("local_remote", "us_wide"):
         return env  # type: ignore[return-value]
     return DEFAULT_MODE
-
-
-# Atlanta-area locations recognised when filtering Greenhouse/Lever boards
-# in local_remote mode.
-LOCAL_LOCATION_SUBSTRINGS = (
-    "atlanta",
-    "georgia",
-    "ga,",
-    " ga",
-    "ga/",
-)
-
-REMOTE_LOCATION_SUBSTRINGS = (
-    "remote",
-    "anywhere",
-    "distributed",
-    "work from home",
-    "wfh",
-    "us-remote",
-    "us remote",
-    "global",
-)
-
-
-def is_local_or_remote(location: str | None) -> bool:
-    """True if the location string looks like Atlanta or a remote role.
-
-    The check is intentionally generous — Greenhouse boards have wildly
-    inconsistent location strings ("Remote - US", "Atlanta, GA / Remote",
-    "United States (Remote)") so we look for any matching substring rather
-    than requiring an exact match. Empty / null locations are treated as
-    "unknown but probably ok" so they aren't dropped silently.
-    """
-    if not location:
-        return True
-    s = location.lower()
-    if any(needle in s for needle in REMOTE_LOCATION_SUBSTRINGS):
-        return True
-    if any(needle in s for needle in LOCAL_LOCATION_SUBSTRINGS):
-        return True
-    return False
-
-
-def location_filter_enabled() -> bool:
-    """Should sources filter their results down to Atlanta/Remote?"""
-    return get_mode() == "local_remote"

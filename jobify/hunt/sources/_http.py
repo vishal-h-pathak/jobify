@@ -8,9 +8,11 @@ Three patterns used to live copy-pasted across ashby/greenhouse/lever and
      boards don't blow up the run.
   2. A ``time.sleep`` between requests so we look like a polite client.
   3. Single import surface for ``passes_title_filter`` (from ``_portals``)
-     and ``location_filter_enabled`` (from ``config``) — convenience so a
-     source module doesn't import from three different modules just to do
-     its filtering.
+     — convenience so a source module doesn't import filtering helpers
+     from multiple modules. (P0.1, HUNT2 session 47: the sibling
+     ``location_filter_enabled`` re-export this used to also carry is
+     gone — discovery is location-agnostic now, enforced per-user at
+     scoring time instead of at fetch time.)
 
 Each per-source ``_fetch_one`` shrinks to its real per-API logic
 (URL template, auth header, pagination) once these helpers absorb the
@@ -26,8 +28,7 @@ from typing import Any, Optional
 
 import requests
 
-# Re-exports so callers can do ``from sources._http import ...`` for filters.
-from jobify.config import location_filter_enabled  # noqa: F401  re-export
+# Re-export so callers can do ``from sources._http import passes_title_filter``.
 from sources._portals import passes_title_filter  # noqa: F401  re-export
 
 

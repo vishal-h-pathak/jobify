@@ -186,6 +186,20 @@ def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
             "single_user" if user_id else ("discovery_only" if discovery_only else "full")
         )
         triggered_by = "dispatch" if user_id else ("cron" if discovery_only else "manual")
+        # P0.4 (HUNT2 session 47): discovery's own counters
+        # (boards_total/boards_fetched/boards_skipped_empty, plus the rest
+        # of its summary) land in the same counters jsonb as fanout's —
+        # the "surface first ladder failure" live-fire fix's landing spot
+        # — so an empty-sections user is visible in one place instead of
+        # requiring a second log lookup. `None` only when NEITHER phase
+        # ever ran (e.g. discovery raised before either was assigned) —
+        # preserves the pre-P0.4 "nothing to report" signal rather than
+        # writing an empty dict.
+        merged_counters = (
+            {**(discovery_summary or {}), **(fanout_summary or {})}
+            if discovery_summary is not None or fanout_summary is not None
+            else None
+        )
         try:
             db.insert_hunt_cycle_row(
                 started_at=started_at,
@@ -195,7 +209,7 @@ def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
                 users_scored=(fanout_summary or {}).get("users_processed", 0),
                 postings_fetched=(discovery_summary or {}).get("fetched", 0),
                 postings_upserted=(discovery_summary or {}).get("upserted", 0),
-                counters=fanout_summary,
+                counters=merged_counters,
                 cost_usd=(fanout_summary or {}).get("cost_usd", 0.0),
                 error=error,
             )

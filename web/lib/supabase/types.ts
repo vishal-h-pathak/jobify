@@ -219,6 +219,12 @@ export interface Database {
           state: "new" | "seen" | "saved" | "dismissed" | "applied";
           state_changed_at: string;
           created_at: string;
+          // P0.5/P0.7 (0014_hunt2_funnel.sql, HUNT2 session 47): funnel
+          // status (distinct from `state` above, the user's own triage) +
+          // the location-fit ranking dimension.
+          status: "rejected_title" | "rejected_rubric" | "rejected_rerank" | "rejected_llm" | "surfaced";
+          reject_reason: string | null;
+          location_tier: 1 | 2 | 3 | null;
         };
         Insert: {
           user_id: string;
@@ -229,10 +235,16 @@ export interface Database {
           reason?: string | null;
           reason_source?: "llm" | "rubric" | null;
           state?: "new" | "seen" | "saved" | "dismissed" | "applied";
+          status?: "rejected_title" | "rejected_rubric" | "rejected_rerank" | "rejected_llm" | "surfaced";
+          reject_reason?: string | null;
+          location_tier?: 1 | 2 | 3 | null;
         };
         Update: {
           state?: "new" | "seen" | "saved" | "dismissed" | "applied";
           state_changed_at?: string;
+          status?: "rejected_title" | "rejected_rubric" | "rejected_rerank" | "rejected_llm" | "surfaced";
+          reject_reason?: string | null;
+          location_tier?: 1 | 2 | 3 | null;
         };
         Relationships: [];
       };

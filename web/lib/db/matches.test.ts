@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bestScore,
-  sortByBestScore,
+  sortByTierThenScore,
   groupMatches,
   markSeenBulk,
   saveMatch,
@@ -52,6 +52,9 @@ function match(overrides: Partial<MatchRow>): MatchRow {
     state: "new",
     state_changed_at: "2026-07-01T00:00:00Z",
     created_at: "2026-07-01T00:00:00Z",
+    status: "surfaced",
+    reject_reason: null,
+    location_tier: null,
     ...overrides,
   };
 }
@@ -69,18 +72,39 @@ describe("bestScore", () => {
   });
 });
 
-describe("sortByBestScore", () => {
-  it("orders llm > embed > rubric fallback, nulls last", () => {
+describe("sortByTierThenScore", () => {
+  it("orders llm > embed > rubric fallback, nulls last, within the same tier", () => {
     const low = match({ posting_id: "low", rubric_score: 0.2 });
     const high = match({ posting_id: "high", llm_score: 0.9 });
     const mid = match({ posting_id: "mid", embed_score: 0.5 });
     const none = match({ posting_id: "none" });
-    expect(sortByBestScore([low, none, high, mid]).map((m) => m.posting_id)).toEqual([
+    expect(sortByTierThenScore([low, none, high, mid]).map((m) => m.posting_id)).toEqual([
       "high",
       "mid",
       "low",
       "none",
     ]);
+  });
+
+  it("P0.7: every tier-1 match ranks above every tier-3 match regardless of raw score", () => {
+    const tier3HighScore = match({ posting_id: "tier3", location_tier: 3, llm_score: 0.95 });
+    const tier1LowScore = match({ posting_id: "tier1", location_tier: 1, llm_score: 0.1 });
+    expect(sortByTierThenScore([tier3HighScore, tier1LowScore]).map((m) => m.posting_id)).toEqual([
+      "tier1",
+      "tier3",
+    ]);
+  });
+
+  it("P0.7: tier-2 never outranks tier-1", () => {
+    const tier2 = match({ posting_id: "tier2", location_tier: 2, llm_score: 0.9 });
+    const tier1 = match({ posting_id: "tier1", location_tier: 1, llm_score: 0.1 });
+    expect(sortByTierThenScore([tier2, tier1]).map((m) => m.posting_id)).toEqual(["tier1", "tier2"]);
+  });
+
+  it("a null location_tier sorts after tier 3", () => {
+    const untiered = match({ posting_id: "untiered", location_tier: null, llm_score: 0.9 });
+    const tier3 = match({ posting_id: "tier3", location_tier: 3, llm_score: 0.1 });
+    expect(sortByTierThenScore([untiered, tier3]).map((m) => m.posting_id)).toEqual(["tier3", "untiered"]);
   });
 });
 

@@ -17,6 +17,10 @@ row needs at minimum `tenant`, `site`, `dc`, and `name`. Per-row
 Workday details are tenant-specific. If a row 404s or 500s, we log a
 warning and continue. Add new rows incrementally; verify the careers
 URL in a browser first.
+
+Discovery is location-agnostic (P0.1, HUNT2 session 47 — owner directive):
+location preference is enforced entirely per-user at scoring/ranking time
+(P0.7); every role a tenant publishes lands in the pool.
 """
 
 from __future__ import annotations
@@ -24,16 +28,11 @@ from __future__ import annotations
 import logging
 from typing import Iterable
 
-from jobify.config import is_local_or_remote
 from jobify.shared.html import strip_tags
 from jobify.shared.jobid import make_job_id
-from sources._http import (
-    fetch_json,
-    location_filter_enabled,
-    passes_title_filter,
-    sleep_between_requests,
-)
+from sources._http import fetch_json, passes_title_filter, sleep_between_requests
 from sources._portals import title_signals, workday_tenants
+from sources.remote_infer import infer_remote
 
 logger = logging.getLogger("sources.workday")
 
@@ -94,7 +93,6 @@ def _fetch_one(row: dict, apply_title_filter: bool = True) -> Iterable[dict]:
 
     raw = 0
     yielded = 0
-    skipped_loc = 0
     skipped_title = 0
 
     for page in range(limit_pages):
@@ -120,9 +118,6 @@ def _fetch_one(row: dict, apply_title_filter: bool = True) -> Iterable[dict]:
 
             if apply_title_filter and not passes_title_filter(title):
                 skipped_title += 1
-                continue
-            if location_filter_enabled() and not is_local_or_remote(location):
-                skipped_loc += 1
                 continue
 
             # Detail call — only for postings that survived the cheap filters.
@@ -150,6 +145,7 @@ def _fetch_one(row: dict, apply_title_filter: bool = True) -> Iterable[dict]:
                 "title": title,
                 "company": name,
                 "location": location,
+                "remote": infer_remote(location, p),
                 "description": description[:3000],
                 "url": link,
             }
@@ -157,8 +153,8 @@ def _fetch_one(row: dict, apply_title_filter: bool = True) -> Iterable[dict]:
         sleep_between_requests()
 
     logger.info(
-        "workday: %s/%s yielded=%d (raw=%d, title-filtered=%d, location-filtered=%d)",
-        tenant, site, yielded, raw, skipped_title, skipped_loc,
+        "workday: %s/%s yielded=%d (raw=%d, title-filtered=%d)",
+        tenant, site, yielded, raw, skipped_title,
     )
 
 
