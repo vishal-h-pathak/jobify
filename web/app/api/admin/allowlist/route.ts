@@ -3,11 +3,11 @@ import { requireAdmin } from "@/lib/admin/requireAdmin";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { addAllowlistedEmail, isValidEmailShape, removeAllowlistedEmail } from "@/lib/admin/allowlist";
 
+// ADM-3: a signed-in non-admin gets 404, not 403 — never confirm this
+// route exists to someone who's authenticated but not an admin.
 function gateResponse(reason: "unauthenticated" | "forbidden") {
-  return NextResponse.json(
-    { error: reason === "unauthenticated" ? "not signed in" : "forbidden" },
-    { status: reason === "unauthenticated" ? 401 : 403 }
-  );
+  if (reason === "unauthenticated") return NextResponse.json({ error: "not signed in" }, { status: 401 });
+  return NextResponse.json({ error: "not found" }, { status: 404 });
 }
 
 /**

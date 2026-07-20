@@ -7,10 +7,18 @@ const upsertProfileDocMock = vi.fn(async (_supabase: unknown, _userId: string, _
   errors: [] as string[],
 }));
 const recordOnboardingTurnMock = vi.fn(async (..._args: unknown[]) => {});
+const seedUserPortalsMock = vi.fn(async (..._args: unknown[]) => ({
+  dreamCompaniesCount: 0,
+  tierPackCount: 0,
+  couldntAutoFind: [] as string[],
+  remoteRequired: false,
+  remoteRequiredSource: "regex fallback" as const,
+}));
 
 vi.mock("../db/onboardingSession", () => ({ saveSession: saveSessionMock }));
 vi.mock("../db/profiles", () => ({ upsertProfileDoc: upsertProfileDocMock }));
 vi.mock("../db/ledger", () => ({ recordOnboardingTurn: recordOnboardingTurnMock }));
+vi.mock("../profile/seedUserPortals", () => ({ seedUserPortals: seedUserPortalsMock }));
 
 const { handleOnboardingTurn, RESUME_SKIP_MESSAGE } = await import("./handleTurn");
 
@@ -32,6 +40,14 @@ describe("handleOnboardingTurn", () => {
     saveSessionMock.mockClear();
     upsertProfileDocMock.mockClear();
     recordOnboardingTurnMock.mockClear();
+    seedUserPortalsMock.mockClear();
+    seedUserPortalsMock.mockResolvedValue({
+      dreamCompaniesCount: 0,
+      tierPackCount: 0,
+      couldntAutoFind: [],
+      remoteRequired: false,
+      remoteRequiredSource: "regex fallback",
+    });
   });
 
   it("records exactly one budget_ledger row per LLM call (single-call turn)", async () => {
@@ -208,6 +224,86 @@ describe("handleOnboardingTurn", () => {
     const [, , doc] = upsertProfileDocMock.mock.calls[0];
     expect(doc["profile.yml"]).toContain("Alex");
     expect(saveSessionMock).toHaveBeenCalledWith(fakeClient, "user-1", expect.objectContaining({ status: "complete" }));
+  });
+
+  it("ADM-3 Part 0: the completion turn seeds portals exactly once, after the profile doc upsert", async () => {
+    const runTurn = vi.fn(async () => ({
+      assistantText: "All set!",
+      toolCalls: [{ name: "finish_interview", input: {} }],
+      usage: { inputTokens: 20, outputTokens: 5 },
+    }));
+
+    const result = await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "yes that's everything",
+      session: baseSession({
+        stage: "targeting",
+        extracted: {
+          identity: { name: "Alex", email: "alex@example.com" },
+          targeting: {
+            tiers: [{ key: "tier_1", label: "Backend engineering" }],
+            hard_disqualifiers: [],
+            soft_concerns: [],
+            thesis_summary: "Wants backend roles.",
+          },
+        },
+      }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    expect(result.done).toBe(true);
+    expect(seedUserPortalsMock).toHaveBeenCalledTimes(1);
+    expect(seedUserPortalsMock).toHaveBeenCalledWith(fakeClient, "user-1");
+    // Ordering: seeding reads onboarding_sessions/profiles fresh, so it
+    // must fire after both writes have landed, not before either.
+    const upsertOrder = upsertProfileDocMock.mock.invocationCallOrder[0];
+    const saveOrder = saveSessionMock.mock.invocationCallOrder[0];
+    const seedOrder = seedUserPortalsMock.mock.invocationCallOrder[0];
+    expect(seedOrder).toBeGreaterThan(upsertOrder);
+    expect(seedOrder).toBeGreaterThan(saveOrder);
+  });
+
+  it("ADM-3 Part 0: a seeding failure is fail-open — the completion turn still returns done:true", async () => {
+    seedUserPortalsMock.mockRejectedValueOnce(new Error("board_catalog read failed"));
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const runTurn = vi.fn(async () => ({
+      assistantText: "All set!",
+      toolCalls: [{ name: "finish_interview", input: {} }],
+      usage: { inputTokens: 20, outputTokens: 5 },
+    }));
+
+    const result = await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "yes that's everything",
+      session: baseSession({
+        stage: "targeting",
+        extracted: {
+          identity: { name: "Alex", email: "alex@example.com" },
+          targeting: {
+            tiers: [{ key: "tier_1", label: "Backend engineering" }],
+            hard_disqualifiers: [],
+            soft_concerns: [],
+            thesis_summary: "Wants backend roles.",
+          },
+        },
+      }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    expect(result.done).toBe(true);
+    expect(result.validation?.status).toBe("valid");
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      "onboarding seedUserPortals failed",
+      expect.objectContaining({ userId: "user-1" })
+    );
+    consoleErrorSpy.mockRestore();
   });
 
   it("ONB-A: no longer prepends anything on an empty session.messages — calibration generation now owns the opener", async () => {

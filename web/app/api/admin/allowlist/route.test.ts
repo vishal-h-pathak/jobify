@@ -48,10 +48,10 @@ describe("POST /api/admin/allowlist", () => {
     expect(createSupabaseAdminClientMock).not.toHaveBeenCalled();
   });
 
-  it("403s when signed in but not an admin — never constructs the service-role client", async () => {
+  it("404s when signed in but not an admin — never constructs the service-role client", async () => {
     requireAdminMock.mockResolvedValueOnce({ ok: false, reason: "forbidden" });
     const res = await POST(jsonRequest({ email: "friend@example.com" }));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
     expect(createSupabaseAdminClientMock).not.toHaveBeenCalled();
   });
 
@@ -90,10 +90,10 @@ describe("DELETE /api/admin/allowlist", () => {
     expect(createSupabaseAdminClientMock).not.toHaveBeenCalled();
   });
 
-  it("403s when signed in but not an admin", async () => {
+  it("404s when signed in but not an admin", async () => {
     requireAdminMock.mockResolvedValueOnce({ ok: false, reason: "forbidden" });
     const res = await DELETE(jsonRequest({ email: "friend@example.com" }));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
   });
 
   it("400s when no email is given", async () => {

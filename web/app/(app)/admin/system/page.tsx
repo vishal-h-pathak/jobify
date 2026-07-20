@@ -1,4 +1,4 @@
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { requireAdmin } from "@/lib/admin/requireAdmin";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { Card } from "@/components/ui/Card";
@@ -21,7 +21,10 @@ export const dynamic = "force-dynamic";
 export default async function AdminSystemPage() {
   const gate = await requireAdmin();
   if (!gate.ok) {
-    redirect(gate.reason === "unauthenticated" ? "/login" : "/feed");
+    // ADM-3: see ../page.tsx's identical gate — 404 for a signed-in
+    // non-admin, redirect only when genuinely unauthenticated.
+    if (gate.reason === "unauthenticated") redirect("/login");
+    notFound();
   }
 
   // Only constructed after requireAdmin() confirms the caller is an admin.
@@ -176,6 +179,7 @@ export default async function AdminSystemPage() {
                   <th className="pb-2 pr-4 font-medium">Trigger</th>
                   <th className="pb-2 pr-4 font-medium">Users</th>
                   <th className="pb-2 pr-4 font-medium">Postings</th>
+                  <th className="pb-2 pr-4 font-medium">Boards</th>
                   <th className="pb-2 pr-4 font-medium">Stage-4 calls</th>
                   <th className="pb-2 pr-4 font-medium">Cost</th>
                   <th className="pb-2 font-medium">Error</th>
@@ -189,6 +193,10 @@ export default async function AdminSystemPage() {
                     <td className="py-2 pr-4 text-ink-muted">{cycle.triggeredBy ?? "—"}</td>
                     <td className="py-2 pr-4 text-ink-muted">{cycle.usersScored}</td>
                     <td className="py-2 pr-4 text-ink-muted">{cycle.postingsUpserted}</td>
+                    <td className="py-2 pr-4 text-ink-muted">
+                      {cycle.boardsFetched}/{cycle.boardsTotal}
+                      {cycle.boardsSkippedEmpty > 0 && ` (${cycle.boardsSkippedEmpty} empty)`}
+                    </td>
                     <td className="py-2 pr-4 text-ink-muted">{cycle.stage4Calls}</td>
                     <td className="py-2 pr-4 text-ink-muted">${cycle.costUsd.toFixed(2)}</td>
                     <td className="py-2">{cycle.error && <Badge tone="danger">{cycle.error}</Badge>}</td>

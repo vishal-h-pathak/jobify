@@ -11,6 +11,12 @@ export interface HuntCycleRow {
   stage4Calls: number;
   costUsd: number;
   error: string | null;
+  /** HUNT2 P0.4 (jobify/hosted/discovery.py): global discovery counters —
+   * `hunt_cycles` carries no `user_id`, so these are cycle-level, not
+   * per-user (see huntFeedOverview.ts for the per-user matches funnel). */
+  boardsTotal: number;
+  boardsFetched: number;
+  boardsSkippedEmpty: number;
 }
 
 /**
@@ -36,6 +42,9 @@ export async function listRecentHuntCycles(admin: SupabaseClient<Database>): Pro
     stage4Calls: Number(row.counters?.stage4_calls ?? 0),
     costUsd: Number(row.cost_usd ?? 0),
     error: row.error,
+    boardsTotal: Number(row.counters?.boards_total ?? 0),
+    boardsFetched: Number(row.counters?.boards_fetched ?? 0),
+    boardsSkippedEmpty: Number(row.counters?.boards_skipped_empty ?? 0),
   }));
 }
 

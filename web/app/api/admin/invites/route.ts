@@ -13,10 +13,10 @@ const MAX_MINT_N = 20;
 export async function POST(request: Request) {
   const gate = await requireAdmin();
   if (!gate.ok) {
-    return NextResponse.json(
-      { error: gate.reason === "unauthenticated" ? "not signed in" : "forbidden" },
-      { status: gate.reason === "unauthenticated" ? 401 : 403 }
-    );
+    // ADM-3: a signed-in non-admin gets 404, not 403 — never confirm this
+    // route exists to someone who's authenticated but not an admin.
+    if (gate.reason === "unauthenticated") return NextResponse.json({ error: "not signed in" }, { status: 401 });
+    return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
   const body = await request.json().catch(() => null);
