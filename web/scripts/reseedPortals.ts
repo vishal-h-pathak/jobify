@@ -31,6 +31,11 @@ interface StoredExtracted {
   targeting?: StoredTargeting;
 }
 
+interface StoredLocationComp {
+  base?: string;
+  remote_acceptable?: boolean;
+}
+
 function parseArgs(argv: string[]): { userId: string } {
   const idx = argv.indexOf("--user");
   const userId = idx === -1 ? undefined : argv[idx + 1];
@@ -41,14 +46,28 @@ function parseArgs(argv: string[]): { userId: string } {
 }
 
 /**
- * No explicit "remote acceptable" field exists on targeting yet (that's
- * P0.7's profile-level concern, a different session) — this is a judgment
- * call, scoped to this script only: infer remote-required from
- * disqualifier/concern text mentioning onsite-only constraints.
+ * FALLBACK ONLY (see below). Cockpit hotfix 2026-07-20: this regex
+ * misfired on live data — "Prefers remote; onsite only acceptable if
+ * based in Atlanta" matched /onsite only/ and concluded remote-REQUIRED,
+ * the opposite of the stated preference, emptying the tier pack (the
+ * data-ai ∩ remote-first intersection is empty). profile.yml's
+ * location_and_compensation is authoritative when present; this text
+ * heuristic remains only for profiles that predate that section.
  */
 function deriveRemoteRequired(hardDisqualifiers: string[], softConcerns: string[]): boolean {
   const text = [...hardDisqualifiers, ...softConcerns].join(" ").toLowerCase();
   return /no remote|fully in-office|onsite only|in-person only/.test(text);
+}
+
+function parseLocationComp(profileYamlText: string): StoredLocationComp | null {
+  if (!profileYamlText.trim()) return null;
+  try {
+    const parsed = yaml.load(profileYamlText) as Record<string, unknown> | null;
+    const section = parsed?.["location_and_compensation"];
+    return section && typeof section === "object" ? (section as StoredLocationComp) : null;
+  } catch {
+    return null;
+  }
 }
 
 async function main() {
@@ -100,10 +119,18 @@ async function main() {
   const catalog: CatalogBoardInput[] = (catalogRows ?? []).filter(
     (row): row is CatalogBoardInput => row.ats !== "workday"
   );
-  const remoteRequired = deriveRemoteRequired(
-    storedTargeting.hard_disqualifiers ?? [],
-    storedTargeting.soft_concerns ?? []
-  );
+
+  // Cockpit hotfix 2026-07-20: prefer profile.yml's authoritative
+  // location_and_compensation over the text-regex heuristic. Semantics:
+  // "remote required" (pack restricted to remote-first boards) is true
+  // only when the user accepts remote AND has no base metro to take
+  // onsite work in. A user with a base (e.g. "Atlanta, GA") can take
+  // onsite there — restricting their pack to remote-first boards is
+  // wrong. Regex fallback only when profile.yml lacks the section.
+  const locComp = parseLocationComp(profileRow.doc["profile.yml"] ?? "");
+  const remoteRequired = locComp
+    ? locComp.remote_acceptable === true && !locComp.base
+    : deriveRemoteRequired(storedTargeting.hard_disqualifiers ?? [], storedTargeting.soft_concerns ?? []);
   const tierPackBoards = computeTierPack({ tiers: targeting.tiers, remoteRequired }, catalog);
 
   const { portalsYaml, couldntAutoFind } = await seedPortalsCompanies({
@@ -124,7 +151,9 @@ async function main() {
   if (updateError) throw updateError;
 
   console.log(`reseeded portals.yml for ${userId}`);
-  console.log(`  dream companies: ${dreamCompanies.length}, tier pack candidates: ${tierPackBoards.length}`);
+  console.log(
+    `  dream companies: ${dreamCompanies.length}, tier pack candidates: ${tierPackBoards.length}, remoteRequired: ${remoteRequired} (${locComp ? "profile.yml" : "regex fallback"})`
+  );
   if (couldntAutoFind.length) {
     console.log(`  couldn't auto-find (${couldntAutoFind.length}): ${couldntAutoFind.join(", ")}`);
   }
