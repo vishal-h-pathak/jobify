@@ -22,7 +22,7 @@ export async function resetUserModule(
 ): Promise<ResetModuleResult> {
   const { data: session, error: readError } = await admin
     .from("onboarding_sessions")
-    .select("modules")
+    .select("modules, extracted")
     .eq("user_id", userId)
     .maybeSingle();
   if (readError) throw readError;
@@ -32,9 +32,20 @@ export async function resetUserModule(
   if (!modules[moduleKey]) return { kind: "not_completed" };
 
   const { [moduleKey]: _removed, ...rest } = modules;
+  const update: { modules: ModulesState; extracted?: Record<string, unknown> } = { modules: rest as ModulesState };
+
+  // INT2-B (session-prompts/56_int2_deck.md §4): resetting "reactions" must
+  // also clear the generated deck, or the module would report incomplete
+  // but immediately re-serve the same stale scenarios instead of regenerating.
+  if (moduleKey === "reactions") {
+    const extracted = (session.extracted ?? {}) as Record<string, unknown>;
+    const { reaction_deck: _deck, ...restExtracted } = extracted;
+    update.extracted = restExtracted;
+  }
+
   const { error: updateError } = await admin
     .from("onboarding_sessions")
-    .update({ modules: rest as ModulesState })
+    .update(update)
     .eq("user_id", userId);
   if (updateError) throw updateError;
   return { kind: "ok" };

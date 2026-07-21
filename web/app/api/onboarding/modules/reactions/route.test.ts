@@ -83,6 +83,28 @@ vi.mock("@/lib/onboarding/incrementalDoc", () => ({ applyModuleToDoc: applyModul
 const maybeFireCheckpointMock = vi.fn(async () => {});
 vi.mock("@/lib/onboarding/checkpoint", () => ({ maybeFireCheckpoint: maybeFireCheckpointMock }));
 
+interface TestDeckScenario {
+  id: string;
+  title: string;
+  org_flavor: string;
+  gist: string;
+  probe: string;
+}
+
+// INT2-B: the one metered LLM call (deck generation). Default to returning
+// no usable scenarios so every pre-existing test in this file — none of
+// which know about the deck — exercises the static (live-postings)
+// fallback exactly as before; individual deck tests override this mock.
+const runDeckGenerationTurnMock = vi.fn<
+  () => Promise<{ scenarios: TestDeckScenario[]; usage: { inputTokens: number; outputTokens: number } }>
+>(async () => ({ scenarios: [], usage: { inputTokens: 10, outputTokens: 5 } }));
+vi.mock("@/lib/anthropic/moduleTurns", () => ({ runDeckGenerationTurn: runDeckGenerationTurnMock }));
+
+vi.mock("@/lib/anthropic/client", () => ({ ONBOARDING_MODEL: "claude-sonnet-5" }));
+
+const recordOnboardingTurnMock = vi.fn(async () => {});
+vi.mock("@/lib/db/ledger", () => ({ recordOnboardingTurn: recordOnboardingTurnMock }));
+
 const { GET, POST } = await import("./route");
 
 const BASE_SESSION = {
@@ -93,6 +115,22 @@ const BASE_SESSION = {
   modules: {},
   status: "in_progress",
 };
+
+function deckScenario(overrides: Partial<{ id: string; title: string; org_flavor: string; gist: string; probe: string }> = {}) {
+  return {
+    id: overrides.id ?? "scenario_1",
+    title: overrides.title ?? "Senior Ops Manager",
+    org_flavor: overrides.org_flavor ?? "a 50-person B2B SaaS company",
+    gist: overrides.gist ?? "Runs the weekly ops review and owns vendor contracts.",
+    probe: overrides.probe ?? "scope",
+  };
+}
+
+/** 8 scenarios spanning >=4 distinct probe dimensions — passes deckIsUsable. */
+function usableDeck() {
+  const probes = ["scope", "pace", "autonomy", "domain", "scope", "pace", "autonomy", "domain"];
+  return probes.map((probe, i) => deckScenario({ id: `scenario_${i + 1}`, probe }));
+}
 
 function postRequest(body: unknown) {
   return new Request("http://localhost/api/onboarding/modules/reactions", {
@@ -111,6 +149,10 @@ describe("GET /api/onboarding/modules/reactions", () => {
     getOrCreateSessionMock.mockReset();
     getOrCreateSessionMock.mockResolvedValue(BASE_SESSION);
     supabaseStub = makeSupabaseStub();
+    runDeckGenerationTurnMock.mockReset();
+    runDeckGenerationTurnMock.mockResolvedValue({ scenarios: [], usage: { inputTokens: 10, outputTokens: 5 } });
+    recordOnboardingTurnMock.mockReset();
+    saveSessionMock.mockClear();
   });
 
   it("401s when not signed in", async () => {
@@ -144,6 +186,103 @@ describe("GET /api/onboarding/modules/reactions", () => {
     const body = await res.json();
     expect(body.postings).toEqual([{ id: "p1", title: "Senior Backend Engineer", company: "Acme", location: "Remote" }]);
   });
+
+  it("generates and persists a deck when reaction_deck is absent, and records a metered deck_gen ledger row", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasAccessMock.mockResolvedValue(true);
+    const deck = usableDeck();
+    runDeckGenerationTurnMock.mockResolvedValue({ scenarios: deck, usage: { inputTokens: 200, outputTokens: 300 } });
+
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.postings).toEqual(
+      deck.map((s) => ({ id: s.id, title: s.title, company: null, location: null, org_flavor: s.org_flavor, gist: s.gist }))
+    );
+    expect(runDeckGenerationTurnMock).toHaveBeenCalledTimes(1);
+    expect(recordOnboardingTurnMock).toHaveBeenCalledWith(
+      { __admin: true },
+      expect.objectContaining({ userId: "user-1", model: "claude-sonnet-5", inputTokens: 200, outputTokens: 300, event: "deck_gen" })
+    );
+    expect(saveSessionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "user-1",
+      expect.objectContaining({ extracted: expect.objectContaining({ reaction_deck: deck }) })
+    );
+  });
+
+  it("serves the stored deck without generating again once reaction_deck already exists", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasAccessMock.mockResolvedValue(true);
+    const deck = usableDeck();
+    getOrCreateSessionMock.mockResolvedValue({ ...BASE_SESSION, extracted: { ...BASE_SESSION.extracted, reaction_deck: deck } });
+
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.postings.map((p: { id: string }) => p.id)).toEqual(deck.map((s) => s.id));
+    expect(runDeckGenerationTurnMock).not.toHaveBeenCalled();
+    expect(recordOnboardingTurnMock).not.toHaveBeenCalled();
+    expect(saveSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("regenerates once when the first attempt fails the dimension-spread check, then persists the usable second attempt", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasAccessMock.mockResolvedValue(true);
+    const badDeck = Array.from({ length: 8 }, (_, i) => deckScenario({ id: `bad_${i + 1}`, probe: "scope" })); // only 1 dimension
+    const goodDeck = usableDeck();
+    runDeckGenerationTurnMock
+      .mockResolvedValueOnce({ scenarios: badDeck, usage: { inputTokens: 10, outputTokens: 10 } })
+      .mockResolvedValueOnce({ scenarios: goodDeck, usage: { inputTokens: 10, outputTokens: 10 } });
+
+    const res = await GET();
+
+    expect(runDeckGenerationTurnMock).toHaveBeenCalledTimes(2);
+    expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(2); // both attempts are metered, even the discarded one
+    const body = await res.json();
+    expect(body.postings.map((p: { id: string }) => p.id)).toEqual(goodDeck.map((s) => s.id));
+    expect(saveSessionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "user-1",
+      expect.objectContaining({ extracted: expect.objectContaining({ reaction_deck: goodDeck }) })
+    );
+  });
+
+  it("falls back to the static (live-postings) deck without persisting anything when generation fails the check twice", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasAccessMock.mockResolvedValue(true);
+    const badDeck = Array.from({ length: 8 }, (_, i) => deckScenario({ id: `bad_${i + 1}`, probe: "scope" }));
+    runDeckGenerationTurnMock.mockResolvedValue({ scenarios: badDeck, usage: { inputTokens: 10, outputTokens: 10 } });
+    supabaseStub = makeSupabaseStub({
+      postings: {
+        data: [{ id: "p1", title: "Senior Backend Engineer", company: "Acme", location: "Remote", last_seen_at: "2026-07-10T00:00:00Z" }],
+        error: null,
+      },
+    });
+
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.postings).toEqual([{ id: "p1", title: "Senior Backend Engineer", company: "Acme", location: "Remote" }]);
+    // never-persist-empty/partial: the unusable deck must never land in extracted.reaction_deck
+    expect(saveSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("never persists a deck shorter than 8 scenarios, even if every probe dimension is distinct", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasAccessMock.mockResolvedValue(true);
+    const shortDeck = ["scope", "pace", "autonomy", "domain"].map((probe, i) => deckScenario({ id: `s_${i + 1}`, probe }));
+    runDeckGenerationTurnMock.mockResolvedValue({ scenarios: shortDeck, usage: { inputTokens: 10, outputTokens: 10 } });
+    supabaseStub = makeSupabaseStub({ postings: { data: [], error: null } });
+
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    expect(saveSessionMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /api/onboarding/modules/reactions", () => {
@@ -161,6 +300,8 @@ describe("POST /api/onboarding/modules/reactions", () => {
     markModuleCompleteMock.mockClear();
     applyModuleToDocMock.mockClear();
     maybeFireCheckpointMock.mockClear();
+    runDeckGenerationTurnMock.mockClear();
+    recordOnboardingTurnMock.mockClear();
     supabaseStub = makeSupabaseStub({ postingLookup: { data: { id: "p1", title: "Backend Engineer", company: "Acme" }, error: null } });
   });
 
@@ -280,5 +421,54 @@ describe("POST /api/onboarding/modules/reactions", () => {
     hasAccessMock.mockResolvedValue(true);
     await POST(postRequest({ posting_id: "p1", reaction: "interested" }));
     expect(saveSessionMock).toHaveBeenCalledTimes(1);
+    expect(runDeckGenerationTurnMock).not.toHaveBeenCalled();
+    expect(recordOnboardingTurnMock).not.toHaveBeenCalled();
+  });
+
+  // INT2-B: deck cards are fictional scenarios — posting_reactions.posting_id
+  // has a hard FK to postings.id (migration 0011), so a deck-card reaction
+  // must skip that table entirely and use the card's own title/org_flavor.
+  describe("deck-card reactions (INT2-B)", () => {
+    const deck = [
+      { id: "scenario_1", title: "Senior Ops Manager", org_flavor: "a 50-person B2B SaaS company", gist: "Runs vendor contracts.", probe: "scope" },
+    ];
+
+    it("reacting to a deck-card id skips the postings lookup and posting_reactions upsert entirely", async () => {
+      getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+      hasAccessMock.mockResolvedValue(true);
+      getOrCreateSessionMock.mockResolvedValue({ ...BASE_SESSION, extracted: { ...BASE_SESSION.extracted, reaction_deck: deck } });
+      // No postingLookup override needed — if the route touched `postings`/
+      // `posting_reactions` for this id, the stub's default (data: null)
+      // would 404, and the upsert mock would be called; assert neither.
+      supabaseStub = makeSupabaseStub({ postingLookup: { data: null, error: null } });
+
+      const res = await POST(postRequest({ posting_id: "scenario_1", reaction: "interested" }));
+
+      expect(res.status).toBe(200);
+      expect(supabaseStub.__upsertMock).not.toHaveBeenCalled();
+      expect(saveSessionMock).toHaveBeenCalledWith(
+        expect.anything(),
+        "user-1",
+        expect.objectContaining({
+          extracted: expect.objectContaining({
+            reactions: [{ posting_id: "scenario_1", title: "Senior Ops Manager", company: "a 50-person B2B SaaS company", reaction: "interested" }],
+          }),
+        })
+      );
+    });
+
+    it("falls through to the real-postings path for an id that isn't in the stored deck", async () => {
+      getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+      hasAccessMock.mockResolvedValue(true);
+      getOrCreateSessionMock.mockResolvedValue({ ...BASE_SESSION, extracted: { ...BASE_SESSION.extracted, reaction_deck: deck } });
+
+      const res = await POST(postRequest({ posting_id: "p1", reaction: "interested" }));
+
+      expect(res.status).toBe(200);
+      expect(supabaseStub.__upsertMock).toHaveBeenCalledWith(
+        { user_id: "user-1", posting_id: "p1", reaction: "interested", note: null },
+        { onConflict: "user_id,posting_id" }
+      );
+    });
   });
 });

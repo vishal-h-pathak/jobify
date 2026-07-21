@@ -7,8 +7,13 @@ import { Button } from "@/components/ui/Button";
 export interface PostingSummary {
   id: string;
   title: string;
-  company: string;
-  location: string;
+  company: string | null;
+  location: string | null;
+  // INT2-B: present on profile-conditioned deck cards (generated scenarios),
+  // absent on the live-postings fallback — org_flavor/gist give the card
+  // enough substance to react to without a real company name.
+  org_flavor?: string;
+  gist?: string;
 }
 
 export type ReactionChoice = "interested" | "not_interested";
@@ -17,8 +22,11 @@ export type ReactionChoice = "interested" | "not_interested";
 export const WHY_CHIPS = ["comp", "title", "domain", "company", "level", "location"] as const;
 export const WHY_AUTO_ADVANCE_MS = 2500;
 export const WHY_FREE_TEXT_MAX = 24;
+// Not "real postings, live right now" — that claim is false once the deck is
+// profile-conditioned scenarios (U2 feedback: a media strategist swiped on
+// an opaque real posting with nothing to judge by). True for both sources.
 export const REACTION_DECK_INTRO_COPY =
-  "Real postings, live right now. Gut reactions only — this is how your feed learns taste, not just keywords.";
+  "Gut reactions only — this is how your feed learns taste, not just keywords.";
 
 type Phase = "loading" | "card" | "why" | "submitting" | "error" | "finished";
 
@@ -119,6 +127,26 @@ export interface ReactionCardViewProps {
   onUndo: () => void;
 }
 
+/** Deck cards carry org_flavor/gist (generated scenarios); fallback live
+ * postings carry company/location instead — render whichever is present.
+ * `children[0]` stays the plain title div in both branches, matching the
+ * card's prior fixed two-child shape (title, subtitle-or-gist). */
+function cardSubtitle(posting: PostingSummary) {
+  if (posting.org_flavor) {
+    return (
+      <>
+        <div className="text-sm text-ink-muted">{posting.org_flavor}</div>
+        {posting.gist && <div className="mt-2 text-sm text-ink">{posting.gist}</div>}
+      </>
+    );
+  }
+  return (
+    <div className="text-sm text-ink-muted">
+      {posting.company} · {posting.location}
+    </div>
+  );
+}
+
 /** The stacked deck: current card, next card peeking 8px below at 60% opacity. */
 export function ReactionCardView({
   posting,
@@ -149,18 +177,14 @@ export function ReactionCardView({
           <div aria-hidden="true" className="absolute inset-x-0 top-2 opacity-60">
             <Card variant="elevated">
               <div className="text-lg text-ink">{nextPosting.title}</div>
-              <div className="text-sm text-ink-muted">
-                {nextPosting.company} · {nextPosting.location}
-              </div>
+              {cardSubtitle(nextPosting)}
             </Card>
           </div>
         )}
         <div className="relative panel-enter">
           <Card variant="elevated">
             <div className="text-lg text-ink">{posting.title}</div>
-            <div className="text-sm text-ink-muted">
-              {posting.company} · {posting.location}
-            </div>
+            {cardSubtitle(posting)}
           </Card>
         </div>
       </div>
@@ -285,7 +309,7 @@ export function ReactionDeck({ onComplete, fetchImpl = fetch }: ReactionDeckProp
     return () => window.removeEventListener("keydown", handleKey);
   }, [state.phase]);
 
-  if (state.phase === "loading") return <div className="text-sm text-ink-muted">Loading real postings…</div>;
+  if (state.phase === "loading") return <div className="text-sm text-ink-muted">Loading scenarios…</div>;
   if (state.phase === "error") return <div className="text-sm text-danger">{state.error}</div>;
   if (state.phase === "finished") return null;
   if (!currentPosting) return null;

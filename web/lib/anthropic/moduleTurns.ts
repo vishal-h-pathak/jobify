@@ -371,3 +371,124 @@ export async function runMirrorGenerationTurn(inputs: MirrorGenerationInput): Pr
     usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
   };
 }
+
+// ---------------------------------------------------------------------------
+// 4. Reaction-deck generation (INT2-B, session-prompts/56_int2_deck.md)
+// ---------------------------------------------------------------------------
+
+export const DECK_GENERATION_SYSTEM_PROMPT = `You are building the reaction-calibration deck of a candidate's job-search \
+targeting profile — eight FICTIONAL role scenarios the candidate will swipe interested/not-interested on so the system \
+learns their taste. This is NOT a job application and NOT a set of real postings: you are inventing plausible \
+scenarios, not describing real companies or extracting facts. You are given whatever is known about the candidate so \
+far (their stated current role, resume, and any stated direction) — invent from that.
+
+HARD RULE — PLAUSIBLE FOR THIS CANDIDATE'S FIELD: every scenario must be a role a person with this candidate's \
+background could actually be considered for. Never invent a scenario from a different field than the candidate's own \
+(a media strategist never gets an engineering card, an engineer never gets a sales card) — an implausible card \
+teaches the system nothing and wastes the candidate's attention.
+
+HARD RULE — NO REAL COMPANIES: org_flavor describes a TYPE of organization ("a 50-person B2B SaaS company", "a \
+regional healthcare system", "an early-stage climate-tech startup"), never a real brand or company name.
+
+HARD RULE — DIMENSION SPREAD: the eight scenarios together must test AT LEAST FOUR distinct taste dimensions via the \
+probe field. Examples of dimensions: scope (broad generalist vs. narrow specialist), pace (fast/chaotic vs. \
+deliberate/stable), autonomy (highly independent vs. tightly directed), domain (adjacent field vs. current field), \
+people-vs-craft (people-management vs. individual-contributor craft), org size, mission orientation. Do not cluster \
+all eight scenarios on the same one or two dimensions.
+
+HARD RULE — GIST IS THE WHOLE POINT: gist is 1-2 plain sentences on what the role actually does day-to-day, concrete \
+enough that the candidate can react to it without asking for more context — never a restatement of the title, never \
+vague ("does great work"), always the actual substance of the day-to-day work.
+
+For each of exactly 8 scenarios, call record_deck with:
+- id: a short stable string you assign, e.g. "scenario_1".
+- title: a plausible job title for this candidate's field.
+- org_flavor: the type of organization, never a real name.
+- gist: 1-2 plain sentences on the actual day-to-day work.
+- probe: the single taste dimension this card is testing (see DIMENSION SPREAD above).
+
+Do not include any other text in your reply — record_deck is the entire output.`;
+
+const DECK_SCENARIO_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    id: { type: "string" },
+    title: { type: "string" },
+    org_flavor: { type: "string" },
+    gist: { type: "string" },
+    probe: { type: "string" },
+  },
+  required: ["id", "title", "org_flavor", "gist", "probe"],
+};
+
+export const DECK_GENERATION_TOOLS: Anthropic.Tool[] = [
+  {
+    name: "record_deck",
+    description: "Record the eight fictional reaction-calibration scenarios.",
+    input_schema: {
+      type: "object",
+      properties: {
+        scenarios: { type: "array", items: DECK_SCENARIO_SCHEMA, minItems: 8, maxItems: 8 },
+      },
+      required: ["scenarios"],
+    },
+  },
+];
+
+export interface DeckScenario {
+  id: string;
+  title: string;
+  org_flavor: string;
+  gist: string;
+  probe: string;
+}
+
+export interface DeckGenerationInput {
+  profileSummary: string;
+}
+
+export interface DeckGenerationResult {
+  scenarios: DeckScenario[];
+  usage: { inputTokens: number; outputTokens: number };
+}
+
+function isDeckScenario(value: unknown): value is DeckScenario {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.id === "string" &&
+    typeof v.title === "string" &&
+    typeof v.org_flavor === "string" &&
+    typeof v.gist === "string" &&
+    typeof v.probe === "string"
+  );
+}
+
+export async function runDeckGenerationTurn(inputs: DeckGenerationInput): Promise<DeckGenerationResult> {
+  const response = await anthropicClient().messages.create({
+    model: ONBOARDING_MODEL,
+    max_tokens: 2048,
+    system: DECK_GENERATION_SYSTEM_PROMPT,
+    tools: DECK_GENERATION_TOOLS,
+    // House transport rule: unforced calls are banned on this transport (see
+    // the mirror-generation note above) — this is a pure extractor/generator
+    // with no conversational text, so forcing is correct here.
+    tool_choice: { type: "tool", name: "record_deck" },
+    messages: [{ role: "user", content: inputs.profileSummary }],
+  });
+
+  let scenarios: DeckScenario[] = [];
+  for (const block of response.content) {
+    if (block.type === "tool_use" && block.name === "record_deck") {
+      const input = block.input as { scenarios?: unknown };
+      if (Array.isArray(input.scenarios)) {
+        scenarios = input.scenarios.filter(isDeckScenario);
+      }
+    }
+  }
+
+  return {
+    scenarios,
+    usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
+  };
+}

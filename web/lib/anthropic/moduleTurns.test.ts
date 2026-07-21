@@ -10,12 +10,15 @@ const {
   runVoiceIngestTurn,
   runMetricsExtractionTurn,
   runMirrorGenerationTurn,
+  runDeckGenerationTurn,
   VOICE_INGEST_SYSTEM_PROMPT,
   VOICE_INGEST_TOOLS,
   METRICS_EXTRACTION_SYSTEM_PROMPT,
   METRICS_EXTRACTION_TOOLS,
   MIRROR_GENERATION_SYSTEM_PROMPT,
   MIRROR_GENERATION_TOOLS,
+  DECK_GENERATION_SYSTEM_PROMPT,
+  DECK_GENERATION_TOOLS,
 } = await import("./moduleTurns");
 
 // Prompt-content regression coverage: this constraint is prompt-only — no code
@@ -278,5 +281,67 @@ describe("runMirrorGenerationTurn", () => {
     const result = await runMirrorGenerationTurn({ extractedSummary: "Anchor: ..." });
     expect(result.paragraphs).toEqual(["only one paragraph", ""]);
     expect(result.quoted_phrases).toEqual(["a quote"]);
+  });
+});
+
+function scenario(overrides: Partial<{ id: string; title: string; org_flavor: string; gist: string; probe: string }> = {}) {
+  return {
+    id: overrides.id ?? "scenario_1",
+    title: overrides.title ?? "Senior Ops Manager",
+    org_flavor: overrides.org_flavor ?? "a 50-person B2B SaaS company",
+    gist: overrides.gist ?? "Runs the weekly ops review and owns vendor contracts.",
+    probe: overrides.probe ?? "scope",
+  };
+}
+
+describe("runDeckGenerationTurn", () => {
+  beforeEach(() => createMock.mockReset());
+
+  it("calls the model with the forced record_deck tool, max_tokens 2048, and extracts scenarios + usage", async () => {
+    const scenarios = Array.from({ length: 8 }, (_, i) => scenario({ id: `scenario_${i + 1}` }));
+    createMock.mockResolvedValue(usageResponse([{ type: "tool_use", name: "record_deck", input: { scenarios } }]));
+
+    const result = await runDeckGenerationTurn({ profileSummary: "Candidate's current anchor — title: Media Strategist" });
+
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-sonnet-5",
+        max_tokens: 2048,
+        system: DECK_GENERATION_SYSTEM_PROMPT,
+        tools: DECK_GENERATION_TOOLS,
+        tool_choice: { type: "tool", name: "record_deck" },
+        messages: [{ role: "user", content: "Candidate's current anchor — title: Media Strategist" }],
+      })
+    );
+
+    expect(result).toEqual({ scenarios, usage: { inputTokens: 111, outputTokens: 22 } });
+  });
+
+  it("drops malformed scenario entries but keeps well-formed ones", async () => {
+    createMock.mockResolvedValue(
+      usageResponse([
+        {
+          type: "tool_use",
+          name: "record_deck",
+          input: {
+            scenarios: [
+              scenario({ id: "good" }),
+              { id: "bad", title: "missing fields" },
+              scenario({ id: "good_2" }),
+            ],
+          },
+        },
+      ])
+    );
+
+    const result = await runDeckGenerationTurn({ profileSummary: "..." });
+    expect(result.scenarios.map((s) => s.id)).toEqual(["good", "good_2"]);
+  });
+
+  it("returns an empty scenarios array when the tool call is missing, rather than throwing", async () => {
+    createMock.mockResolvedValue(usageResponse([{ type: "text", text: "nothing found" }]));
+
+    const result = await runDeckGenerationTurn({ profileSummary: "..." });
+    expect(result).toEqual({ scenarios: [], usage: { inputTokens: 111, outputTokens: 22 } });
   });
 });

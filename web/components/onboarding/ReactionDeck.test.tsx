@@ -159,6 +159,36 @@ describe("ReactionCardView — rendered tree", () => {
     expect(interestedBtn.props.variant).toBe("primary");
   });
 
+  it("renders org_flavor + gist instead of company/location for a deck-sourced card (INT2-B)", () => {
+    const deckCard: PostingSummary = {
+      id: "scenario_1",
+      title: "Senior Ops Manager",
+      company: null,
+      location: null,
+      org_flavor: "a 50-person B2B SaaS company",
+      gist: "Runs the weekly ops review and owns vendor contracts.",
+    };
+    const view = ReactionCardView({
+      posting: deckCard,
+      nextPosting: undefined,
+      position: 1,
+      total: 8,
+      canUndo: false,
+      onPass: vi.fn(),
+      onInterested: vi.fn(),
+      onUndo: vi.fn(),
+    });
+    const [, deck] = view.props.children;
+    const [, currentWrapper] = deck.props.children;
+    const currentCard = currentWrapper.props.children;
+    const [titleNode, subtitleNode] = currentCard.props.children;
+    expect(titleNode.props.children).toBe("Senior Ops Manager");
+    // subtitleNode is a Fragment: [org_flavor div, gist div]
+    const [orgFlavorDiv, gistDiv] = subtitleNode.props.children;
+    expect(orgFlavorDiv.props.children).toBe("a 50-person B2B SaaS company");
+    expect(gistDiv.props.children).toBe("Runs the weekly ops review and owns vendor contracts.");
+  });
+
   it("hides the back-arrow when canUndo is false, shows it when true", () => {
     const withoutUndo = ReactionCardView({
       posting: POSTINGS[0],
