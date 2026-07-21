@@ -32,6 +32,22 @@ logger = logging.getLogger("sources.ashby")
 _FALLBACK_COMPANIES: list[tuple[str, str]] = []
 
 
+def _salary_component(job: dict) -> dict | None:
+    """Ashby's `includeCompensation=true` response nests compensation under
+    `compensation.summaryComponents` — a list of `{compensationType,
+    minValue, maxValue, currencyCode}` entries (confirmed live against
+    api.ashbyhq.com/posting-api/job-board/openai). Equity/bonus components
+    carry null min/max; only the `Salary` component is a usable comp
+    floor/ceiling. Returns None (never guessed) if the board doesn't
+    publish one — most don't (`shouldDisplayCompensationOnJobPostings` is
+    frequently false)."""
+    components = ((job.get("compensation") or {}).get("summaryComponents")) or []
+    for component in components:
+        if component.get("compensationType") == "Salary":
+            return component
+    return None
+
+
 def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
     """Fetch open roles from one Ashby board.
 
@@ -67,6 +83,8 @@ def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
         if signals["prefer"] or signals["seniority"]:
             logger.debug("ashby: %s title signals %s on %r", slug, signals, title)
 
+        salary = _salary_component(job)
+
         yielded += 1
         yield {
             "id": make_job_id(link, title, display_name),
@@ -78,6 +96,13 @@ def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
             "remote": infer_remote(location, job),
             "description": description[:3000],
             "url": link,
+            "posted_at": job.get("publishedAt"),
+            "department": job.get("department") or None,
+            "employment_type": job.get("employmentType") or None,
+            "comp_min": salary.get("minValue") if salary else None,
+            "comp_max": salary.get("maxValue") if salary else None,
+            "comp_currency": salary.get("currencyCode") if salary else None,
+            "raw": job,
         }
     logger.info(
         "ashby: %s yielded=%d (raw=%d, title-filtered=%d)",

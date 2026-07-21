@@ -70,6 +70,7 @@ import logging
 import math
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -77,6 +78,7 @@ from jobify import db
 from jobify.config import (
     HOSTED_BUDGET_RECHECK_EVERY,
     HOSTED_GLOBAL_MONTHLY_CAP_USD,
+    HOSTED_MAX_POSTING_AGE_DAYS,
     HOSTED_STAGE4_TOP_N,
 )
 from jobify.hosted import embed
@@ -514,6 +516,94 @@ def _global_cap_exceeded() -> bool:
     return db.get_global_month_to_date_spend() >= HOSTED_GLOBAL_MONTHLY_CAP_USD
 
 
+# ── Stage 1.5: pre-LLM cheap filters (comp floor + max age, HUNT2 S3) ────
+#
+# Cheaper and earlier than the pre-existing `gates.comp_floor_usd` rubric
+# gate (`jobify.hunt.rubric.score_posting`, regex-parses a dollar figure
+# out of free-text `description`, only runs after a rubric compile): these
+# two filters read the STRUCTURED `postings.comp_min`/`comp_max`/
+# `posted_at` columns (migration 0016) directly, before any rubric compile
+# or LLM spend. Both PASS ON NULL — absent data (no comp floor stated, or
+# a posting that doesn't publish comp/date) never disqualifies. A posting
+# that fails either writes a `rejected_rubric` row (the funnel enum has no
+# separate "pre-filter" bucket — this is the same category as the rubric
+# gate: failed a static/cheap check before the expensive stages) with a
+# `reject_reason` of `comp_below_floor` or `stale_posting`.
+
+_BARE_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _profile_comp_floor(profile: dict) -> Optional[float]:
+    """The user's stated comp floor, from `profile.yml`'s
+    `location_and_compensation.target_comp_usd` (a range or single value,
+    as a string — e.g. `"175000-205000"`). Takes the LOW end of a range,
+    same "no pay cut" semantics as `jobify.hunt.rubric._parse_comp_usd`.
+    Returns None (filter no-ops) if the field is absent or unparseable —
+    never a guessed floor.
+    """
+    raw = (profile.get("location_and_compensation") or {}).get("target_comp_usd")
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    values = [float(m.replace(",", "")) for m in _BARE_NUMBER_RE.findall(str(raw))]
+    return min(values) if values else None
+
+
+def _posting_comp_value(posting: dict) -> Optional[float]:
+    """The posting's comp CEILING — `comp_max` only — to compare against
+    the user's floor.
+
+    Post-merge-review fix: this used to prefer `comp_min`, which rejected
+    any posting whose LOW end sat below the user's floor even when its
+    high end cleared it — a posting whose stated band straddles the
+    floor (e.g. $257K-$335K against a $300K floor) is a real candidate
+    for paying at/above the floor and must pass, not be rejected on its
+    low end alone. Comparing against `comp_max` means this filter only
+    rejects when the posting's ENTIRE published band tops out below the
+    floor — the only case where the user's floor is provably unreachable.
+    A posting with only `comp_min` published (no `comp_max`) has an
+    unknown ceiling and therefore returns None here (filter passes) —
+    same null-pass discipline as everywhere else in this module; most
+    postings publish neither (comp_min/comp_max only exist since
+    migration 0016 and only Ashby publishes them reliably today)."""
+    comp_max = posting.get("comp_max")
+    return float(comp_max) if comp_max is not None else None
+
+
+def _posting_age_days(posting: dict) -> Optional[float]:
+    """Days since `postings.posted_at`, or None if that column is NULL
+    (most postings today — only populated going forward by HUNT2 S3's
+    fetcher changes) or unparseable."""
+    posted_at = posting.get("posted_at")
+    if not posted_at:
+        return None
+    try:
+        posted = datetime.fromisoformat(str(posted_at).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if posted.tzinfo is None:
+        posted = posted.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - posted).total_seconds() / 86400.0
+
+
+def _prelim_reject_reason(profile: dict, posting: dict) -> Optional[str]:
+    """`comp_below_floor`, `stale_posting`, or None (passes both filters).
+    Comp is checked first — an arbitrary but stable ordering for the
+    (rare) posting that fails both."""
+    floor = _profile_comp_floor(profile)
+    if floor is not None:
+        comp_value = _posting_comp_value(posting)
+        if comp_value is not None and comp_value < floor:
+            return "comp_below_floor"
+
+    age_days = _posting_age_days(posting)
+    if age_days is not None and age_days > HOSTED_MAX_POSTING_AGE_DAYS:
+        return "stale_posting"
+
+    return None
+
+
 # ── Per-user ladder ─────────────────────────────────────────────────────
 
 
@@ -567,6 +657,26 @@ def _run_user_ladder(
             )
             counters["matches_written"] += 1
     counters["passed_title_filter"] += len(survivors)
+
+    # ── Stage 1.5: pre-LLM cheap filters (comp floor + max age, HUNT2 S3,
+    # see the module-level comment above `_prelim_reject_reason`). Runs
+    # BEFORE the rubric compile below so a user whose whole survivor list
+    # filters out here doesn't spend their one-time rubric-compile call on
+    # nothing. ────────────────────────────────────────────────────────────
+    profile = load_profile(profile_dir)
+    prelim_survivors: list[dict] = []
+    for p in survivors:
+        reason = _prelim_reject_reason(profile, p)
+        if reason is None:
+            prelim_survivors.append(p)
+        else:
+            db.upsert_match(
+                user_id, p["id"],
+                status="rejected_rubric",
+                reject_reason=reason,
+            )
+            counters["matches_written"] += 1
+    survivors = prelim_survivors
 
     # ── Stage 2: compiled rubric. Deferred compile: if this cycle has
     # nothing to score for this user, don't spend the one-time compile

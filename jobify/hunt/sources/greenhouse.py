@@ -37,6 +37,29 @@ _FALLBACK_COMPANIES = [
 ]
 
 
+def _first_department_name(job: dict) -> str | None:
+    """Greenhouse's `departments` is a list of `{id, name, ...}`; take the
+    first — good enough for the metadata-retention column (HUNT2 S3), not
+    a full org-chart mapping."""
+    departments = job.get("departments") or []
+    if departments and isinstance(departments[0], dict):
+        return departments[0].get("name") or None
+    return None
+
+
+def _metadata_value(job: dict, field_name_lower: str) -> str | None:
+    """Greenhouse's `metadata` is a list of custom board fields
+    (`{name, value, ...}`); Greenhouse has no standard `employment_type`
+    field, but some boards add one as a custom field (e.g. "Employment
+    Type") — match case-insensitively, return None (never guess) if the
+    board doesn't define one."""
+    for entry in job.get("metadata") or []:
+        if str(entry.get("name") or "").strip().lower() == field_name_lower:
+            value = entry.get("value")
+            return str(value) if value is not None else None
+    return None
+
+
 def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
     """Fetch open roles from a single Greenhouse board.
 
@@ -52,11 +75,11 @@ def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
     if data is None:
         return
 
-    raw = 0
+    raw_count = 0
     yielded = 0
     skipped_title = 0
     for job in data.get("jobs", []):
-        raw += 1
+        raw_count += 1
         title = job.get("title", "")
         location = job.get("location", {}).get("name", "Unknown")
         description = strip_tags(job.get("content", ""))
@@ -82,10 +105,14 @@ def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
             "remote": infer_remote(location, job),
             "description": description[:3000],
             "url": link,
+            "posted_at": job.get("first_published") or job.get("updated_at"),
+            "department": _first_department_name(job),
+            "employment_type": _metadata_value(job, "employment type"),
+            "raw": job,
         }
     logger.info(
         "greenhouse: %s yielded=%d (raw=%d, title-filtered=%d)",
-        slug, yielded, raw, skipped_title,
+        slug, yielded, raw_count, skipped_title,
     )
 
 
