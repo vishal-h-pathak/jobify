@@ -1,7 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase/types";
+import { deriveTagsFromKeywords } from "../portals/tierPacks";
 
 type CandidateBoardsRow = Database["public"]["Tables"]["candidate_boards"]["Row"];
+
+const MAX_APPROVE_TAGS = 3;
 
 /**
  * HUNT2 P2 S4: admin candidates UI's read/write surface over
@@ -78,15 +81,19 @@ export type ApproveResult =
  * Approve a pending candidate: writes it into `board_catalog`
  * (`added_by: "admin"`, matching the discovery loop's own `"discovery"`
  * tag so the two admission paths stay distinguishable) and marks the
- * candidate `approved`. `tags` is intentionally `[]` here — the
- * discovery loop's own auto-tag derivation runs server-side (Python)
- * against the probe's live posting titles, which are NOT persisted to
- * `probe_result` (ephemeral by design, see
- * `jobify.hosted.candidates._compact_probe_result`); a human approver
- * has no titles to derive from either, so an empty tag set (which
- * `computeTierPack` already degrades gracefully for — untagged boards
- * still appear in the catalog-order fallback) is the honest default over
- * a fabricated guess.
+ * candidate `approved`. `tags` used to be hardcoded `[]` — the probe's
+ * live posting titles are NOT persisted to `probe_result` (ephemeral by
+ * design), so a human approver had nothing to derive tags from. HUNT2 P3
+ * S6 fixed the "nothing" half: `probe_result.top_title_terms` (a
+ * compact, fixed-vocabulary derivative of those titles — see
+ * `jobify.hosted.candidates._matched_title_terms`) IS persisted, so this
+ * re-derives tags from it via the SAME fixed vocabulary
+ * (`tierPacks.ts::deriveTagsFromKeywords`) the discovery loop's own
+ * auto-admit path and the tier-pack ranker both already use — one
+ * vocabulary, three call sites, not three copies of it. Still degrades
+ * to `[]` (which `computeTierPack` already handles gracefully) when a
+ * candidate has no `top_title_terms` at all (e.g. a `relocation`
+ * candidate whose probe found no live board yet).
  */
 export async function approveCandidate(admin: SupabaseClient<Database>, candidateId: string): Promise<ApproveResult> {
   const { data: row, error: readError } = await admin
@@ -99,13 +106,21 @@ export async function approveCandidate(admin: SupabaseClient<Database>, candidat
   if (row.status !== "pending") return { kind: "not_pending" };
   if (!row.proposed_ats || !row.proposed_slug) return { kind: "missing_board_info" };
 
+  const probe = row.probe_result as { top_title_terms?: unknown } | null;
+  const topTitleTerms = Array.isArray(probe?.top_title_terms)
+    ? probe.top_title_terms.filter((t): t is string => typeof t === "string")
+    : [];
+  const tags = topTitleTerms.length
+    ? [...deriveTagsFromKeywords(topTitleTerms.join(" "))].slice(0, MAX_APPROVE_TAGS)
+    : [];
+
   const nowIso = new Date().toISOString();
   const { error: catalogError } = await admin.from("board_catalog").upsert(
     {
       ats: row.proposed_ats as "greenhouse" | "ashby" | "lever" | "workday",
       slug: row.proposed_slug,
       company_name: row.company_name,
-      tags: [],
+      tags,
       status: "active",
       added_by: "admin",
       verified_at: nowIso,

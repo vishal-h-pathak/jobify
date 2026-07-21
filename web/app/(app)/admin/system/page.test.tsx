@@ -49,6 +49,10 @@ vi.mock("@/lib/admin/systemMetrics", () => ({
   getPoolFreshness: getPoolFreshnessMock,
 }));
 
+const getSourceFunnelMock = vi.fn(async () => [] as unknown[]);
+vi.mock("@/lib/admin/sourceHealth", () => ({ getSourceFunnel: getSourceFunnelMock }));
+vi.mock("../DormantBoardButton", () => ({ DormantBoardButton: () => null }));
+
 const { default: AdminSystemPage } = await import("./page");
 
 /** Depth-first search over the raw React-element tree for a `Card` whose
@@ -88,8 +92,10 @@ describe("/admin/system page", () => {
     getCostBreakdownMtdMock.mockClear();
     getEngagementSnapshotMock.mockClear();
     getPoolFreshnessMock.mockClear();
+    getSourceFunnelMock.mockClear();
 
     listRecentHuntCyclesMock.mockResolvedValue([]);
+    getSourceFunnelMock.mockResolvedValue([]);
     getMostRecentScoringFunnelMock.mockResolvedValue(null);
     getCostBreakdownMtdMock.mockResolvedValue({ byEvent: {}, byModel: {}, poolUsd: 0, byoUsd: 0 });
     getEngagementSnapshotMock.mockResolvedValue({
@@ -128,22 +134,50 @@ describe("/admin/system page", () => {
     const funnelCard = findCardByHeading(result, "Latest scoring funnel");
     const engagementCard = findCardByHeading(result, "Engagement");
     const freshnessCard = findCardByHeading(result, "Pool freshness");
+    const sourcesCard = findCardByHeading(result, "Sources");
     expect(cyclesCard).not.toBeNull();
     expect(funnelCard).not.toBeNull();
     expect(engagementCard).not.toBeNull();
     expect(freshnessCard).not.toBeNull();
+    expect(sourcesCard).not.toBeNull();
 
     // Each card's second child is the conditional (EmptyState vs table/content).
     const cyclesBody = (cyclesCard!.props.children as unknown[])[1] as { type: { name?: string } };
     const funnelBody = (funnelCard!.props.children as unknown[])[1] as { type: { name?: string } };
     const engagementBody = (engagementCard!.props.children as unknown[])[1] as { type: { name?: string } };
     const freshnessBody = (freshnessCard!.props.children as unknown[])[1] as { type: { name?: string } };
+    // Sources card's third child is the conditional (after heading + the
+    // static flag-legend paragraph).
+    const sourcesBody = (sourcesCard!.props.children as unknown[])[2] as { type: { name?: string } };
     expect(cyclesBody.type.name).toBe("EmptyState");
     expect(funnelBody.type.name).toBe("EmptyState");
     expect(engagementBody.type.name).toBe("EmptyState");
     expect(freshnessBody.type.name).toBe("EmptyState");
+    expect(sourcesBody.type.name).toBe("EmptyState");
 
     expect(createSupabaseAdminClientMock).toHaveBeenCalled();
+  });
+
+  it("renders a rotate/dormant-candidate flag on the Sources card from fixture rollup rows", async () => {
+    requireAdminMock.mockResolvedValue({ ok: true, user: { id: "admin-1" }, supabase: {} });
+    getSourceFunnelMock.mockResolvedValue([
+      {
+        source: "jsearch", queryKey: "staff platform engineer", boardId: null, boardCompanyName: null,
+        boardStatus: null, postings60d: 3, postings90d: 5, surfaced60d: 0, surfaced90d: 0,
+        usersEngaged60d: 0, usersEngaged90d: 0, rotate: true, dormantCandidate: false,
+      },
+      {
+        source: "greenhouse", queryKey: null, boardId: "b1", boardCompanyName: "Acme Corp",
+        boardStatus: "active", postings60d: 4, postings90d: 6, surfaced60d: 0, surfaced90d: 0,
+        usersEngaged60d: 0, usersEngaged90d: 0, rotate: false, dormantCandidate: true,
+      },
+    ]);
+
+    const result = await AdminSystemPage();
+    const sourcesCard = findCardByHeading(result, "Sources");
+    expect(sourcesCard).not.toBeNull();
+    const sourcesBody = (sourcesCard!.props.children as unknown[])[2] as { type: { name?: string } };
+    expect(sourcesBody.type.name).not.toBe("EmptyState");
   });
 
   it("renders the funnel's five stages in order from a fixture counters dict", async () => {

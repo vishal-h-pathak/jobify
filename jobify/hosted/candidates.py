@@ -142,10 +142,38 @@ def _should_auto_admit(probe_result: dict, catalog_rows: list[dict]) -> bool:
     return True
 
 
+def _matched_title_terms(titles: list[str]) -> list[str]:
+    """Compact, replayable derivative of a probe's live posting titles:
+    which fixed-vocabulary keyword phrases (`_KEYWORD_TAG_RULES`) actually
+    appeared across them — NOT the titles themselves. Persisted to
+    `probe_result.top_title_terms` (P3 S6 flag: the raw `titles` list was
+    previously dropped entirely by `_compact_probe_result`, leaving a
+    later human APPROVAL — `web/lib/admin/candidates.ts::approveCandidate`
+    — with nothing to auto-tag from, unlike the discovery loop's own
+    auto-admit path which still has the live `titles` in hand at enqueue
+    time). The admin approve route re-derives tags from these terms via
+    the SAME fixed vocabulary, ported to TS as
+    `web/lib/portals/tierPacks.ts::deriveTagsFromKeywords` — feeding it
+    `top_title_terms.join(" ")` reuses that function directly rather than
+    duplicating `_KEYWORD_TAG_RULES` a third time.
+    """
+    matched: list[str] = []
+    for raw_title in titles:
+        text = f" {(raw_title or '').lower()} "
+        for keywords, _tags in _KEYWORD_TAG_RULES:
+            for kw in keywords:
+                if kw in text and kw not in matched:
+                    matched.append(kw)
+    return matched
+
+
 def _compact_probe_result(probe_result: dict) -> dict:
     """Trim the probe's ephemeral `titles` list before persisting to the
-    `probe_result` jsonb column — it only exists to drive
-    `derive_tags_from_titles` at enqueue time, not for later replay."""
+    `probe_result` jsonb column — full titles only ever existed to drive
+    `derive_tags_from_titles` at enqueue time, not for later replay, but
+    `top_title_terms` (a bounded, fixed-vocabulary derivative — see
+    `_matched_title_terms`) IS kept, so a later human approval still has
+    real auto-tag material instead of none."""
     if not probe_result.get("found"):
         return {"found": False, "reason": probe_result.get("reason")}
     return {
@@ -155,6 +183,7 @@ def _compact_probe_result(probe_result: dict) -> dict:
         "confidence": probe_result.get("confidence"),
         "live_posting_count": probe_result.get("live_posting_count"),
         "metadata_name": probe_result.get("metadata_name"),
+        "top_title_terms": _matched_title_terms(probe_result.get("titles") or []),
     }
 
 
@@ -170,6 +199,7 @@ def enqueue(
     proposed_slug: Optional[str] = None,
     catalog_rows: Optional[list[dict]] = None,
     allow_auto_admit: bool = True,
+    skip_catalog_name_dedup: bool = False,
 ) -> dict:
     """Enqueue one candidate company: dedup, probe, maybe auto-admit.
 
@@ -178,7 +208,14 @@ def enqueue(
       1. `candidate_boards`, ANY status, by `normalized_name` — a
          REJECTED candidate is never re-proposed.
       2. `board_catalog`, by normalized company name — already tracked
-         under a possibly different evidence path.
+         under a possibly different evidence path. Skipped when
+         `skip_catalog_name_dedup=True` (P3 S6's `evidence_kind=
+         "relocation"` caller, `jobify.hosted.board_health` — the
+         company is BY DEFINITION already in `board_catalog` as the dead
+         board itself, so this check would otherwise always fire and no
+         relocation could ever be proposed; dedup #1 above still applies,
+         so a given dead board only ever gets ONE relocation candidate,
+         ever, same as any other candidate).
     Either hit short-circuits to `{"outcome": "duplicate", ...}` with
     zero writes.
 
@@ -218,7 +255,7 @@ def enqueue(
         }
 
     rows = catalog_rows if catalog_rows is not None else db.list_board_catalog_rows()
-    if _catalog_has_company(rows, normalized):
+    if not skip_catalog_name_dedup and _catalog_has_company(rows, normalized):
         return {
             "outcome": "duplicate", "auto_admitted": False, "would_auto_admit": False,
             "candidate_id": None, "ats": None, "slug": None,

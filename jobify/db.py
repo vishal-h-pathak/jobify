@@ -709,16 +709,32 @@ def get_unmatched_postings(user_id: str) -> list[dict]:
 
 
 def list_board_catalog_rows() -> list[dict]:
-    """Every `board_catalog` row's `(ats, slug, company_name)` — read once
-    per candidates-cycle by `jobify.hosted.candidates.run_candidates_cycle`
-    for its dedup pass. Client-side full-table pull, same acceptable-at-
-    this-scale convention as `get_unmatched_postings` / `list_profile_user_ids`.
+    """Every `board_catalog` row's `(id, ats, slug, company_name, status)`
+    — read once per candidates-cycle by
+    `jobify.hosted.candidates.run_candidates_cycle` for its dedup pass,
+    and once per health-cycle by
+    `jobify.hosted.board_health.run_board_health_cycle` (P3 S6, which
+    needs `id`/`status` too — widened here rather than adding a near-
+    duplicate query function). Client-side full-table pull, same
+    acceptable-at-this-scale convention as `get_unmatched_postings` /
+    `list_profile_user_ids`.
     """
     return (
         _get_client().table("board_catalog")
-        .select("ats,slug,company_name")
+        .select("id,ats,slug,company_name,status")
         .execute().data or []
     )
+
+
+def update_board_catalog_status(board_id: str, status: str) -> None:
+    """Flip one `board_catalog` row's `status` by id — used by
+    `jobify.hosted.board_health.run_board_health_cycle` (P3 S6) to mark a
+    board `'dead'` on a health alert. The admin "Sources" card's dormant
+    button (`web/lib/admin/sourceHealth.ts`) sets `'dormant'` directly via
+    its own Supabase client instead of this Python helper — this function
+    is the Python-worker write path only.
+    """
+    _get_client().table("board_catalog").update({"status": status}).eq("id", board_id).execute()
 
 
 def insert_board_catalog_row(*, ats: str, slug: str, company_name: str, tags: list[str], added_by: str) -> None:
@@ -754,16 +770,97 @@ def list_postings_by_source(source: str) -> list[dict]:
     return rows
 
 
-def list_non_title_rejected_matches() -> list[dict]:
+def list_non_title_rejected_matches(since: str | None = None) -> list[dict]:
     """Every `matches` row whose `status` isn't `rejected_title` — i.e. it
     passed at least the stage-1 title filter. Read by
     `jobify.hosted.feeders.aggregator.route_candidates` (P2 S4): "a real
     user's filter liked a job at a company we don't track" is the
     system's highest-precision discovery signal. Client-side filter, same
     convention as `get_unmatched_postings`.
+
+    `since` (P3 S6 flag: the feeder used to full-table-scan every cycle)
+    filters to `created_at > since` server-side — `route_candidates`
+    passes its `feeder_cursors` cursor here so a repeat scan only reads
+    matches created since the last cycle. `created_at` is set once at
+    insert and never touched by a re-score (`upsert_match` never
+    includes it in its payload), so it's a stable, monotonic cursor field
+    even though a match row can be updated many times after insert.
     """
-    rows = _get_client().table("matches").select("posting_id,status").execute().data or []
+    query = _get_client().table("matches").select("posting_id,status,created_at")
+    if since:
+        query = query.gt("created_at", since)
+    rows = query.execute().data or []
     return [r for r in rows if r.get("status") != "rejected_title"]
+
+
+# ── HOSTED — board health (HUNT2 P3 S6) ──────────────────────────────────
+# `board_health` + `board_catalog.status` CHECK (0018) — see
+# `jobify.hosted.board_health` module docstring for the full contract.
+
+
+def upsert_board_health_row(
+    *, board_id: str, day: str, http_status: int | None,
+    posting_count: int | None, name_check_ok: bool | None,
+) -> None:
+    """Upsert one `board_health` row for `(board_id, day)` — the table's
+    own PK (0018) — so a board polled twice in one day (e.g. a cron run
+    plus a manual dispatch) overwrites with the later poll's result
+    rather than erroring on the PK conflict.
+    """
+    _get_client().table("board_health").upsert(
+        {
+            "board_id": board_id,
+            "day": day,
+            "http_status": http_status,
+            "posting_count": posting_count,
+            "name_check_ok": name_check_ok,
+        },
+        on_conflict="board_id,day",
+    ).execute()
+
+
+def has_nonzero_board_health_baseline(board_id: str, since_day: str) -> bool:
+    """True if any prior `board_health` row for `board_id` on or after
+    `since_day` recorded a nonzero `posting_count` — the "nonzero 90-day
+    baseline" a zero-posting poll is compared against
+    (`jobify.hosted.board_health`'s dead-board alert condition). A board
+    with NO history yet (first-ever poll) has no baseline to violate, so
+    callers should treat "no rows" as "don't alert on posting_count
+    alone" — this function alone can't distinguish that from "every
+    prior poll was already zero"; the caller decides which reading it
+    wants from the returned rows count if it needs to (P3 S6 doesn't).
+    """
+    rows = (
+        _get_client().table("board_health")
+        .select("posting_count")
+        .eq("board_id", board_id)
+        .gte("day", since_day)
+        .execute().data or []
+    )
+    return any((r.get("posting_count") or 0) > 0 for r in rows)
+
+
+def get_feeder_cursor(feeder: str) -> str | None:
+    """Return `feeder_cursors.cursor_at` for `feeder`, or `None` if it has
+    never run before (first-ever cycle reads everything, matching
+    pre-cursor behavior)."""
+    rows = (
+        _get_client().table("feeder_cursors")
+        .select("cursor_at")
+        .eq("feeder", feeder)
+        .execute().data or []
+    )
+    return rows[0].get("cursor_at") if rows else None
+
+
+def set_feeder_cursor(feeder: str, cursor_at: str) -> None:
+    """Advance `feeder_cursors.cursor_at` for `feeder` — upserted on the
+    table's own PK (`feeder`, 0018) so the first-ever run inserts and
+    every later one just moves the cursor forward."""
+    _get_client().table("feeder_cursors").upsert(
+        {"feeder": feeder, "cursor_at": cursor_at, "updated_at": _utcnow()},
+        on_conflict="feeder",
+    ).execute()
 
 
 def get_candidate_board(normalized_name: str) -> dict | None:

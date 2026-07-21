@@ -44,6 +44,7 @@ class _FakeQuery:
         self.upsert_on_conflict: str | None = None
         self.eq_calls: list[tuple[str, object]] = []
         self.gte_calls: list[tuple[str, object]] = []
+        self.gt_calls: list[tuple[str, object]] = []
 
     def select(self, *_a, **_k):
         self._mode = "select"
@@ -75,6 +76,10 @@ class _FakeQuery:
         return self
 
     def limit(self, *_a, **_kw):
+        return self
+
+    def gt(self, col, val):
+        self.gt_calls.append((col, val))
         return self
 
     def in_(self, col, vals):
@@ -973,3 +978,118 @@ def test_append_tailor_run_progress_accumulates_across_two_calls(patch_db_client
     assert progress_after_second[1]["label"] == "Generating cover letter"
     # First entry is carried through unchanged, not re-stamped.
     assert progress_after_second[0]["at"] == progress_after_first[0]["at"]
+
+
+# ── HUNT2 P3 S6: board health + feeder cursors ───────────────────────────
+
+
+def test_list_board_catalog_rows_selects_widened_columns(patch_db_client):
+    fake = _FakeClient({"board_catalog": [{"id": "b1", "ats": "greenhouse", "slug": "acme"}]})
+    patch_db_client(fake)
+
+    db.list_board_catalog_rows()
+
+    query = fake.queries[-1][1]
+    assert query._mode == "select"
+
+
+def test_update_board_catalog_status_writes_expected_payload(patch_db_client):
+    fake = _FakeClient({"board_catalog": [{"id": "b1"}]})
+    patch_db_client(fake)
+
+    db.update_board_catalog_status("b1", "dead")
+
+    query = fake.queries[-1][1]
+    assert query.update_payload == {"status": "dead"}
+    assert query.eq_calls == [("id", "b1")]
+
+
+def test_upsert_board_health_row_writes_expected_payload_and_on_conflict(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.upsert_board_health_row(
+        board_id="b1", day="2026-07-21", http_status=200, posting_count=3, name_check_ok=True,
+    )
+
+    query = fake.queries[-1][1]
+    assert query.upsert_payload == {
+        "board_id": "b1", "day": "2026-07-21", "http_status": 200,
+        "posting_count": 3, "name_check_ok": True,
+    }
+    assert query.upsert_on_conflict == "board_id,day"
+
+
+def test_has_nonzero_board_health_baseline_true_when_any_row_nonzero(patch_db_client):
+    fake = _FakeClient({"board_health": [
+        {"board_id": "b1", "posting_count": 0}, {"board_id": "b1", "posting_count": 5},
+    ]})
+    patch_db_client(fake)
+
+    assert db.has_nonzero_board_health_baseline("b1", "2026-04-22") is True
+
+
+def test_has_nonzero_board_health_baseline_false_when_all_zero(patch_db_client):
+    fake = _FakeClient({"board_health": [
+        {"board_id": "b1", "posting_count": 0}, {"board_id": "b1", "posting_count": None},
+    ]})
+    patch_db_client(fake)
+
+    assert db.has_nonzero_board_health_baseline("b1", "2026-04-22") is False
+
+
+def test_has_nonzero_board_health_baseline_false_when_no_rows(patch_db_client):
+    fake = _FakeClient({"board_health": []})
+    patch_db_client(fake)
+
+    assert db.has_nonzero_board_health_baseline("b1", "2026-04-22") is False
+
+
+def test_get_feeder_cursor_returns_none_when_never_run(patch_db_client):
+    fake = _FakeClient({"feeder_cursors": []})
+    patch_db_client(fake)
+
+    assert db.get_feeder_cursor("aggregator") is None
+
+
+def test_get_feeder_cursor_returns_stored_value(patch_db_client):
+    fake = _FakeClient({"feeder_cursors": [{"feeder": "aggregator", "cursor_at": "2026-07-01T00:00:00Z"}]})
+    patch_db_client(fake)
+
+    assert db.get_feeder_cursor("aggregator") == "2026-07-01T00:00:00Z"
+
+
+def test_set_feeder_cursor_writes_expected_payload_and_on_conflict(patch_db_client):
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.set_feeder_cursor("aggregator", "2026-07-21T00:00:00Z")
+
+    query = fake.queries[-1][1]
+    assert query.upsert_payload["feeder"] == "aggregator"
+    assert query.upsert_payload["cursor_at"] == "2026-07-21T00:00:00Z"
+    assert query.upsert_on_conflict == "feeder"
+
+
+def test_list_non_title_rejected_matches_without_cursor_reads_everything(patch_db_client):
+    fake = _FakeClient({"matches": [
+        {"posting_id": "p1", "status": "surfaced", "created_at": "2026-01-01T00:00:00Z"},
+        {"posting_id": "p2", "status": "rejected_title", "created_at": "2026-01-02T00:00:00Z"},
+    ]})
+    patch_db_client(fake)
+
+    rows = db.list_non_title_rejected_matches()
+
+    assert [r["posting_id"] for r in rows] == ["p1"]
+    query = fake.queries[-1][1]
+    assert query.gte_calls == []
+
+
+def test_list_non_title_rejected_matches_with_cursor_issues_gt_filter(patch_db_client):
+    fake = _FakeClient({"matches": [{"posting_id": "p1", "status": "surfaced", "created_at": "2026-01-02T00:00:00Z"}]})
+    patch_db_client(fake)
+
+    db.list_non_title_rejected_matches(since="2026-01-01T00:00:00Z")
+
+    query = fake.queries[-1][1]
+    assert query.gt_calls == [("created_at", "2026-01-01T00:00:00Z")]

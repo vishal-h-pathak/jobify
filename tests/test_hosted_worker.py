@@ -66,6 +66,19 @@ _CANDIDATES_SUMMARY = {
     "errored": 0,
 }
 
+# P3 S6: `_execute()` also runs `_run_board_health_pass()` (real pass hits
+# `jobify.db` + live ATS HTTP endpoints — no live Supabase/network in
+# tests). Every test below that drives a full, discovery-succeeds
+# `_execute()` call fakes this out too, same convention as
+# `_CANDIDATES_SUMMARY` above; `jobify.hosted.board_health` has its own
+# dedicated test file.
+_BOARD_HEALTH_SUMMARY = {
+    "polled": 0,
+    "dead_flagged": 0,
+    "relocation_proposed": 0,
+    "errored": 0,
+}
+
 
 def test_execute_calls_discovery_then_fanout(monkeypatch, capsys):
     calls: list[str] = []
@@ -83,11 +96,17 @@ def test_execute_calls_discovery_then_fanout(monkeypatch, capsys):
         calls.append("candidates")
         return dict(_CANDIDATES_SUMMARY)
 
+    def fake_board_health_pass():
+        calls.append("board_health")
+        return dict(_BOARD_HEALTH_SUMMARY)
+
     monkeypatch.setattr(worker.discovery, "run_discovery_cycle", fake_discovery)
     monkeypatch.setattr(worker, "_run_candidates_pass", fake_candidates_pass)
+    monkeypatch.setattr(worker, "_run_board_health_pass", fake_board_health_pass)
     monkeypatch.setattr(worker.fanout, "run_fanout_cycle", fake_fanout)
     monkeypatch.setattr(worker.db, "get_global_month_to_date_spend", lambda: 12.34)
     monkeypatch.setattr(worker.config, "HOSTED_GLOBAL_MONTHLY_CAP_USD", 100.0)
+    monkeypatch.setattr(worker.db, "insert_hunt_cycle_row", lambda **kw: None)
     ntfy_calls: list[str] = []
     monkeypatch.setattr(
         worker, "send_ntfy_summary", lambda line: ntfy_calls.append(line) or False
@@ -95,10 +114,12 @@ def test_execute_calls_discovery_then_fanout(monkeypatch, capsys):
 
     result = worker._execute()
 
-    # P2 S4: candidates pass runs between discovery and fan-out.
-    assert calls == ["discovery", "candidates", "fanout"]
+    # P2 S4/P3 S6: candidates then board_health pass run between discovery
+    # and fan-out.
+    assert calls == ["discovery", "candidates", "board_health", "fanout"]
     assert result == {
-        "discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY, "candidates": _CANDIDATES_SUMMARY,
+        "discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY,
+        "candidates": _CANDIDATES_SUMMARY, "board_health": _BOARD_HEALTH_SUMMARY,
     }
 
     printed = capsys.readouterr().out
@@ -137,6 +158,12 @@ def test_execute_aborts_cycle_when_discovery_raises(monkeypatch):
 
     monkeypatch.setattr(worker.discovery, "run_discovery_cycle", fake_discovery)
     monkeypatch.setattr(worker.fanout, "run_fanout_cycle", fake_fanout)
+    # `_execute()`'s `finally` block persists a `hunt_cycles` row on every
+    # exit path, including this one — mocked so this test never touches a
+    # real Supabase client regardless of environment (this exact gap was
+    # the live incident: `tests/conftest.py`'s guard is the structural
+    # backstop, this mock is still the correct primary fix).
+    monkeypatch.setattr(worker.db, "insert_hunt_cycle_row", lambda **kw: None)
 
     with pytest.raises(RuntimeError, match="discovery phase blew up"):
         worker._execute()
@@ -157,6 +184,7 @@ def test_execute_candidates_pass_failure_does_not_abort_fanout(monkeypatch, caps
 
     monkeypatch.setattr(worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY))
     monkeypatch.setattr(worker, "_run_candidates_pass", fake_candidates_pass)
+    monkeypatch.setattr(worker, "_run_board_health_pass", lambda: dict(_BOARD_HEALTH_SUMMARY))
     monkeypatch.setattr(
         worker.fanout,
         "run_fanout_cycle",
@@ -165,12 +193,14 @@ def test_execute_candidates_pass_failure_does_not_abort_fanout(monkeypatch, caps
     monkeypatch.setattr(worker.db, "get_global_month_to_date_spend", lambda: 0.0)
     monkeypatch.setattr(worker.config, "HOSTED_GLOBAL_MONTHLY_CAP_USD", 100.0)
     monkeypatch.setattr(worker, "send_ntfy_summary", lambda line: False)
+    monkeypatch.setattr(worker.db, "insert_hunt_cycle_row", lambda **kw: None)
 
     result = worker._execute()
 
     assert fanout_calls == ["fanout"]
     assert result["candidates"] == {"error": "candidates pass blew up"}
     assert result["fanout"] == _FANOUT_SUMMARY
+    assert result["board_health"] == _BOARD_HEALTH_SUMMARY
 
 
 def test_run_parses_once_flag_and_executes_one_cycle(monkeypatch):
@@ -192,6 +222,7 @@ def test_execute_discovery_only_never_calls_fanout(monkeypatch, capsys):
         worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY)
     )
     monkeypatch.setattr(worker, "_run_candidates_pass", lambda: dict(_CANDIDATES_SUMMARY))
+    monkeypatch.setattr(worker, "_run_board_health_pass", lambda: dict(_BOARD_HEALTH_SUMMARY))
     monkeypatch.setattr(
         worker.fanout,
         "run_fanout_cycle",
@@ -200,6 +231,7 @@ def test_execute_discovery_only_never_calls_fanout(monkeypatch, capsys):
     monkeypatch.setattr(worker.db, "get_global_month_to_date_spend", lambda: 0.0)
     monkeypatch.setattr(worker.config, "HOSTED_GLOBAL_MONTHLY_CAP_USD", 100.0)
     monkeypatch.setattr(worker, "send_ntfy_summary", lambda line: False)
+    monkeypatch.setattr(worker.db, "insert_hunt_cycle_row", lambda **kw: None)
 
     result = worker._execute(discovery_only=True)
 
@@ -219,6 +251,7 @@ def test_execute_with_user_id_scores_exactly_one_user(monkeypatch):
         worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY)
     )
     monkeypatch.setattr(worker, "_run_candidates_pass", lambda: dict(_CANDIDATES_SUMMARY))
+    monkeypatch.setattr(worker, "_run_board_health_pass", lambda: dict(_BOARD_HEALTH_SUMMARY))
 
     def fake_fanout(user_ids=None):
         seen_user_ids.append(user_ids)
@@ -228,6 +261,7 @@ def test_execute_with_user_id_scores_exactly_one_user(monkeypatch):
     monkeypatch.setattr(worker.db, "get_global_month_to_date_spend", lambda: 0.0)
     monkeypatch.setattr(worker.config, "HOSTED_GLOBAL_MONTHLY_CAP_USD", 100.0)
     monkeypatch.setattr(worker, "send_ntfy_summary", lambda line: False)
+    monkeypatch.setattr(worker.db, "insert_hunt_cycle_row", lambda **kw: None)
 
     worker._execute(user_id="user-abc")
 
@@ -280,6 +314,7 @@ def test_execute_persists_hunt_cycle_row_on_success(monkeypatch):
         worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY)
     )
     monkeypatch.setattr(worker, "_run_candidates_pass", lambda: dict(_CANDIDATES_SUMMARY))
+    monkeypatch.setattr(worker, "_run_board_health_pass", lambda: dict(_BOARD_HEALTH_SUMMARY))
     monkeypatch.setattr(
         worker.fanout, "run_fanout_cycle", lambda user_ids=None: dict(_FANOUT_SUMMARY)
     )
@@ -295,7 +330,8 @@ def test_execute_persists_hunt_cycle_row_on_success(monkeypatch):
     result = worker._execute()
 
     assert result == {
-        "discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY, "candidates": _CANDIDATES_SUMMARY,
+        "discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY,
+        "candidates": _CANDIDATES_SUMMARY, "board_health": _BOARD_HEALTH_SUMMARY,
     }
     assert len(persisted) == 1
     row = persisted[0]
@@ -305,10 +341,14 @@ def test_execute_persists_hunt_cycle_row_on_success(monkeypatch):
     assert row["users_scored"] == _FANOUT_SUMMARY["users_processed"]
     assert row["postings_fetched"] == _DISCOVERY_SUMMARY["fetched"]
     assert row["postings_upserted"] == _DISCOVERY_SUMMARY["upserted"]
-    # P2 S4: candidates counters land in the same jsonb, prefixed to avoid
-    # any (currently nonexistent) key collision with discovery's/fanout's.
+    # P2 S4/P3 S6: candidates' and board health's counters land in the
+    # same jsonb, each prefixed to avoid any (currently nonexistent) key
+    # collision with discovery's/fanout's.
     prefixed_candidates = {f"candidates_{k}": v for k, v in _CANDIDATES_SUMMARY.items()}
-    assert row["counters"] == {**_DISCOVERY_SUMMARY, **_FANOUT_SUMMARY, **prefixed_candidates}
+    prefixed_board_health = {f"board_health_{k}": v for k, v in _BOARD_HEALTH_SUMMARY.items()}
+    assert row["counters"] == {
+        **_DISCOVERY_SUMMARY, **_FANOUT_SUMMARY, **prefixed_candidates, **prefixed_board_health,
+    }
     assert row["cost_usd"] == _FANOUT_SUMMARY.get("cost_usd", 0.0)
     assert row["started_at"] and row["finished_at"]
 
@@ -359,6 +399,7 @@ def test_execute_persist_failure_does_not_crash_a_successful_cycle(monkeypatch):
         worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY)
     )
     monkeypatch.setattr(worker, "_run_candidates_pass", lambda: dict(_CANDIDATES_SUMMARY))
+    monkeypatch.setattr(worker, "_run_board_health_pass", lambda: dict(_BOARD_HEALTH_SUMMARY))
     monkeypatch.setattr(
         worker.fanout, "run_fanout_cycle", lambda user_ids=None: dict(_FANOUT_SUMMARY)
     )
@@ -374,5 +415,6 @@ def test_execute_persist_failure_does_not_crash_a_successful_cycle(monkeypatch):
     result = worker._execute()
 
     assert result == {
-        "discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY, "candidates": _CANDIDATES_SUMMARY,
+        "discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY,
+        "candidates": _CANDIDATES_SUMMARY, "board_health": _BOARD_HEALTH_SUMMARY,
     }

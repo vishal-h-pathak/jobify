@@ -168,6 +168,75 @@ def test_enqueue_auto_admits_on_high_confidence_metadata_match(fake_db, monkeypa
     }]
 
 
+# ── P3 S6: top_title_terms (auto-tag material for a later human approval) ──
+
+
+def test_enqueue_persists_top_title_terms_instead_of_raw_titles(fake_db, monkeypatch):
+    monkeypatch.setattr(
+        slug_probe, "probe_company_slug",
+        lambda *a, **k: _hit(titles=["Platform Engineer", "SRE", "Account Executive"]),
+    )
+
+    candidates.enqueue("Acme Corp", "manual", allow_auto_admit=False)
+
+    row = fake_db.candidate_rows["acme corp"]
+    assert "titles" not in row["probe_result"]
+    # "platform" (from "Platform Engineer") and "sre" (from "SRE") both
+    # fire the infra/devtools rule; "account executive" fires no rule in
+    # the fixed vocabulary.
+    assert row["probe_result"]["top_title_terms"] == ["platform", "sre"]
+
+
+def test_enqueue_top_title_terms_empty_when_no_keyword_matches(fake_db, monkeypatch):
+    monkeypatch.setattr(
+        slug_probe, "probe_company_slug",
+        lambda *a, **k: _hit(titles=["Office Manager", "Recruiter"]),
+    )
+
+    candidates.enqueue("Acme Corp", "manual", allow_auto_admit=False)
+
+    assert fake_db.candidate_rows["acme corp"]["probe_result"]["top_title_terms"] == []
+
+
+# ── P3 S6: skip_catalog_name_dedup (board_health's relocation proposals) ───
+
+
+def test_enqueue_skip_catalog_name_dedup_bypasses_catalog_check(fake_db, monkeypatch):
+    """`jobify.hosted.board_health` proposes a relocation for a company
+    that's BY DEFINITION already in `board_catalog` (as the dead board
+    itself) — without this flag, `_catalog_has_company` would always
+    short-circuit to `duplicate` and no relocation could ever be
+    proposed."""
+    fake_db.catalog_rows.append({"ats": "greenhouse", "slug": "acme", "company_name": "Acme Corp"})
+    monkeypatch.setattr(slug_probe, "probe_company_slug", lambda *a, **k: _hit(slug="acme-relocated"))
+
+    result = candidates.enqueue(
+        "Acme Corp", "relocation", skip_catalog_name_dedup=True, allow_auto_admit=False,
+    )
+
+    assert result["outcome"] == "inserted"
+    # allow_auto_admit=False still holds even though skip_catalog_name_dedup
+    # bypassed the OTHER dedup check — no silent auto-swap.
+    assert result["auto_admitted"] is False
+    assert fake_db.candidate_rows["acme corp"]["status"] == "pending"
+
+
+def test_enqueue_skip_catalog_name_dedup_still_dedups_against_candidate_queue(fake_db, monkeypatch):
+    """Dedup #1 (`candidate_boards`, ANY status) still applies even with
+    `skip_catalog_name_dedup=True` — a dead board only ever gets ONE
+    relocation candidate, ever."""
+    fake_db.candidate_rows["acme corp"] = {"id": "1", "status": "rejected"}
+    calls = []
+    monkeypatch.setattr(slug_probe, "probe_company_slug", lambda *a, **k: calls.append(1))
+
+    result = candidates.enqueue(
+        "Acme Corp", "relocation", skip_catalog_name_dedup=True, allow_auto_admit=False,
+    )
+
+    assert result["outcome"] == "duplicate"
+    assert calls == []
+
+
 def test_enqueue_stays_pending_when_metadata_name_missing_lever_proxy(fake_db, monkeypatch):
     """Lever never exposes board metadata — every hit is the discounted
     slug-overlap proxy, so it must never auto-admit even at a high raw

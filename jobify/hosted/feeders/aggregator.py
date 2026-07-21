@@ -19,14 +19,20 @@ spec doc (`remoteok/wwr/remotive/serpapi/jsearch`, some of which this
 repo's `jobify/hunt/sources/` doesn't actually have) so it stays correct
 if discovery's non-portal source list changes.
 
-Statelessness note (judgment call): "the latest cycle's matches" is
-interpreted as "the current `matches` table", not a cycle-scoped window —
-`jobify.hosted.candidates`' own dedup (against `candidate_boards` ANY
-status, then `board_catalog`) already makes a re-scan of an
-already-processed company a cheap, idempotent no-op, so no separate
-cycle-boundary cursor/state is needed. Revisit if `matches`' row count
-makes the full-table read expensive (same category of scale caveat
-`jobify.db.get_unmatched_postings` already documents for itself).
+Statelessness note (SUPERSEDED, P3 S6): this used to full-table-scan the
+current `matches` table every cycle — `jobify.hosted.candidates`' own
+dedup (against `candidate_boards` ANY status, then `board_catalog`)
+already makes a re-scan of an already-processed company a cheap,
+idempotent no-op, so correctness never depended on a cursor. But the
+read itself got expensive as `matches` grew (same category of scale
+caveat `jobify.db.get_unmatched_postings` already documents for itself),
+so this now reads only rows created since the last cycle's cursor
+(`feeder_cursors` table, 0018) and advances it to the max `created_at`
+seen — `jobify.db.list_non_title_rejected_matches`'s own docstring notes
+why `created_at` is a safe, stable cursor field despite matches being
+re-scored (upserted) many times after insert. A feeder that has never
+run before has no cursor yet and reads everything, same as before this
+change.
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ from jobify.hosted.candidates import normalize_company_name
 from jobify.hosted.feeders._ats_url import parse_ats_slug
 
 _PORTAL_SOURCES = frozenset({"greenhouse", "lever", "ashby", "workday"})
+_CURSOR_NAME = "aggregator"
 
 
 def route_candidates() -> list[dict]:
@@ -43,9 +50,17 @@ def route_candidates() -> list[dict]:
     non-portal-source posting whose company isn't already catalogued, as
     `jobify.hosted.candidates.enqueue`-shaped items.
     """
-    matches = db.list_non_title_rejected_matches()
+    cursor = db.get_feeder_cursor(_CURSOR_NAME)
+    matches = db.list_non_title_rejected_matches(since=cursor)
     if not matches:
         return []
+
+    # Computed now but only PERSISTED at the very end, after `out` is
+    # fully built — if anything below raises partway, the cursor must
+    # NOT have moved yet, or these matches would be silently skipped on
+    # every future scan instead of safely (if redundantly) reconsidered.
+    newest_created_at = max((m.get("created_at") for m in matches if m.get("created_at")), default=None)
+
     posting_ids = list({m["posting_id"] for m in matches if m.get("posting_id")})
     if not posting_ids:
         return []
@@ -82,4 +97,7 @@ def route_candidates() -> list[dict]:
             item["proposed_ats"] = ats
             item["proposed_slug"] = slug
         out.append(item)
+
+    if newest_created_at:
+        db.set_feeder_cursor(_CURSOR_NAME, newest_created_at)
     return out

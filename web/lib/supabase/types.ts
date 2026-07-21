@@ -440,7 +440,12 @@ export interface Database {
       // by web/scripts/importBoardCatalog.ts. RLS: authenticated SELECT
       // (tier-pack computation reads this client-reachable), service-role
       // ALL (only the import script and, later, S4's candidate-queue
-      // admission flow write here).
+      // admission flow write here). `status` narrowed from bare `string`
+      // (HUNT2 P3 S6, 0018's CHECK constraint — the first time this
+      // column was ever constrained) to the three values any write path
+      // actually uses: `'active'` (every row until this session),
+      // `'dead'` (a board_health alert, `jobify.hosted.board_health`),
+      // `'dormant'` (the admin Sources card's kill-rule button).
       board_catalog: {
         Row: {
           id: string;
@@ -448,7 +453,7 @@ export interface Database {
           slug: string;
           company_name: string;
           tags: string[];
-          status: string;
+          status: "active" | "dormant" | "dead";
           added_by: string;
           verified_at: string | null;
         };
@@ -458,13 +463,13 @@ export interface Database {
           slug: string;
           company_name: string;
           tags?: string[];
-          status?: string;
+          status?: "active" | "dormant" | "dead";
           added_by?: string;
           verified_at?: string | null;
         };
         Update: {
           tags?: string[];
-          status?: string;
+          status?: "active" | "dormant" | "dead";
           verified_at?: string | null;
         };
         Relationships: [];
@@ -511,8 +516,61 @@ export interface Database {
         };
         Relationships: [];
       };
+      // HUNT2 P3 S6 (0018_board_health.sql): one row per (board_id, day) —
+      // the Python worker's `run_board_health_cycle` upserts it every
+      // poll. RLS: service-role ALL only, same posture as
+      // `candidate_boards` — the admin Sources card reads it only
+      // indirectly, via the `source_funnel_rollup` view below.
+      board_health: {
+        Row: {
+          board_id: string;
+          day: string;
+          http_status: number | null;
+          posting_count: number | null;
+          name_check_ok: boolean | null;
+        };
+        Insert: { [key: string]: never };
+        Update: { [key: string]: never };
+        Relationships: [];
+      };
+      // HUNT2 P3 S6 (0018_board_health.sql): tiny per-feeder cursor state
+      // (today just `jobify.hosted.feeders.aggregator`'s incremental-scan
+      // cursor). Worker-internal bookkeeping — the web app never reads or
+      // writes this table.
+      feeder_cursors: {
+        Row: {
+          feeder: string;
+          cursor_at: string | null;
+          updated_at: string;
+        };
+        Insert: { [key: string]: never };
+        Update: { [key: string]: never };
+        Relationships: [];
+      };
     };
-    Views: Record<string, never>;
+    Views: {
+      // HUNT2 P3 S6 (0018_board_health.sql): per (source, paid-query,
+      // catalog board) funnel rollup — see
+      // `web/lib/admin/sourceHealth.ts` for the read surface and kill-
+      // rule flag derivation. Read-only from the web side (a plain SQL
+      // view, no Insert/Update policy applies).
+      source_funnel_rollup: {
+        Row: {
+          source: string | null;
+          query_key: string | null;
+          board_id: string | null;
+          board_company_name: string | null;
+          board_status: "active" | "dormant" | "dead" | null;
+          postings_60d: number | null;
+          postings_90d: number | null;
+          surfaced_60d: number | null;
+          surfaced_90d: number | null;
+          users_engaged_60d: number | null;
+          users_engaged_90d: number | null;
+        };
+        Relationships: [];
+      };
+    };
     Functions: {
       // migration 0005 — SECURITY DEFINER invite claim (see lib/db/invites.ts)
       claim_invite: {

@@ -48,7 +48,7 @@ import logging
 from datetime import datetime, timezone
 
 from jobify import config, db
-from jobify.hosted import candidates, discovery, fanout
+from jobify.hosted import board_health, candidates, discovery, fanout
 from jobify.hosted.feeders import aggregator as aggregator_feeder
 from jobify.hosted.feeders import hn as hn_feeder
 from jobify.hosted.feeders import serpapi_dork as serpapi_dork_feeder
@@ -80,6 +80,7 @@ def _summary_line(
     global_spend: float | None = None,
     global_cap: float | None = None,
     candidates_summary: dict | None = None,
+    board_health_summary: dict | None = None,
 ) -> str:
     """Render both cycles' summary dicts as one terminal/GHA-step-summary
     line. Field names are read straight off Task 2/3's own return-dict
@@ -118,6 +119,12 @@ def _summary_line(
             f"inserted={candidates_summary.get('inserted')} "
             f"auto_admitted={candidates_summary.get('auto_admitted')}"
         )
+    if board_health_summary is not None:
+        line += (
+            f" | board_health: polled={board_health_summary.get('polled')} "
+            f"dead_flagged={board_health_summary.get('dead_flagged')} "
+            f"relocation_proposed={board_health_summary.get('relocation_proposed')}"
+        )
     return line
 
 
@@ -149,6 +156,18 @@ def _run_candidates_pass() -> dict:
         except Exception as exc:  # noqa: BLE001 — one feeder's failure must not drop the others
             logger.error("hosted worker: candidates feeder %s failed: %s", name, exc)
     return candidates.run_candidates_cycle(items)
+
+
+def _run_board_health_pass() -> dict:
+    """Post-discovery step (P3 S6, planning/HUNT2_SOURCES.md §5): polls
+    every `board_catalog` row (zero LLM), records today's `board_health`
+    row per board, and flags/proposes-relocation-for any board that just
+    went dead. Runs in every mode (full/discovery_only/single-user), same
+    as the candidates pass — it's zero-LLM and reads/writes global state,
+    not per-user state, so there's no reason to skip it on a
+    discovery-only or single-user cycle.
+    """
+    return board_health.run_board_health_cycle()
 
 
 def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
@@ -187,6 +206,7 @@ def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
     discovery_summary: dict | None = None
     fanout_summary: dict | None = None
     candidates_summary: dict | None = None
+    board_health_summary: dict | None = None
     error: str | None = None
 
     try:
@@ -204,6 +224,14 @@ def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
             candidates_summary = {"error": str(exc)}
             logger.error("hosted worker: candidates pass failed: %s", exc)
 
+        # P3 S6: board health polling — same posture as the candidates
+        # pass above (its own try/except, never blocks fan-out).
+        try:
+            board_health_summary = _run_board_health_pass()
+        except Exception as exc:  # noqa: BLE001 — board health is a side quest; never abort the cycle over it
+            board_health_summary = {"error": str(exc)}
+            logger.error("hosted worker: board health pass failed: %s", exc)
+
         if discovery_only:
             fanout_summary = dict(_EMPTY_FANOUT_SUMMARY)
         else:
@@ -215,7 +243,8 @@ def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
         global_spend = db.get_global_month_to_date_spend()
         global_cap = config.HOSTED_GLOBAL_MONTHLY_CAP_USD
         summary_line = _summary_line(
-            mode, discovery_summary, fanout_summary, global_spend, global_cap, candidates_summary,
+            mode, discovery_summary, fanout_summary, global_spend, global_cap,
+            candidates_summary, board_health_summary,
         )
 
         # Logs/print always fire regardless of ntfy's outcome (unset topic,
@@ -224,13 +253,16 @@ def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
         # the success path, same as before ADM-2 Task 2 — a failure never
         # gets a summary line (there's nothing coherent to summarize).
         logger.info(
-            "hosted worker cycle done: discovery=%s fanout=%s candidates=%s",
-            discovery_summary, fanout_summary, candidates_summary,
+            "hosted worker cycle done: discovery=%s fanout=%s candidates=%s board_health=%s",
+            discovery_summary, fanout_summary, candidates_summary, board_health_summary,
         )
         print(summary_line)
         send_ntfy_summary(summary_line)
 
-        return {"discovery": discovery_summary, "fanout": fanout_summary, "candidates": candidates_summary}
+        return {
+            "discovery": discovery_summary, "fanout": fanout_summary,
+            "candidates": candidates_summary, "board_health": board_health_summary,
+        }
     except Exception as exc:  # noqa: BLE001 — record, then re-raise unchanged (fail-loud policy above)
         error = str(exc)
         raise
@@ -253,10 +285,14 @@ def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
         # are prefixed `candidates_*` when folded in here — they don't
         # collide with discovery's/fanout's own keys today, but the prefix
         # makes that guarantee explicit rather than accidental.
+        # P3 S6: board health's own counter names (polled/dead_flagged/...)
+        # get the same `board_health_*` prefix treatment as candidates'.
         prefixed_candidates = {f"candidates_{k}": v for k, v in (candidates_summary or {}).items()}
+        prefixed_board_health = {f"board_health_{k}": v for k, v in (board_health_summary or {}).items()}
         merged_counters = (
-            {**(discovery_summary or {}), **(fanout_summary or {}), **prefixed_candidates}
-            if discovery_summary is not None or fanout_summary is not None or candidates_summary is not None
+            {**(discovery_summary or {}), **(fanout_summary or {}), **prefixed_candidates, **prefixed_board_health}
+            if discovery_summary is not None or fanout_summary is not None
+            or candidates_summary is not None or board_health_summary is not None
             else None
         )
         try:

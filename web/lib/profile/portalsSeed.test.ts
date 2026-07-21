@@ -56,9 +56,26 @@ describe("buildPortalsDoc", () => {
       greenhouse: [{ slug: "acme", name: "Acme" }],
       lever: [],
       ashby: [{ slug: "beta", name: "Beta Co" }],
+      workday: [],
     }) as Record<string, { companies: unknown[] }>;
     expect(doc.greenhouse.companies).toEqual([{ slug: "acme", name: "Acme" }]);
     expect(doc.ashby.companies).toEqual([{ slug: "beta", name: "Beta Co" }]);
+  });
+
+  it("decodes a workday seed's encoded slug back into tenant/site/dc (HUNT2 P3 S6)", () => {
+    const doc = buildPortalsDoc({ tiers: [] }, undefined, {
+      greenhouse: [], lever: [], ashby: [],
+      workday: [{ slug: "acme/wd1/External", name: "Acme Corp" }],
+    }) as Record<string, { companies: unknown[] }>;
+    expect(doc.workday.companies).toEqual([{ tenant: "acme", dc: "wd1", site: "External", name: "Acme Corp" }]);
+  });
+
+  it("drops a malformed workday slug instead of writing it out half-decoded", () => {
+    const doc = buildPortalsDoc({ tiers: [] }, undefined, {
+      greenhouse: [], lever: [], ashby: [],
+      workday: [{ slug: "not-a-valid-slug", name: "Broken Co" }],
+    }) as Record<string, { companies: unknown[] }>;
+    expect(doc.workday.companies).toEqual([]);
   });
 });
 
