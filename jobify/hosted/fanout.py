@@ -382,6 +382,27 @@ def _mark_embedding_fresh(profile_dir: Path, updated_at: str) -> None:
 # ── Stage 3 support: cosine rerank ────────────────────────────────────────
 
 
+def _coerce_vec(vec: object) -> Optional[list[float]]:
+    """Live-fire fix 2026-07-21 (cycle 51): `profiles.embedding` /
+    `postings.embedding` are pgvector columns, and PostgREST returns them
+    as a JSON STRING ("[0.017,...]"), not a list — `_cosine` then zipped
+    the string character-by-character and raised TypeError, killing the
+    whole ladder for the user (stage 3's degrade contract only covered
+    MISSING vectors, not malformed ones). Coerce at the load boundary;
+    anything unparseable degrades to None (stage 3 skips, ladder 1->2->4).
+    """
+    if vec is None:
+        return None
+    if isinstance(vec, str):
+        try:
+            vec = json.loads(vec)
+        except (ValueError, TypeError):
+            return None
+    if isinstance(vec, (list, tuple)) and vec and all(isinstance(x, (int, float)) for x in vec):
+        return [float(x) for x in vec]
+    return None
+
+
 def _cosine(a: list[float], b: list[float]) -> Optional[float]:
     """Plain-Python cosine similarity — numpy is not a dependency of this
     repo (checked `pyproject.toml` first per the brief) and this is a
@@ -435,7 +456,7 @@ def _stage3_embed_rerank(
         recomputed = embed.ensure_profile_embedding(
             user_id, _profile_embed_text(profile_dir), force=force, counters=counters,
         )
-        profile_vec = db.get_profile_embedding(user_id)
+        profile_vec = _coerce_vec(db.get_profile_embedding(user_id))
     except Exception as exc:  # noqa: BLE001 — stage 3 is best-effort, never fatal to the ladder
         logger.error("fanout: profile embedding failed for user_id=%s: %s", user_id, exc)
         return {}
@@ -451,7 +472,7 @@ def _stage3_embed_rerank(
             embed.ensure_posting_embedding(
                 posting_id, _posting_embed_text(posting), counters=counters,
             )
-            posting_vec = db.get_posting_embedding(posting_id)
+            posting_vec = _coerce_vec(db.get_posting_embedding(posting_id))
         except Exception as exc:  # noqa: BLE001 — one posting's embed failure must not drop the rest
             logger.error(
                 "fanout: posting embedding failed for posting_id=%s: %s", posting_id, exc,
@@ -459,7 +480,11 @@ def _stage3_embed_rerank(
             continue
         if posting_vec is None:
             continue
-        score = _cosine(profile_vec, posting_vec)
+        try:
+            score = _cosine(profile_vec, posting_vec)
+        except Exception as exc:  # noqa: BLE001 — rerank math must never kill the ladder
+            logger.error("fanout: cosine failed for posting_id=%s: %s", posting_id, exc)
+            continue
         if score is not None:
             scores[posting_id] = score
     return scores
@@ -725,10 +750,19 @@ def _run_user_ladder(
             stage2_survivors.append((posting, result))
 
     # ── Stage 3: embedding rerank (skips cleanly when disabled). ────────
-    embed_scores = (
-        _stage3_embed_rerank(user_id, profile_dir, stage2_survivors, counters)
-        if stage2_survivors else {}
-    )
+    # Live-fire fix 2026-07-21: stage 3 is best-effort BY CONTRACT — no
+    # failure inside it may abort the ladder (cycle 51 zeroed a user's
+    # entire hunt on a rerank TypeError). Degrade to no-embed-scores.
+    try:
+        embed_scores = (
+            _stage3_embed_rerank(user_id, profile_dir, stage2_survivors, counters)
+            if stage2_survivors else {}
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "fanout: stage 3 rerank failed for user_id=%s — proceeding 1->2->4: %s", user_id, exc
+        )
+        embed_scores = {}
     counters["embedded"] += len(embed_scores)
 
     # Every stage-2 survivor gets written now, status=`rejected_rerank`
