@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getOrCreateSession } from "@/lib/db/onboardingSession";
-import { hasClaimedInvite } from "@/lib/db/invites";
-import { isAdmin } from "@/lib/admin/isAdmin";
+import { hasAccess } from "@/lib/db/access";
 import { runInterviewTurn } from "@/lib/anthropic/interview";
 import { handleOnboardingTurn } from "@/lib/onboarding/handleTurn";
 import type { ModulesState } from "@/lib/onboarding/moduleRegistry";
@@ -20,7 +19,7 @@ export async function POST(request: Request) {
   // API routes are reachable directly. No claimed invite → no LLM spend,
   // no profile writes (spec: 12_h3_onboarding_web.md task 2).
   // Admins bypass the invite gate — they may not hold a claimed code.
-  if (!isAdmin(user) && !(await hasClaimedInvite(supabase))) {
+  if (!(await hasAccess(supabase, user))) {
     return NextResponse.json({ error: "invite required" }, { status: 403 });
   }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const getUserMock = vi.fn();
-const hasClaimedInviteMock = vi.fn();
+const hasAccessMock = vi.fn();
 const intakeCompleteMock = vi.fn();
 const redirectMock = vi.fn((url: string) => {
   throw new Error(`REDIRECT:${url}`);
@@ -11,7 +11,7 @@ vi.mock("next/navigation", () => ({ redirect: redirectMock }));
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock } })),
 }));
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 vi.mock("@/lib/onboarding/intakeComplete", () => ({ intakeComplete: intakeCompleteMock }));
 
 const { default: Home } = await import("./page");
@@ -19,32 +19,32 @@ const { default: Home } = await import("./page");
 describe("landing page (/)", () => {
   beforeEach(() => {
     getUserMock.mockClear();
-    hasClaimedInviteMock.mockClear();
+    hasAccessMock.mockClear();
     intakeCompleteMock.mockReset();
     intakeCompleteMock.mockResolvedValue(true);
     redirectMock.mockClear();
   });
 
-  it("redirects signed-in visitors with a claimed invite and a complete intake straight to /feed", async () => {
+  it("redirects signed-in visitors with access (fresh session, no prior cookies) and a complete intake straight to /feed", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
 
     await expect(Home()).rejects.toThrow("REDIRECT:/feed");
   });
 
-  it("redirects signed-in visitors with a claimed invite but an incomplete intake to /onboarding, not /feed", async () => {
+  it("redirects signed-in visitors with access but an incomplete intake to /onboarding, not /feed", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     intakeCompleteMock.mockResolvedValue(false);
 
     await expect(Home()).rejects.toThrow("REDIRECT:/onboarding");
   });
 
-  it("renders the pitch for a signed-out visitor, without checking invite or intake state", async () => {
+  it("renders the pitch for a signed-out visitor, without checking access or intake state", async () => {
     getUserMock.mockResolvedValue({ data: { user: null } });
 
     const result = await Home();
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
+    expect(hasAccessMock).not.toHaveBeenCalled();
     expect(intakeCompleteMock).not.toHaveBeenCalled();
 
     const [, , , ctas] = result.props.children;
@@ -53,13 +53,26 @@ describe("landing page (/)", () => {
     expect(signInLink.props.href).toBe("/login");
   });
 
-  it("renders the pitch (no redirect) for a signed-in visitor with no claimed invite yet", async () => {
-    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+  it("2026-07-21 fix: Sign in is the primary CTA, not I have an invite — auth comes before any invite step", async () => {
+    getUserMock.mockResolvedValue({ data: { user: null } });
 
     const result = await Home();
-    expect(result.props.children).toBeTruthy();
-    expect(redirectMock).not.toHaveBeenCalled();
+    const [, , , ctas] = result.props.children;
+    const [inviteLink, signInLink] = ctas.props.children;
+    expect(signInLink.props.className).toMatch(/bg-amber/);
+    expect(inviteLink.props.className).not.toMatch(/bg-amber/);
+  });
+
+  it("2026-07-21 fix: an authenticated visitor with no access (unclaimed, not allowlisted, not admin) redirects to /invite — never the pitch", async () => {
+    // Previously this branch rendered the marketing pitch for ANY signed-in
+    // visitor without a claimed invite, authenticated or not distinguishing
+    // allowlist status. The pitch is now anon-only; every authenticated
+    // visitor is routed onward by the same hasAccess predicate every other
+    // gate uses.
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasAccessMock.mockResolvedValue(false);
+
+    await expect(Home()).rejects.toThrow("REDIRECT:/invite");
     expect(intakeCompleteMock).not.toHaveBeenCalled();
   });
 

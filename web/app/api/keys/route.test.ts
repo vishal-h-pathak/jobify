@@ -6,8 +6,8 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => fakeSupabase),
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const saveApiKeyMock = vi.fn(async () => {});
 const deleteApiKeyMock = vi.fn(async () => {});
@@ -43,7 +43,7 @@ function jsonRequest(body: unknown) {
 describe("POST /api/keys", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     saveApiKeyMock.mockClear();
   });
 
@@ -56,7 +56,7 @@ describe("POST /api/keys", () => {
 
   it("403s without a claimed invite — the (app) layout gates pages only, not this route", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await callPost(jsonRequest({ key: "sk-ant-abcdefghijklmnop" }));
     expect(res.status).toBe(403);
     expect(saveApiKeyMock).not.toHaveBeenCalled();
@@ -64,7 +64,7 @@ describe("POST /api/keys", () => {
 
   it("400s on a key that doesn't look like an Anthropic key", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await callPost(jsonRequest({ key: "not-a-key" }));
     expect(res.status).toBe(400);
     expect(saveApiKeyMock).not.toHaveBeenCalled();
@@ -72,7 +72,7 @@ describe("POST /api/keys", () => {
 
   it("saves the key and the response body only ever contains last4, never the plaintext", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await callPost(jsonRequest({ key: "sk-ant-abcdefghijklmnop" }));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -85,7 +85,7 @@ describe("POST /api/keys", () => {
 describe("DELETE /api/keys", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     deleteApiKeyMock.mockClear();
   });
 
@@ -98,7 +98,7 @@ describe("DELETE /api/keys", () => {
 
   it("403s without a claimed invite", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await callDelete();
     expect(res.status).toBe(403);
     expect(deleteApiKeyMock).not.toHaveBeenCalled();
@@ -106,7 +106,7 @@ describe("DELETE /api/keys", () => {
 
   it("removes the signed-in user's key", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await callDelete();
     expect(res.status).toBe(200);
     expect(deleteApiKeyMock).toHaveBeenCalledWith(fakeSupabase, "user-1");

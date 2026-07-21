@@ -2,7 +2,7 @@ import Link from "next/link";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { hasClaimedInvite } from "@/lib/db/invites";
+import { hasAccess } from "@/lib/db/access";
 import { isAdmin } from "@/lib/admin/isAdmin";
 import { intakeComplete } from "@/lib/onboarding/intakeComplete";
 import { deriveWelcomeBack } from "@/lib/onboarding/welcomeBack";
@@ -31,9 +31,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!user) redirect("/login");
 
   // Admins bypass the invite gate — they may not hold a claimed code.
+  // (hasAccess would also grant them, but short-circuiting here skips the
+  // DB round-trip entirely for the common admin-navigating-around case.)
   const admin = isAdmin(user);
-  const claimed = admin || (await hasClaimedInvite(supabase));
-  if (!claimed) redirect("/invite");
+  if (!admin && !(await hasAccess(supabase, user))) redirect("/invite");
 
   const complete = await intakeComplete(supabase, user.id);
 

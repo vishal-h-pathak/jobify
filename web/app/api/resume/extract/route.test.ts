@@ -5,8 +5,8 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock } })),
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -29,7 +29,7 @@ function formDataRequest(file: File | null) {
 describe("POST /api/resume/extract", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     extractTextMock.mockReset();
@@ -44,7 +44,7 @@ describe("POST /api/resume/extract", () => {
 
   it("403s without a claimed invite for a non-admin", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await POST(formDataRequest(new File(["x"], "resume.pdf")));
     expect(res.status).toBe(403);
     expect(extractTextMock).not.toHaveBeenCalled();
@@ -52,7 +52,7 @@ describe("POST /api/resume/extract", () => {
 
   it("400s when the file field is absent", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(formDataRequest(null));
     expect(res.status).toBe(400);
     expect(extractTextMock).not.toHaveBeenCalled();
@@ -60,7 +60,7 @@ describe("POST /api/resume/extract", () => {
 
   it("wires the uploaded file's name and bytes into extractText, and 200s with the extracted text", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     extractTextMock.mockResolvedValue({ ok: true, text: "Alex Quinn — extracted resume text" });
 
     const file = new File(["%PDF-1.4 fake bytes"], "resume.pdf", { type: "application/pdf" });
@@ -79,7 +79,7 @@ describe("POST /api/resume/extract", () => {
 
   it("maps an { ok: false } extraction result to 422, not 400 or 500 — a semantically invalid upload, not a malformed request", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     extractTextMock.mockResolvedValue({ ok: false, error: "Couldn't read text in this PDF — paste it instead." });
 
     const file = new File(["not text"], "resume.pdf", { type: "application/pdf" });

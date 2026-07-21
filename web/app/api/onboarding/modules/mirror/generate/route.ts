@@ -2,12 +2,12 @@ import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getOrCreateSession, saveSession } from "@/lib/db/onboardingSession";
-import { hasClaimedInvite } from "@/lib/db/invites";
-import { isAdmin } from "@/lib/admin/isAdmin";
+import { hasAccess } from "@/lib/db/access";
 import { recordOnboardingTurn } from "@/lib/db/ledger";
 import { ONBOARDING_MODEL } from "@/lib/anthropic/client";
 import { runMirrorGenerationTurn } from "@/lib/anthropic/moduleTurns";
 import { filterVerbatim } from "@/lib/onboarding/verbatim";
+import { buildVerbatimCorpus } from "@/lib/onboarding/verbatimCorpus";
 
 const REGENERATION_BUDGET = 2;
 
@@ -93,13 +93,6 @@ function buildExtractedSummary(extracted: Record<string, unknown>): string {
   return sections.join("\n\n");
 }
 
-function userMessagesText(session: { messages: Array<{ role: string; content: string }> }): string {
-  return (session.messages ?? [])
-    .filter((m) => m.role === "user")
-    .map((m) => m.content)
-    .join("\n");
-}
-
 /**
  * V3A-B2 task 5: the mirror-generation POST. `mirror_generation_count`
  * (stored on `session.extracted`) is the single shared budget for BOTH the
@@ -123,7 +116,7 @@ export async function POST() {
   if (!user) {
     return NextResponse.json({ error: "not signed in" }, { status: 401 });
   }
-  if (!isAdmin(user) && !(await hasClaimedInvite(supabase))) {
+  if (!(await hasAccess(supabase, user))) {
     return NextResponse.json({ error: "invite required" }, { status: 403 });
   }
 
@@ -141,7 +134,7 @@ export async function POST() {
   }
 
   const extractedSummary = buildExtractedSummary(session.extracted);
-  const corpus = userMessagesText(session);
+  const corpus = buildVerbatimCorpus(session);
   const admin = createSupabaseAdminClient();
 
   let count = startingCount;

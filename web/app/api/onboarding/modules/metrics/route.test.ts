@@ -5,8 +5,8 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock } })),
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -52,7 +52,7 @@ const BASE_SESSION = {
 describe("POST /api/onboarding/modules/metrics", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getOrCreateSessionMock.mockReset();
@@ -72,14 +72,14 @@ describe("POST /api/onboarding/modules/metrics", () => {
 
   it("403s without a claimed invite for a non-admin", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await POST(jsonRequest({ marks: [] }));
     expect(res.status).toBe(403);
   });
 
   it("400s when marks isn't a well-formed array", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ marks: [{ id: "claim_1" }] }));
     expect(res.status).toBe(400);
     expect(saveSessionMock).not.toHaveBeenCalled();
@@ -87,7 +87,7 @@ describe("POST /api/onboarding/modules/metrics", () => {
 
   it("400s when the extract step never ran (no extracted.metrics.claims)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getOrCreateSessionMock.mockResolvedValue({ ...BASE_SESSION, extracted: {} });
     const res = await POST(
       jsonRequest({ marks: [{ id: "claim_1", confident: true }, { id: "claim_2", confident: false }] })
@@ -98,7 +98,7 @@ describe("POST /api/onboarding/modules/metrics", () => {
 
   it("400s when marks is missing a claim id", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ marks: [{ id: "claim_1", confident: true }] }));
     expect(res.status).toBe(400);
     expect(saveSessionMock).not.toHaveBeenCalled();
@@ -106,7 +106,7 @@ describe("POST /api/onboarding/modules/metrics", () => {
 
   it("400s when marks includes an unknown claim id", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(
       jsonRequest({
         marks: [
@@ -122,7 +122,7 @@ describe("POST /api/onboarding/modules/metrics", () => {
 
   it("400s when marks duplicates a claim id", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(
       jsonRequest({
         marks: [
@@ -138,7 +138,7 @@ describe("POST /api/onboarding/modules/metrics", () => {
 
   it("happy path: splits confirmed/never_use, marks metrics complete, and saves the session", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(
       jsonRequest({ marks: [{ id: "claim_1", confident: true }, { id: "claim_2", confident: false }] })
     );
@@ -166,7 +166,7 @@ describe("POST /api/onboarding/modules/metrics", () => {
 
   it("skips applyMetricsToDoc/upsertProfileDoc when no profiles row exists yet", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getProfileDocMock.mockResolvedValue(null);
     await POST(jsonRequest({ marks: [{ id: "claim_1", confident: true }, { id: "claim_2", confident: false }] }));
     expect(upsertProfileDocMock).not.toHaveBeenCalled();
@@ -174,7 +174,7 @@ describe("POST /api/onboarding/modules/metrics", () => {
 
   it("applies to the doc and upserts when a profiles row already exists", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getProfileDocMock.mockResolvedValue({ doc: { "article-digest.md": "" }, validationStatus: null });
     await POST(jsonRequest({ marks: [{ id: "claim_1", confident: true }, { id: "claim_2", confident: false }] }));
     expect(upsertProfileDocMock).toHaveBeenCalledTimes(1);

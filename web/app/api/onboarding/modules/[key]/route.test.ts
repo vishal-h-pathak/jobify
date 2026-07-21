@@ -10,8 +10,8 @@ vi.mock("@/lib/supabase/admin", () => ({
   createSupabaseAdminClient: createSupabaseAdminClientMock,
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -71,7 +71,7 @@ const BASE_SESSION = { user_id: "user-1", stage: "targeting", messages: [], extr
 describe("POST /api/onboarding/modules/[key]", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getOrCreateSessionMock.mockReset();
@@ -88,7 +88,7 @@ describe("POST /api/onboarding/modules/[key]", () => {
 
   it("404s for a key that isn't a structured module (owned by another route)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({}), ctx("anchor"));
     expect(res.status).toBe(404);
   });
@@ -102,7 +102,7 @@ describe("POST /api/onboarding/modules/[key]", () => {
 
   it("403s without a claimed invite for a non-admin", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await POST(jsonRequest({ hard_disqualifiers: [] }), ctx("dealbreakers"));
     expect(res.status).toBe(403);
     expect(saveSessionMock).not.toHaveBeenCalled();
@@ -111,14 +111,14 @@ describe("POST /api/onboarding/modules/[key]", () => {
   it("an admin without a claimed invite still succeeds — bypasses the gate", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "admin-1" } } });
     isAdminMock.mockReturnValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ hard_disqualifiers: [] }), ctx("dealbreakers"));
     expect(res.status).toBe(200);
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 
   it("400s and writes nothing when the body fails the module's schema", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ hard_disqualifiers: "not an array" }), ctx("dealbreakers"));
     expect(res.status).toBe(400);
     expect(saveSessionMock).not.toHaveBeenCalled();
@@ -127,7 +127,7 @@ describe("POST /api/onboarding/modules/[key]", () => {
 
   it("writes extracted[key], calls markModuleComplete with the receipt, and saves the returned modules", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ hard_disqualifiers: ["Crypto / Web3"] }), ctx("dealbreakers"));
     expect(res.status).toBe(200);
     const responseBody = await res.json();
@@ -148,7 +148,7 @@ describe("POST /api/onboarding/modules/[key]", () => {
 
   it("preserves any pre-existing extracted fields (merge, not overwrite)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getOrCreateSessionMock.mockResolvedValue({ ...BASE_SESSION, extracted: { anchor: { free_text: "x" } } });
     await POST(jsonRequest({ hard_disqualifiers: [] }), ctx("dealbreakers"));
     expect(saveSessionMock).toHaveBeenCalledWith(
@@ -162,7 +162,7 @@ describe("POST /api/onboarding/modules/[key]", () => {
 
   it("skips applyModuleToDoc/upsertProfileDoc when no profiles row exists yet", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getProfileDocMock.mockResolvedValue(null);
     await POST(jsonRequest({ hard_disqualifiers: [] }), ctx("dealbreakers"));
     expect(applyModuleToDocMock).not.toHaveBeenCalled();
@@ -171,7 +171,7 @@ describe("POST /api/onboarding/modules/[key]", () => {
 
   it("applies the module to the doc and upserts when a profiles row already exists", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getProfileDocMock.mockResolvedValue({ doc: { "thesis.md": "" }, validationStatus: null });
     await POST(jsonRequest({ hard_disqualifiers: ["Crypto / Web3"] }), ctx("dealbreakers"));
     expect(applyModuleToDocMock).toHaveBeenCalledWith(
@@ -184,7 +184,7 @@ describe("POST /api/onboarding/modules/[key]", () => {
 
   it("calls maybeFireCheckpoint after every module completion", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     await POST(jsonRequest({ hard_disqualifiers: [] }), ctx("dealbreakers"));
     expect(maybeFireCheckpointMock).toHaveBeenCalledTimes(1);
     const [deps, session, user] = maybeFireCheckpointMock.mock.calls[0];
@@ -198,7 +198,7 @@ describe("POST /api/onboarding/modules/[key]", () => {
 
   it("never records a budget_ledger row / calls the Anthropic client (zero-LLM stage)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     await POST(jsonRequest({ hard_disqualifiers: [] }), ctx("dealbreakers"));
     // No ledger/anthropic mocks are wired into this test file at all — if
     // the route tried to call either, the unmocked module would throw.
@@ -207,7 +207,7 @@ describe("POST /api/onboarding/modules/[key]", () => {
 
   it("works for the values module end to end", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const choices = [
       { pair_id: "mission_prestige", choice: "a" },
       { pair_id: "hours_equity", choice: "a" },

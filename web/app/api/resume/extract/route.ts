@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { hasClaimedInvite } from "@/lib/db/invites";
-import { isAdmin } from "@/lib/admin/isAdmin";
+import { hasAccess } from "@/lib/db/access";
 import { extractText } from "@/lib/resume/extractText";
 
 /**
@@ -9,7 +8,7 @@ import { extractText } from "@/lib/resume/extractText";
  * shared route for both onboarding's resume upload and Settings -> Resume.
  * `.txt`/`.md` uploads never hit this route — they stay client-side
  * `file.text()`, unchanged. Auth-gated like every other route in this
- * session (same getUser -> 401, isAdmin || hasClaimedInvite -> 403 pattern
+ * session (same getUser -> 401, hasAccess -> 403 pattern
  * as web/app/api/hunt/run/route.ts) even though it isn't LLM-costed: it
  * still accepts arbitrary user-uploaded file bytes.
  */
@@ -21,7 +20,7 @@ export async function POST(request: Request) {
   if (!user) {
     return NextResponse.json({ error: "not signed in" }, { status: 401 });
   }
-  if (!isAdmin(user) && !(await hasClaimedInvite(supabase))) {
+  if (!(await hasAccess(supabase, user))) {
     return NextResponse.json({ error: "invite required" }, { status: 403 });
   }
 

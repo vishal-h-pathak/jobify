@@ -189,7 +189,7 @@ export function MetricsMarkingView({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-prose text-sm text-ink-muted">
           Every number we found. Anything you don&apos;t mark Confident will never appear in a resume or cover letter we
-          write. This is the fence.
+          write.
         </p>
         <Button variant="ghost" disabled={submitting} onClick={onMarkAllConfident}>
           mark all confident

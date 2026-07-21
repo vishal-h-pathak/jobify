@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { hasClaimedInvite } from "@/lib/db/invites";
-import { isAdmin } from "@/lib/admin/isAdmin";
+import { hasAccess } from "@/lib/db/access";
 import { signMaterials } from "@/lib/materials/signMaterials";
 
 // "Short-lived" per the session prompt: 5 minutes. Named so it's never
@@ -35,7 +34,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
   if (!user) {
     return NextResponse.json({ error: "not signed in" }, { status: 401 });
   }
-  if (!isAdmin(user) && !(await hasClaimedInvite(supabase))) {
+  if (!(await hasAccess(supabase, user))) {
     return NextResponse.json({ error: "invite required" }, { status: 403 });
   }
 

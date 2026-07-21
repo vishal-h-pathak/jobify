@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { MatchCard } from "@/components/feed/MatchCard";
 import { ProfileHealthBanner } from "@/components/feed/ProfileHealthBanner";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -12,6 +13,10 @@ import {
   type PostingRow,
 } from "@/lib/db/matches";
 import { RunHuntButton } from "./RunHuntButton";
+import { deriveHuntButtonState } from "./huntButtonState";
+
+const DEFAULT_HUNT_COOLDOWN_HOURS = 6;
+const RECENT_CYCLES_LIMIT = 5;
 
 // Per-user live read, not cacheable — mirrors the (app) layout's own
 // `force-dynamic` (auth.getUser() + a fresh matches/postings read every
@@ -27,13 +32,34 @@ export default async function FeedPage() {
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("validation_status")
+    .select("validation_status, last_hunt_requested_at")
     .eq("user_id", user.id)
     .maybeSingle();
   if (profileError) throw profileError;
   // No row yet == onboarding never finished (profiles rows are only
   // written by the onboarding chat's final turn) -> send them there.
   if (!profile) redirect("/onboarding");
+
+  // `hunt_cycles` has RLS enabled with no policies (service-role only,
+  // 0008_hunt_cycles.sql) and carries no `user_id` — reading the last few
+  // rows via the admin client is the only way to derive "is MY hunt still
+  // running / did it just error", matched best-effort in
+  // `deriveHuntButtonState` (see that file's docstring).
+  const admin = createSupabaseAdminClient();
+  const { data: recentCycles, error: cyclesError } = await admin
+    .from("hunt_cycles")
+    .select("started_at, finished_at, counters")
+    .order("started_at", { ascending: false })
+    .limit(RECENT_CYCLES_LIMIT);
+  if (cyclesError) throw cyclesError;
+
+  const huntButtonState = deriveHuntButtonState(
+    profile,
+    recentCycles ?? [],
+    user.id,
+    Number(process.env.HUNT_COOLDOWN_HOURS ?? DEFAULT_HUNT_COOLDOWN_HOURS),
+    new Date()
+  );
 
   // P0.5 (HUNT2 session 47): `matches` now carries a row for every
   // scored posting (rejected_title/rejected_rubric/rejected_rerank/
@@ -86,7 +112,7 @@ export default async function FeedPage() {
 
       <div className="flex items-start justify-between gap-4">
         <h1 className="text-2xl font-semibold tracking-tight text-ink">Your feed</h1>
-        <RunHuntButton />
+        <RunHuntButton initialState={huntButtonState} />
       </div>
 
       {totalMatches === 0 && (

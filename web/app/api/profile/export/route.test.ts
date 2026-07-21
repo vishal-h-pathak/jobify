@@ -26,8 +26,8 @@ vi.mock("@/lib/supabase/server", () => ({
 const createSupabaseAdminClientMock = vi.fn();
 vi.mock("@/lib/supabase/admin", () => ({ createSupabaseAdminClient: createSupabaseAdminClientMock }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -51,7 +51,7 @@ const FULL_DOC: Record<string, string> = {
 describe("GET /api/profile/export", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     intakeCompleteMock.mockReset();
@@ -72,7 +72,7 @@ describe("GET /api/profile/export", () => {
 
   it("403s without a claimed invite for a non-admin", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await GET();
     expect(res.status).toBe(403);
   });
@@ -80,14 +80,14 @@ describe("GET /api/profile/export", () => {
   it("an admin without a claimed invite still succeeds — bypasses the invite gate", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "admin-1" } } });
     isAdminMock.mockReturnValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await GET();
     expect(res.status).toBe(200);
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 
   it("409s with intake_incomplete before intake finishes", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     intakeCompleteMock.mockResolvedValue(false);
     const res = await GET();
     expect(res.status).toBe(409);
@@ -98,7 +98,7 @@ describe("GET /api/profile/export", () => {
 
   it("404s when intake is complete but there's somehow no profiles row", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getProfileDocMock.mockResolvedValue(null);
     const res = await GET();
     expect(res.status).toBe(404);
@@ -106,7 +106,7 @@ describe("GET /api/profile/export", () => {
 
   it("200s with markdown, the download content-type, and a dated filename", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await GET();
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
@@ -120,7 +120,7 @@ describe("GET /api/profile/export", () => {
 
   it("constitution: never touches application_profiles or the service-role admin client", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     await GET();
     expect(fromCalls).not.toContain("application_profiles");
     expect(createSupabaseAdminClientMock).not.toHaveBeenCalled();

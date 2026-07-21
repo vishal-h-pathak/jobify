@@ -5,8 +5,8 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock } })),
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -52,7 +52,7 @@ const BASE_SESSION = {
 describe("POST /api/onboarding/modules/mirror/accept", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getOrCreateSessionMock.mockReset();
@@ -72,14 +72,14 @@ describe("POST /api/onboarding/modules/mirror/accept", () => {
 
   it("403s without a claimed invite for a non-admin", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await POST(jsonRequest({ paragraphs: ["a", "b"] }));
     expect(res.status).toBe(403);
   });
 
   it("400s when paragraphs isn't exactly two non-empty strings", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     for (const bad of [undefined, [], ["only one"], ["a", "b", "c"], ["", "b"], ["a", "   "], ["a", 2]]) {
       const res = await POST(jsonRequest({ paragraphs: bad }));
       expect(res.status).toBe(400);
@@ -89,7 +89,7 @@ describe("POST /api/onboarding/modules/mirror/accept", () => {
 
   it("happy path: uses the client-submitted (edited) paragraphs, not the stored draft's paragraphs", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const editedParagraphs = ["An edited first paragraph, rewritten by the candidate.", "An edited second paragraph."];
 
     const res = await POST(jsonRequest({ paragraphs: editedParagraphs }));
@@ -114,7 +114,7 @@ describe("POST /api/onboarding/modules/mirror/accept", () => {
 
   it("quoted_phrases in the stored/receipt record come from the last mirror_draft, not from the client body", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     // Client submits paragraphs plus (ignored) extra fields — quoted_phrases
     // is never accepted from the request body per the route's contract.
     await POST(jsonRequest({ paragraphs: ["Edited one.", "Edited two."], quoted_phrases: ["should be ignored"] }));
@@ -126,7 +126,7 @@ describe("POST /api/onboarding/modules/mirror/accept", () => {
 
   it("falls back to an empty quoted_phrases list when there is no mirror_draft at all", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getOrCreateSessionMock.mockResolvedValue({ ...BASE_SESSION, extracted: {} });
     await POST(jsonRequest({ paragraphs: ["Edited one.", "Edited two."] }));
     const [, , update] = saveSessionMock.mock.calls[0];
@@ -135,7 +135,7 @@ describe("POST /api/onboarding/modules/mirror/accept", () => {
 
   it("skips applying to the doc when no profiles row exists yet", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getProfileDocMock.mockResolvedValue(null);
     await POST(jsonRequest({ paragraphs: ["Edited one.", "Edited two."] }));
     expect(upsertProfileDocMock).not.toHaveBeenCalled();
@@ -143,7 +143,7 @@ describe("POST /api/onboarding/modules/mirror/accept", () => {
 
   it("replaces thesis.md's intro with the accepted paragraphs and upserts when a profiles row exists", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getProfileDocMock.mockResolvedValue({
       doc: { "thesis.md": "# Hunting thesis\n\nOld intro.\n\n## Targeting\n\nSome section body.\n" },
       validationStatus: null,

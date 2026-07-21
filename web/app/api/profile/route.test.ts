@@ -28,8 +28,8 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => fakeSupabase()),
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -56,7 +56,7 @@ function patchRequest(body: unknown) {
 describe("PATCH /api/profile", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getProfileDocMock.mockReset();
@@ -79,7 +79,7 @@ describe("PATCH /api/profile", () => {
 
   it("403s without a claimed invite for a non-admin", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await PATCH(patchRequest({ base: "Atlanta, GA" }));
     expect(res.status).toBe(403);
     expect(upsertProfileDocMock).not.toHaveBeenCalled();
@@ -88,14 +88,14 @@ describe("PATCH /api/profile", () => {
   it("an admin without a claimed invite still succeeds — bypasses the gate", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "admin-1" } } });
     isAdminMock.mockReturnValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await PATCH(patchRequest({ base: "Atlanta, GA" }));
     expect(res.status).toBe(200);
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 
   it("400s when no editable field is provided", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await PATCH(patchRequest({ base: "   " }));
     expect(res.status).toBe(400);
     expect(upsertProfileDocMock).not.toHaveBeenCalled();
@@ -103,7 +103,7 @@ describe("PATCH /api/profile", () => {
 
   it("404s when the user hasn't finished onboarding yet (no profiles row)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getProfileDocMock.mockResolvedValue(null);
     const res = await PATCH(patchRequest({ base: "Atlanta, GA" }));
     expect(res.status).toBe(404);
@@ -111,7 +111,7 @@ describe("PATCH /api/profile", () => {
 
   it("merges the patch into extracted.identity.location_and_compensation, writes the session, and revalidates the doc", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     sessionSelectResult.data = {
       extracted: { identity: { name: "Alex Quinn", location_and_compensation: { current_comp_usd: 165000 } } },
     };
@@ -141,7 +141,7 @@ describe("PATCH /api/profile", () => {
 
   it("ignores a missing onboarding_sessions row rather than crashing", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     sessionSelectResult.data = null;
 
     const res = await PATCH(patchRequest({ base: "Atlanta, GA" }));

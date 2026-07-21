@@ -10,8 +10,8 @@ vi.mock("@/lib/supabase/admin", () => ({
   createSupabaseAdminClient: createSupabaseAdminClientMock,
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -60,7 +60,7 @@ const BASE_SESSION = {
 describe("POST /api/onboarding/modules/voice", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getOrCreateSessionMock.mockReset();
@@ -92,7 +92,7 @@ describe("POST /api/onboarding/modules/voice", () => {
 
   it("403s without a claimed invite for a non-admin", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await POST(jsonRequest({ sample: "I just ship it and move on." }));
     expect(res.status).toBe(403);
     expect(runVoiceIngestTurnMock).not.toHaveBeenCalled();
@@ -101,14 +101,14 @@ describe("POST /api/onboarding/modules/voice", () => {
   it("an admin without a claimed invite still succeeds — bypasses the gate", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "admin-1" } } });
     isAdminMock.mockReturnValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ sample: "I just ship it and move on." }));
     expect(res.status).toBe(200);
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 
   it("400s when sample is missing or blank", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ sample: "   " }));
     expect(res.status).toBe(400);
     expect(runVoiceIngestTurnMock).not.toHaveBeenCalled();
@@ -117,7 +117,7 @@ describe("POST /api/onboarding/modules/voice", () => {
 
   it("happy path: calls the turn, ledgers once, marks voice complete, and saves the session", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ sample: "I just ship it and move on." }));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -156,7 +156,7 @@ describe("POST /api/onboarding/modules/voice", () => {
 
   it("skips applyVoiceToDoc/upsertProfileDoc when no profiles row exists yet", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getProfileDocMock.mockResolvedValue(null);
     await POST(jsonRequest({ sample: "I just ship it and move on." }));
     expect(upsertProfileDocMock).not.toHaveBeenCalled();
@@ -164,7 +164,7 @@ describe("POST /api/onboarding/modules/voice", () => {
 
   it("applies to the doc and upserts when a profiles row already exists", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getProfileDocMock.mockResolvedValue({ doc: { "voice-profile.md": "" }, validationStatus: null });
     await POST(jsonRequest({ sample: "I just ship it and move on." }));
     expect(upsertProfileDocMock).toHaveBeenCalledTimes(1);
@@ -174,7 +174,7 @@ describe("POST /api/onboarding/modules/voice", () => {
 
   it("drops a fabricated signature_phrase that never appears in the sample", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     runVoiceIngestTurnMock.mockResolvedValue({
       register: "dry, compressed",
       rhythm: "short declarative sentences",

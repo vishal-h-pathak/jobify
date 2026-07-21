@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getOrCreateSession, saveSession } from "@/lib/db/onboardingSession";
 import { getProfileDoc, upsertProfileDoc } from "@/lib/db/profiles";
-import { hasClaimedInvite } from "@/lib/db/invites";
-import { isAdmin } from "@/lib/admin/isAdmin";
+import { hasAccess } from "@/lib/db/access";
 import {
   hasReachedReactionThreshold,
   reactionsReceipt,
@@ -26,7 +25,7 @@ async function requireCaller(supabase: Awaited<ReturnType<typeof createSupabaseS
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { user: null, response: NextResponse.json({ error: "not signed in" }, { status: 401 }) };
-  if (!isAdmin(user) && !(await hasClaimedInvite(supabase))) {
+  if (!(await hasAccess(supabase, user))) {
     return { user: null, response: NextResponse.json({ error: "invite required" }, { status: 403 }) };
   }
   return { user, response: null };

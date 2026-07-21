@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { hasClaimedInvite } from "@/lib/db/invites";
+import { hasAccess } from "@/lib/db/access";
 import { deleteApiKey, looksLikeAnthropicKey, saveApiKey } from "@/lib/db/keys";
 
 async function requireInvitedUser() {
@@ -14,7 +14,7 @@ async function requireInvitedUser() {
   // Server-side invite enforcement: the (app) layout gates PAGES only —
   // API routes are reachable directly (H3 review lesson, mirrored from
   // web/app/api/onboarding/turn/route.ts).
-  if (!(await hasClaimedInvite(supabase))) {
+  if (!(await hasAccess(supabase, user))) {
     return { error: NextResponse.json({ error: "invite required" }, { status: 403 }) } as const;
   }
   return { supabase, user } as const;

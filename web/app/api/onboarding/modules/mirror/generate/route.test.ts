@@ -10,8 +10,8 @@ vi.mock("@/lib/supabase/admin", () => ({
   createSupabaseAdminClient: createSupabaseAdminClientMock,
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -53,7 +53,7 @@ function baseSession(overrides: Record<string, unknown> = {}) {
 describe("POST /api/onboarding/modules/mirror/generate", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getOrCreateSessionMock.mockReset();
@@ -73,7 +73,7 @@ describe("POST /api/onboarding/modules/mirror/generate", () => {
 
   it("403s without a claimed invite for a non-admin", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await POST();
     expect(res.status).toBe(403);
     expect(runMirrorGenerationTurnMock).not.toHaveBeenCalled();
@@ -81,7 +81,7 @@ describe("POST /api/onboarding/modules/mirror/generate", () => {
 
   it("happy path: enough verbatim quotes survive the first call — no retry, one ledger row, count saved as 1", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     runMirrorGenerationTurnMock.mockResolvedValue({
       paragraphs: ["You ship things quickly.", "You notice what breaks."],
       quoted_phrases: ["ship things quickly", "see what breaks"],
@@ -119,7 +119,7 @@ describe("POST /api/onboarding/modules/mirror/generate", () => {
 
   it("fewer than 2 verbatim quotes survive the first call and budget remains — auto-retries once, two ledger rows, drops the fabricated phrase from the final result", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     runMirrorGenerationTurnMock
       .mockResolvedValueOnce({
         paragraphs: ["Draft one.", "Draft one, part two."],
@@ -161,7 +161,7 @@ describe("POST /api/onboarding/modules/mirror/generate", () => {
 
   it('a "Try again" click after one manual success does not auto-retry even if quotes come up short — budget spent by exactly one more call', async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getOrCreateSessionMock.mockResolvedValue(
       baseSession({
         extracted: {
@@ -195,7 +195,7 @@ describe("POST /api/onboarding/modules/mirror/generate", () => {
 
   it('a "Try again" click after the budget is already spent skips the model entirely and returns the stale draft', async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const staleDraft = { paragraphs: ["Stale.", "Stale two."], quoted_phrases: ["ship things quickly"] };
     getOrCreateSessionMock.mockResolvedValue(
       baseSession({ extracted: { mirror_generation_count: 2, mirror_draft: staleDraft } })
@@ -209,5 +209,32 @@ describe("POST /api/onboarding/modules/mirror/generate", () => {
     expect(runMirrorGenerationTurnMock).not.toHaveBeenCalled();
     expect(recordOnboardingTurnMock).not.toHaveBeenCalled();
     expect(saveSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("2026-07-21 fix: a card-only session (no chat messages) still verifies quotes drawn from card free-text and choices", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasAccessMock.mockResolvedValue(true);
+    getOrCreateSessionMock.mockResolvedValue(
+      baseSession({
+        messages: [],
+        extracted: {
+          trajectory: { direction: "switch", free_text: "ready to leave big-co politics behind" },
+          energy: { hours_disappear: "debugging flaky CI at 2am", kept_putting_off: "" },
+        },
+      })
+    );
+    runMirrorGenerationTurnMock.mockResolvedValue({
+      paragraphs: ["You're ready to leave big-co politics behind.", "Debugging flaky CI at 2am doesn't faze you."],
+      quoted_phrases: ["ready to leave big-co politics behind", "debugging flaky CI at 2am"],
+      usage: { inputTokens: 200, outputTokens: 80 },
+    });
+
+    const res = await POST();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // Before this fix, the corpus was chat-messages-only (empty here), so
+    // both of these real quotes would have failed the verbatim check and
+    // been dropped — exactly U2's reported bug.
+    expect(body.quoted_phrases).toEqual(["ready to leave big-co politics behind", "debugging flaky CI at 2am"]);
   });
 });

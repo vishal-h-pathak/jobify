@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { hasClaimedInvite } from "@/lib/db/invites";
-import { isAdmin } from "@/lib/admin/isAdmin";
+import { hasAccess } from "@/lib/db/access";
 import { loadApplicationProfile, saveApplicationProfile } from "@/lib/submit/applicationProfile";
 
 /**
@@ -21,7 +20,7 @@ export async function POST(request: Request) {
   if (!user) {
     return NextResponse.json({ error: "not signed in" }, { status: 401 });
   }
-  if (!isAdmin(user) && !(await hasClaimedInvite(supabase))) {
+  if (!(await hasAccess(supabase, user))) {
     return NextResponse.json({ error: "invite required" }, { status: 403 });
   }
 
@@ -41,7 +40,7 @@ export async function GET() {
   if (!user) {
     return NextResponse.json({ error: "not signed in" }, { status: 401 });
   }
-  if (!isAdmin(user) && !(await hasClaimedInvite(supabase))) {
+  if (!(await hasAccess(supabase, user))) {
     return NextResponse.json({ error: "invite required" }, { status: 403 });
   }
 
