@@ -74,6 +74,9 @@ class _FakeQuery:
         self.gte_calls.append((col, val))
         return self
 
+    def limit(self, *_a, **_kw):
+        return self
+
     def in_(self, col, vals):
         self._rows = [r for r in self._rows if r.get(col) in vals]
         return self
@@ -221,6 +224,46 @@ def test_get_month_to_date_spend_filters_by_utc_month_start(patch_db_client):
     assert col == "created_at"
     now = datetime.now(timezone.utc)
     assert val.startswith(now.strftime("%Y-%m-01T00:00:00"))
+
+
+# ── has_recent_ledger_event (HUNT2 S5, query_gen's 24h runaway guard) ────
+
+
+def test_has_recent_ledger_event_true_when_row_present(patch_db_client):
+    fake = _FakeClient({
+        "budget_ledger": [
+            {"user_id": "user-1", "event": "query_gen"},
+        ]
+    })
+    patch_db_client(fake)
+
+    assert db.has_recent_ledger_event("user-1", "query_gen", hours=24) is True
+
+    name, q = fake.queries[-1]
+    assert name == "budget_ledger"
+    assert ("user_id", "user-1") in q.eq_calls
+    assert ("event", "query_gen") in q.eq_calls
+    assert q.gte_calls, "expected a created_at >= window-start filter"
+    assert q.gte_calls[0][0] == "created_at"
+
+
+def test_has_recent_ledger_event_false_when_no_matching_row(patch_db_client):
+    fake = _FakeClient({
+        "budget_ledger": [
+            {"user_id": "user-1", "event": "rubric_compile"},
+            {"user_id": "user-2", "event": "query_gen"},
+        ]
+    })
+    patch_db_client(fake)
+
+    assert db.has_recent_ledger_event("user-1", "query_gen", hours=24) is False
+
+
+def test_has_recent_ledger_event_false_for_empty_table(patch_db_client):
+    fake = _FakeClient({"budget_ledger": []})
+    patch_db_client(fake)
+
+    assert db.has_recent_ledger_event("user-1", "query_gen", hours=24) is False
 
 
 # ── get_global_month_to_date_spend (H6) ──────────────────────────────────

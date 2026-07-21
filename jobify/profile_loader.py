@@ -44,6 +44,7 @@ go through it per-user. Two escape hatches exist for that caller:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -75,6 +76,15 @@ DOC_FILENAMES = (
 # `profiles.updated_at` value that produced it, so re-materialization is
 # skipped unless the DB row is actually newer.
 _STAMP_FILENAME = ".materialized_updated_at"
+
+# HUNT2 S5: synthetic key `load_profile` merges into its returned dict
+# when `jobify.hunt.sources.query_gen` has cached a generated query batch
+# alongside the 8 canonical files. Not one of `DOC_FILENAMES` (it's a
+# generated cache artifact, never user-authored) and never written by
+# real `profile.yml` content, so there's no collision risk. See
+# `_refresh_generated_queries`'s docstring for why the enrichment lives
+# here instead of at the `jobify.hosted.discovery` call site.
+GENERATED_QUERIES_KEY = "_generated_search_queries"
 
 
 def _walk_up_for_pyproject(start: Path) -> Optional[Path]:
@@ -209,6 +219,35 @@ def _validate_materialized(cache_dir: Path, user_id: str) -> None:
         )
 
 
+def _refresh_generated_queries(
+    cache_dir: Path, user_id: str, compiled_rubric: Optional[dict],
+) -> None:
+    """Best-effort hook (HUNT2 S5): refresh `cache_dir/search_queries.json`
+    via `jobify.hunt.sources.query_gen.ensure_user_queries`. Lazy-imported
+    (matches `_fetch_profile_row`'s own lazy `jobify.db` import) so this
+    module stays importable without the hunt subtree, and wrapped
+    broad-except (matches `_validate_materialized`) so a query_gen
+    failure never takes down materialization — every OTHER caller of
+    `materialize_profile_dir` (tailor, fanout) must keep working even if
+    this one hunt-specific concern breaks.
+
+    Called unconditionally (not just inside the cache-staleness branch)
+    so a cache-HIT call still refreshes stale queries — `ensure_user_queries`
+    itself is what keeps this cheap (a file-stat) in the common case; see
+    its module docstring for the zero-DB fast-path design and the Rider B
+    note on why this call lives here rather than at
+    `jobify.hosted.discovery._union_profiles`, its more natural home.
+    """
+    try:
+        from jobify.hunt.sources import query_gen
+        query_gen.ensure_user_queries(user_id, cache_dir, compiled_rubric)
+    except Exception as exc:  # noqa: BLE001 — must not crash materialization
+        logger.warning(
+            "query_gen.ensure_user_queries failed for user_id=%s: %s",
+            user_id, exc,
+        )
+
+
 def materialize_profile_dir(user_id: str) -> Path:
     """Materialize ``profiles.doc`` for ``user_id`` into its own cache dir,
     validate it, and return the dir. Re-fetches only when the cache is
@@ -222,6 +261,11 @@ def materialize_profile_dir(user_id: str) -> Path:
     lands in ``profiles.validation_status`` (see ``_validate_materialized``);
     callers that need it can re-query that column rather than parse a
     return value here.
+
+    HUNT2 S5: also refreshes ``cache_dir/search_queries.json`` via
+    ``_refresh_generated_queries`` — unconditionally, using the
+    ``compiled_rubric`` this function already fetched as part of ``row``
+    (no extra DB round-trip for that part). See that helper's docstring.
     """
     cache_dir = _profile_cache_root() / user_id
     stamp_path = cache_dir / _STAMP_FILENAME
@@ -244,6 +288,8 @@ def materialize_profile_dir(user_id: str) -> Path:
             )
         stamp_path.write_text(updated_at, encoding="utf-8")
         _validate_materialized(cache_dir, user_id)
+
+    _refresh_generated_queries(cache_dir, user_id, row.get("compiled_rubric"))
 
     return cache_dir
 
@@ -349,9 +395,39 @@ def load_thesis(profile_dir: Optional[Path] = None) -> str:
     return _read_text("thesis.md", profile_dir)
 
 
+def _load_generated_queries(dir_override: Optional[Path] = None) -> list[str]:
+    """Read `search_queries.json`'s `queries` list back off disk, or `[]`
+    if absent/malformed. Same `dir_override`-vs-global-`profile_dir()`
+    resolution convention as `_read_text`."""
+    base = dir_override if dir_override is not None else profile_dir()
+    path = base / "search_queries.json"
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    queries = data.get("queries") if isinstance(data, dict) else None
+    if not isinstance(queries, list):
+        return []
+    return [q for q in queries if isinstance(q, str) and q.strip()]
+
+
 def load_profile(profile_dir: Optional[Path] = None) -> dict:
-    """Return the full parsed `profile.yml` as a dict."""
-    return _read_yaml("profile.yml", profile_dir)
+    """Return the full parsed `profile.yml` as a dict, plus one synthetic
+    key (`GENERATED_QUERIES_KEY`, HUNT2 S5) carrying any LLM-generated
+    paid-search queries cached alongside it — see that constant's
+    docstring for why this is the only seam available to hand per-user
+    generated data through `jobify.hosted.discovery`'s existing
+    `_union_profiles` -> `union_queries` -> `build_queries_for_profile`
+    call chain, which only ever sees this dict, never `profile_dir` or
+    `user_id`.
+    """
+    data = _read_yaml("profile.yml", profile_dir)
+    generated = _load_generated_queries(profile_dir)
+    if generated:
+        data[GENERATED_QUERIES_KEY] = generated
+    return data
 
 
 def load_profile_text(profile_dir: Optional[Path] = None) -> str:

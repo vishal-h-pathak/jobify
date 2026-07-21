@@ -59,7 +59,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from jobify.config import (
@@ -304,6 +304,28 @@ def insert_budget_ledger_row(
             "byo": byo,
         }
     ).execute()
+
+
+def has_recent_ledger_event(user_id: str, event: str, *, hours: int) -> bool:
+    """True if a `budget_ledger` row for `(user_id, event)` exists with
+    `created_at` within the last `hours` — a generic per-event runaway
+    guard. First caller: `jobify.hunt.sources.query_gen`'s 24h cap on the
+    `'query_gen'` event, so a materialization storm (many callers hitting
+    `profile_loader.materialize_profile_dir` for the same user in a short
+    window) can't fan out into repeated LLM calls before the first one's
+    result has even been stored.
+    """
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    rows = (
+        _get_client().table("budget_ledger")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("event", event)
+        .gte("created_at", since)
+        .limit(1)
+        .execute()
+    )
+    return bool(rows.data)
 
 
 # `budget_caps.monthly_usd_cap`'s own DB DEFAULT (0002_multitenant.sql) —

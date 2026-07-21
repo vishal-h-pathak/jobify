@@ -11,9 +11,15 @@ targeting-tier titles, expanded by their own remote-acceptability and
 base metro.
 
 No LLM calls here — this is interim (P0.6's own acceptance criteria call
-it out as such); the permanent replacement (rubric-derived queries, one
-metered LLM call per user per month) is P2 (`planning/HUNT2_SOURCES.md`
-§4.3), not this session.
+it out as such) and remains the FALLBACK for the permanent replacement:
+`jobify.hunt.sources.query_gen` (HUNT2 P2 §4.3, session 53/S5) generates
+rubric-derived queries with one metered LLM call per user per ~30 days.
+`build_queries_for_profile` below prefers those when present (spliced
+into the profile dict by `jobify.profile_loader.load_profile` — see
+`profile_loader.GENERATED_QUERIES_KEY`) and falls back to this module's
+own zero-LLM template expansion otherwise, so a user with no generated
+batch yet (or a failed/guarded generation) is never left with zero
+queries.
 """
 
 from __future__ import annotations
@@ -22,12 +28,17 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from jobify.profile_loader import GENERATED_QUERIES_KEY
+
 logger = logging.getLogger("sources.query_templates")
 
 
 def build_queries_for_profile(profile: dict) -> list[str]:
-    """Top ~3 target titles from `profile.yml`'s targeting tiers, each
-    expanded by remote-acceptability and/or base metro.
+    """Prefer this user's LLM-generated queries (`query_gen.py`,
+    `profile[GENERATED_QUERIES_KEY]`) when present; otherwise fall back to
+    the P0.6 template: top ~3 target titles from `profile.yml`'s
+    targeting tiers, each expanded by remote-acceptability and/or base
+    metro.
 
     `what_he_is_looking_for` tiers are sorted by key (`tier_1`, `tier_2`,
     ...) — same ordering convention `jobify.hosted.fanout.targeting_text`
@@ -35,6 +46,12 @@ def build_queries_for_profile(profile: dict) -> list[str]:
     neither a remote-acceptable flag nor a stated base metro still
     contributes one bare query (better than dropping the tier silently).
     """
+    generated = profile.get(GENERATED_QUERIES_KEY)
+    if isinstance(generated, list) and generated:
+        cleaned = [q.strip() for q in generated if isinstance(q, str) and q.strip()]
+        if cleaned:
+            return cleaned
+
     tiers = profile.get("what_he_is_looking_for")
     titles: list[str] = []
     if isinstance(tiers, dict):

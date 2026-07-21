@@ -13,11 +13,13 @@ tripping the module `__getattr__` -> `create_client()` hazard a plain
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 
 import pytest
 
 from jobify import profile_loader
+from jobify.hunt.sources import query_gen
 
 _DOC = {
     "profile.yml": "identity:\n  name: Test User\n  email: test@example.com\n",
@@ -330,3 +332,95 @@ def test_fan_out_does_not_touch_global_profile_dir_cache(
 
     assert profile_loader.profile_dir() == explicit_dir.resolve()
     assert profile_loader.load_thesis() == "single-user thesis\n"
+
+
+# ── HUNT2 S5: query_gen hook wiring (Rider A/B) ──────────────────────────
+
+
+def test_materialize_passes_prefetched_compiled_rubric_to_ensure_user_queries(
+    patch_db_client, monkeypatch,
+):
+    """materialize_profile_dir already fetches the whole `profiles` row
+    (including `compiled_rubric`) unconditionally — it must hand that
+    value straight to `ensure_user_queries` rather than triggering a
+    second DB round-trip for it (Rider A)."""
+    rubric = {"rubric_version": 1, "term_groups": []}
+    row = _row()
+    row["compiled_rubric"] = rubric
+    fake = _FakeClient([row])
+    patch_db_client(fake)
+
+    calls = []
+    monkeypatch.setattr(
+        query_gen, "ensure_user_queries",
+        lambda user_id, profile_dir, compiled_rubric: calls.append(
+            (user_id, profile_dir, compiled_rubric)
+        ),
+    )
+
+    cache_dir = profile_loader.materialize_profile_dir(_USER_ID)
+
+    assert calls == [(_USER_ID, cache_dir, rubric)]
+
+
+def test_materialize_survives_ensure_user_queries_exception(
+    patch_db_client, monkeypatch, caplog,
+):
+    """A query_gen failure must never take down materialization — every
+    OTHER caller (tailor, fanout) needs the 8 canonical files regardless."""
+    fake = _FakeClient([_row()])
+    patch_db_client(fake)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("query_gen exploded")
+
+    monkeypatch.setattr(query_gen, "ensure_user_queries", _boom)
+
+    with caplog.at_level("WARNING", logger="jobify.profile_loader"):
+        cache_dir = profile_loader.materialize_profile_dir(_USER_ID)
+
+    assert cache_dir.is_dir()
+    assert (cache_dir / "thesis.md").read_text(encoding="utf-8") == _DOC["thesis.md"]
+    assert any(
+        "query_gen.ensure_user_queries failed" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_load_profile_merges_generated_queries_from_sibling_file(tmp_path):
+    """The ONLY seam `jobify.hosted.discovery`'s `_union_profiles` ->
+    `union_queries` -> `build_queries_for_profile` call chain hands data
+    through is `load_profile`'s returned dict — see
+    `profile_loader.GENERATED_QUERIES_KEY`'s docstring."""
+    profile_dir_path = tmp_path / "profile"
+    profile_dir_path.mkdir()
+    (profile_dir_path / "profile.yml").write_text(
+        "identity:\n  name: Test User\n  email: test@example.com\n",
+        encoding="utf-8",
+    )
+    (profile_dir_path / "search_queries.json").write_text(
+        json.dumps({
+            "queries": ["Platform Engineer remote", "SRE Denver"],
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "rubric_fingerprint": "abc123",
+        }),
+        encoding="utf-8",
+    )
+
+    profile = profile_loader.load_profile(profile_dir_path)
+    assert profile[profile_loader.GENERATED_QUERIES_KEY] == [
+        "Platform Engineer remote", "SRE Denver",
+    ]
+    assert profile["identity"]["name"] == "Test User"  # real content untouched
+
+
+def test_load_profile_omits_key_when_no_generated_queries_file(tmp_path):
+    profile_dir_path = tmp_path / "profile"
+    profile_dir_path.mkdir()
+    (profile_dir_path / "profile.yml").write_text(
+        "identity:\n  name: Test User\n  email: test@example.com\n",
+        encoding="utf-8",
+    )
+
+    profile = profile_loader.load_profile(profile_dir_path)
+    assert profile_loader.GENERATED_QUERIES_KEY not in profile

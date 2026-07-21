@@ -144,6 +144,14 @@ def fetch(queries: list[str] | None = None):
                     "remote": infer_remote(location, job),
                     "description": description,
                     "url": link,
+                    # HUNT2 S5: provenance — which paid-search query
+                    # surfaced this posting (S6's rollups read
+                    # `_jobify_query` back out of `postings.raw`).
+                    # SerpAPI didn't emit a `raw` field before this; the
+                    # full `job` payload isn't captured here, only the
+                    # query — a separate task if SerpAPI's raw response
+                    # is ever needed downstream too.
+                    "raw": {"_jobify_query": query},
                 }
             logger.info(
                 "serpapi: page yielded %d new q=%r page=%d",

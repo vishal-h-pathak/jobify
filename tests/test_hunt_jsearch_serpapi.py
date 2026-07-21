@@ -73,6 +73,20 @@ def test_jsearch_fetch_remote_tri_state(monkeypatch):
     assert remote_by_title == {"A": False, "B": True, "C": None}
 
 
+def test_jsearch_fetch_merges_query_provenance_into_raw(monkeypatch):
+    """HUNT2 S5: `raw` gains `_jobify_query` (the query that found this
+    posting, for S6's rollups) alongside the full JSearch payload it
+    already carried — a merge, not a replacement."""
+    monkeypatch.setenv("JSEARCH_API_KEY", "fake-key")
+    job = {"job_title": "A", "employer_name": "Acme", "job_apply_link": "https://x/a"}
+    monkeypatch.setattr(
+        jsearch.requests, "get", lambda *a, **k: _FakeResponse({"data": [job]}),
+    )
+    [result] = list(jsearch.fetch(queries=["platform engineer remote"]))
+    assert result["raw"]["_jobify_query"] == "platform engineer remote"
+    assert result["raw"]["job_title"] == "A"  # original payload still present
+
+
 # ── serpapi ──────────────────────────────────────────────────────────────
 
 
@@ -121,3 +135,28 @@ def test_serpapi_fetch_infers_remote_from_location_text(monkeypatch):
     results = list(serpapi.fetch(queries=["engineer"]))
     remote_by_title = {r["title"]: r["remote"] for r in results}
     assert remote_by_title == {"A": True, "B": False, "C": None}
+
+
+def test_serpapi_fetch_emits_raw_with_query_provenance(monkeypatch):
+    """HUNT2 S5: SerpAPI never emitted a `raw` field before this — it now
+    carries at least `_jobify_query` (the query that found this posting,
+    for S6's rollups) so provenance holds for paid search across both
+    fetchers, not just JSearch."""
+    monkeypatch.setenv("SERPAPI_KEY", "fake-key")
+    payload = {
+        "jobs_results": [
+            {"title": "A", "company_name": "Acme",
+             "apply_options": [{"link": "https://x/a"}]},
+        ],
+    }
+    call_count = {"n": 0}
+
+    def _fake_get(url, params=None, timeout=None):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return _FakeResponse(payload)
+        return _FakeResponse({"jobs_results": []})
+
+    monkeypatch.setattr(serpapi.requests, "get", _fake_get)
+    [result] = list(serpapi.fetch(queries=["platform engineer remote"]))
+    assert result["raw"] == {"_jobify_query": "platform engineer remote"}
