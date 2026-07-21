@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const getUserMock = vi.fn();
-const hasClaimedInviteMock = vi.fn();
+const hasAccessMock = vi.fn();
 const isAdminMock = vi.fn();
 const intakeCompleteMock = vi.fn();
 const completedModuleCountMock = vi.fn();
@@ -20,7 +20,7 @@ vi.mock("next/headers", () => ({ headers: headersMock }));
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock }, from: fromMock })),
 }));
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
 vi.mock("@/lib/onboarding/intakeComplete", () => ({ intakeComplete: intakeCompleteMock }));
 vi.mock("@/lib/onboarding/welcomeBack", () => ({ deriveWelcomeBack: deriveWelcomeBackMock }));
@@ -38,7 +38,7 @@ function pathnameHeaders(pathname: string) {
 describe("(app) layout — invite gate", () => {
   beforeEach(() => {
     getUserMock.mockClear();
-    hasClaimedInviteMock.mockClear();
+    hasAccessMock.mockClear();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     redirectMock.mockClear();
@@ -56,23 +56,23 @@ describe("(app) layout — invite gate", () => {
     headersMock.mockResolvedValue(pathnameHeaders("/feed"));
   });
 
-  it("redirects to /login when there is no session, without checking the invite", async () => {
+  it("redirects to /login when there is no session, without checking access", async () => {
     getUserMock.mockResolvedValue({ data: { user: null } });
 
     await expect(AppLayout({ children: "content" })).rejects.toThrow("REDIRECT:/login");
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
+    expect(hasAccessMock).not.toHaveBeenCalled();
   });
 
-  it("redirects to /invite when signed in but no invite is claimed — the invite gate", async () => {
+  it("redirects to /invite when signed in but hasAccess is false (no claim, no allowlist hit, not admin) — the invite gate", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
 
     await expect(AppLayout({ children: "content" })).rejects.toThrow("REDIRECT:/invite");
   });
 
-  it("renders the header, main content, and footer once signed in with a claimed invite and a complete intake", async () => {
+  it("renders (fresh session, no prior cookies) once signed in with access and a complete intake — straight through, no redirect", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
 
     const result = await AppLayout({ children: "content" });
     const [handoffEmitter, header, main, footer] = result.props.children;
@@ -97,8 +97,8 @@ describe("(app) layout — invite gate", () => {
     const result = await AppLayout({ children: "content" });
 
     expect(redirectMock).not.toHaveBeenCalled();
-    // Short-circuits on the admin bypass — no need to query the invite.
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
+    // Short-circuits on the admin bypass — no need to query access at all.
+    expect(hasAccessMock).not.toHaveBeenCalled();
     const [, header] = result.props.children;
     const [, navGroup] = header.props.children.props.children;
     const [navLinks] = navGroup.props.children;
@@ -108,17 +108,26 @@ describe("(app) layout — invite gate", () => {
   it("a non-admin without a claimed invite still redirects to /invite", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     isAdminMock.mockReturnValue(false);
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
 
     await expect(AppLayout({ children: "content" })).rejects.toThrow("REDIRECT:/invite");
+  });
+
+  it("2026-07-21 regression: an allowlisted user (no claimed invite yet, hasAccess true via auto-claim) passes straight through, not to /invite", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-2", email: "allowlisted@example.com" } } });
+    isAdminMock.mockReturnValue(false);
+    hasAccessMock.mockResolvedValue(true);
+
+    await expect(AppLayout({ children: "content" })).resolves.toBeTruthy();
+    expect(redirectMock).not.toHaveBeenCalled();
   });
 });
 
 describe("(app) layout — intake gate (UX1-A)", () => {
   beforeEach(() => {
     getUserMock.mockClear();
-    hasClaimedInviteMock.mockClear();
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockClear();
+    hasAccessMock.mockResolvedValue(true);
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);

@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { hasClaimedInvite } from "@/lib/db/invites";
+import { hasAccess } from "@/lib/db/access";
 import { isAdmin } from "@/lib/admin/isAdmin";
 import { InviteForm } from "./InviteForm";
 
@@ -31,7 +31,7 @@ export default async function InvitePage({
     redirect("/admin");
   }
 
-  if (await hasClaimedInvite(supabase)) {
+  if (await hasAccess(supabase, user)) {
     redirect("/feed");
   }
 

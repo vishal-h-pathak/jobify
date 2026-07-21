@@ -119,7 +119,7 @@ export function AnchorForm({ values, submitting, error, onFieldChange, onModeTog
 
         <div className="flex flex-col gap-1.5">
           <label htmlFor="anchor-tenure" className="text-sm text-ink-muted">
-            Years in role (optional)
+            Years in your current role (optional)
           </label>
           <Input
             id="anchor-tenure"

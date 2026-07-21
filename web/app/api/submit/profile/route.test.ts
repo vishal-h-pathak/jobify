@@ -5,8 +5,8 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock } })),
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -46,7 +46,7 @@ function getReq() {
 describe("POST /api/submit/profile", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     createSupabaseAdminClientMock.mockClear();
@@ -63,7 +63,7 @@ describe("POST /api/submit/profile", () => {
 
   it("403s without a claimed invite for a non-admin — never saves", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await POST(postReq(ALEX_QUINN_PROFILE));
     expect(res.status).toBe(403);
     expect(saveApplicationProfileMock).not.toHaveBeenCalled();
@@ -71,7 +71,7 @@ describe("POST /api/submit/profile", () => {
 
   it("204s with no body on a successful save, via the admin client", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     saveApplicationProfileMock.mockResolvedValue(ALEX_QUINN_PROFILE);
 
     const res = await POST(postReq(ALEX_QUINN_PROFILE));
@@ -83,17 +83,16 @@ describe("POST /api/submit/profile", () => {
   it("an admin without a claimed invite can still save", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "admin-1", email: "admin@example.com" } } });
     isAdminMock.mockReturnValue(true);
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(true);
     saveApplicationProfileMock.mockResolvedValue(ALEX_QUINN_PROFILE);
 
     const res = await POST(postReq(ALEX_QUINN_PROFILE));
     expect(res.status).toBe(204);
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 
   it("passes null to saveApplicationProfile when the body fails to parse as JSON", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     saveApplicationProfileMock.mockResolvedValue(ALEX_QUINN_PROFILE);
 
     const badReq = new Request("http://localhost/api/submit/profile", {
@@ -109,7 +108,7 @@ describe("POST /api/submit/profile", () => {
 describe("GET /api/submit/profile", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     createSupabaseAdminClientMock.mockClear();
@@ -126,7 +125,7 @@ describe("GET /api/submit/profile", () => {
 
   it("403s without a claimed invite for a non-admin — never loads", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await GET();
     expect(res.status).toBe(403);
     expect(loadApplicationProfileMock).not.toHaveBeenCalled();
@@ -134,7 +133,7 @@ describe("GET /api/submit/profile", () => {
 
   it("404s before any save has ever happened", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     loadApplicationProfileMock.mockResolvedValue(null);
 
     const res = await GET();
@@ -144,7 +143,7 @@ describe("GET /api/submit/profile", () => {
 
   it("200s with the profile after a save", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     loadApplicationProfileMock.mockResolvedValue(ALEX_QUINN_PROFILE);
 
     const res = await GET();
@@ -156,11 +155,10 @@ describe("GET /api/submit/profile", () => {
   it("an admin without a claimed invite can still load their own profile", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "admin-1", email: "admin@example.com" } } });
     isAdminMock.mockReturnValue(true);
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(true);
     loadApplicationProfileMock.mockResolvedValue(ALEX_QUINN_PROFILE);
 
     const res = await GET();
     expect(res.status).toBe(200);
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 });

@@ -22,8 +22,8 @@ vi.mock("@/lib/onboarding/checkpoint", () => ({
   maybeFireCheckpoint: maybeFireCheckpointMock,
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -48,7 +48,7 @@ function jsonRequest(body: unknown) {
 describe("POST /api/onboarding/anchor", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getOrCreateSessionMock.mockReset();
@@ -72,7 +72,7 @@ describe("POST /api/onboarding/anchor", () => {
 
   it("403s without a claimed invite for a non-admin", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await POST(jsonRequest({ current_title: "Engineer", current_company: "Acme" }));
     expect(res.status).toBe(403);
     expect(saveSessionMock).not.toHaveBeenCalled();
@@ -81,14 +81,14 @@ describe("POST /api/onboarding/anchor", () => {
   it("an admin without a claimed invite still succeeds — bypasses the gate", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "admin-1" } } });
     isAdminMock.mockReturnValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ current_title: "Engineer", current_company: "Acme" }));
     expect(res.status).toBe(200);
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 
   it("400s when neither current_title+current_company nor free_text is provided", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ current_title: "Engineer" }));
     expect(res.status).toBe(400);
     expect(saveSessionMock).not.toHaveBeenCalled();
@@ -96,7 +96,7 @@ describe("POST /api/onboarding/anchor", () => {
 
   it("writes extracted.anchor and advances stage to calibration for the title/company path", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(
       jsonRequest({ current_title: "Senior Backend Engineer", current_company: "Acme Corp", years_in_role: "4 years" })
     );
@@ -120,7 +120,7 @@ describe("POST /api/onboarding/anchor", () => {
 
   it("marks modules.anchor complete so phaseOneComplete can eventually fire (V3A-B1 fix)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getOrCreateSessionMock.mockResolvedValue({
       stage: "anchor",
       messages: [],
@@ -143,7 +143,7 @@ describe("POST /api/onboarding/anchor", () => {
 
   it("writes extracted.anchor.free_text for the no-title escape path", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ free_text: "Final-year CS student, internships in backend dev" }));
     expect(res.status).toBe(200);
     expect(saveSessionMock).toHaveBeenCalledWith(
@@ -159,7 +159,7 @@ describe("POST /api/onboarding/anchor", () => {
 
   it("preserves any pre-existing extracted fields (merge, not overwrite)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getOrCreateSessionMock.mockResolvedValue({
       stage: "anchor",
       messages: [],
@@ -181,7 +181,7 @@ describe("POST /api/onboarding/anchor", () => {
 
   it("409s and writes nothing when the session has already moved past the anchor stage (replay/resubmit guard)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getOrCreateSessionMock.mockResolvedValue({
       stage: "targeting",
       messages: [{ role: "assistant", content: "..." }],
@@ -195,7 +195,7 @@ describe("POST /api/onboarding/anchor", () => {
 
   it("409s when the session is already complete, even though status alone wouldn't otherwise block it", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getOrCreateSessionMock.mockResolvedValue({ stage: "done", messages: [], extracted: {}, status: "complete" });
     const res = await POST(jsonRequest({ current_title: "Engineer", current_company: "Acme" }));
     expect(res.status).toBe(409);
@@ -204,7 +204,7 @@ describe("POST /api/onboarding/anchor", () => {
 
   it("calls maybeFireCheckpoint after saveSession (Task 0 fix — anchor can be the last phase-1 module to complete)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     await POST(jsonRequest({ current_title: "Engineer", current_company: "Acme" }));
     expect(maybeFireCheckpointMock).toHaveBeenCalledTimes(1);
     const [, session, user] = maybeFireCheckpointMock.mock.calls[0];
@@ -217,7 +217,7 @@ describe("POST /api/onboarding/anchor", () => {
 
   it("never calls the Anthropic client or records a ledger row (zero-LLM stage)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     await POST(jsonRequest({ current_title: "Engineer", current_company: "Acme" }));
     // No ledger/anthropic mocks are wired into this test file at all — if
     // the route tried to call either, the unmocked module would throw

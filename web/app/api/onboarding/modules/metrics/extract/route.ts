@@ -3,8 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getOrCreateSession, saveSession } from "@/lib/db/onboardingSession";
 import { getProfileDoc } from "@/lib/db/profiles";
-import { hasClaimedInvite } from "@/lib/db/invites";
-import { isAdmin } from "@/lib/admin/isAdmin";
+import { hasAccess } from "@/lib/db/access";
 import { recordOnboardingTurn } from "@/lib/db/ledger";
 import { ONBOARDING_MODEL } from "@/lib/anthropic/client";
 import { runMetricsExtractionTurn } from "@/lib/anthropic/moduleTurns";
@@ -31,7 +30,7 @@ export async function POST() {
   if (!user) {
     return NextResponse.json({ error: "not signed in" }, { status: 401 });
   }
-  if (!isAdmin(user) && !(await hasClaimedInvite(supabase))) {
+  if (!(await hasAccess(supabase, user))) {
     return NextResponse.json({ error: "invite required" }, { status: 403 });
   }
 

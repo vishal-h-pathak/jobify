@@ -5,8 +5,8 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock } })),
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -29,7 +29,7 @@ function req(postingId?: string) {
 describe("GET /api/tailor/runs", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     createSupabaseAdminClientMock.mockClear();
@@ -47,7 +47,7 @@ describe("GET /api/tailor/runs", () => {
 
   it("403s without a claimed invite for a non-admin — never polls", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await GET(req("posting-1"));
     expect(res.status).toBe(403);
     expect(pollRunsMock).not.toHaveBeenCalled();
@@ -55,7 +55,7 @@ describe("GET /api/tailor/runs", () => {
 
   it("400s when posting_id is missing — never polls (distinct from a valid-but-matchless posting_id)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await GET(req());
     expect(res.status).toBe(400);
     expect(pollRunsMock).not.toHaveBeenCalled();
@@ -64,7 +64,7 @@ describe("GET /api/tailor/runs", () => {
 
   it("returns { runs: [] } for a valid posting_id with no matching rows, without erroring", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     pollRunsMock.mockResolvedValue({ runs: [] });
     const res = await GET(req("posting-no-runs"));
     expect(res.status).toBe(200);
@@ -73,7 +73,7 @@ describe("GET /api/tailor/runs", () => {
 
   it("scopes the poll to the signed-in user and the requested posting_id, with the 10-minute stale window", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     await GET(req("posting-42"));
     expect(pollRunsMock).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "user-1", postingId: "posting-42", staleMinutes: 10 })
@@ -83,7 +83,7 @@ describe("GET /api/tailor/runs", () => {
 
   it("returns the runs pollRuns produced, e.g. a reaped row", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     pollRunsMock.mockResolvedValue({
       runs: [{ id: "run-1", status: "failed", error: "runner never picked this up — try again" }],
     });
@@ -95,9 +95,8 @@ describe("GET /api/tailor/runs", () => {
   it("an admin without a claimed invite can still poll", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "admin-1", email: "admin@example.com" } } });
     isAdminMock.mockReturnValue(true);
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(true);
     const res = await GET(req("posting-1"));
     expect(res.status).toBe(200);
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 });

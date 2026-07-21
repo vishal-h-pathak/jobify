@@ -5,8 +5,8 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock } })),
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -36,7 +36,7 @@ function jsonRequest(body: unknown) {
 describe("POST /api/onboarding/turn", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getOrCreateSessionMock.mockReset();
@@ -54,7 +54,7 @@ describe("POST /api/onboarding/turn", () => {
 
   it("403s without a claimed invite for a non-admin", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await POST(jsonRequest({ message: "hello" }));
     expect(res.status).toBe(403);
     expect(handleOnboardingTurnMock).not.toHaveBeenCalled();
@@ -62,7 +62,7 @@ describe("POST /api/onboarding/turn", () => {
 
   it("succeeds with a claimed invite", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "user-1@example.com" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ message: "hello" }));
     expect(res.status).toBe(200);
     expect(handleOnboardingTurnMock).toHaveBeenCalledWith(
@@ -73,8 +73,8 @@ describe("POST /api/onboarding/turn", () => {
   it("an admin without a claimed invite still succeeds — bypasses the gate", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "admin-1", email: "admin@example.com" } } });
     isAdminMock.mockReturnValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ message: "hello" }));
     expect(res.status).toBe(200);
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 });

@@ -52,8 +52,8 @@ vi.mock("@/lib/supabase/admin", () => ({
   createSupabaseAdminClient: vi.fn(() => ({ __admin: true })),
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -105,7 +105,7 @@ function postRequest(body: unknown) {
 describe("GET /api/onboarding/modules/reactions", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getOrCreateSessionMock.mockReset();
@@ -121,14 +121,14 @@ describe("GET /api/onboarding/modules/reactions", () => {
 
   it("403s without a claimed invite for a non-admin", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await GET();
     expect(res.status).toBe(403);
   });
 
   it("returns id/title/company/location only, ranked and excluding already-reacted", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     supabaseStub = makeSupabaseStub({
       postings: {
         data: [
@@ -149,7 +149,7 @@ describe("GET /api/onboarding/modules/reactions", () => {
 describe("POST /api/onboarding/modules/reactions", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getOrCreateSessionMock.mockReset();
@@ -172,21 +172,21 @@ describe("POST /api/onboarding/modules/reactions", () => {
 
   it("400s on a missing posting_id", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(postRequest({ reaction: "interested" }));
     expect(res.status).toBe(400);
   });
 
   it("400s on an invalid reaction value", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(postRequest({ posting_id: "p1", reaction: "maybe" }));
     expect(res.status).toBe(400);
   });
 
   it("404s for a posting that doesn't exist in the pool", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     supabaseStub = makeSupabaseStub({ postingLookup: { data: null, error: null } });
     const res = await POST(postRequest({ posting_id: "missing", reaction: "interested" }));
     expect(res.status).toBe(404);
@@ -194,7 +194,7 @@ describe("POST /api/onboarding/modules/reactions", () => {
 
   it("upserts the reaction row and mirrors into extracted.reactions[]", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(postRequest({ posting_id: "p1", reaction: "interested", note: "great mission" }));
     expect(res.status).toBe(200);
     expect(supabaseStub.__upsertMock).toHaveBeenCalledWith(
@@ -214,7 +214,7 @@ describe("POST /api/onboarding/modules/reactions", () => {
 
   it("does not mark the module complete before 6 reactions", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getOrCreateSessionMock.mockResolvedValue({
       ...BASE_SESSION,
       extracted: { ...BASE_SESSION.extracted, reactions: Array.from({ length: 4 }, (_, i) => ({ posting_id: `other-${i}`, title: "t", company: null, reaction: "interested" })) },
@@ -227,7 +227,7 @@ describe("POST /api/onboarding/modules/reactions", () => {
 
   it("marks the module complete at exactly 6 reactions and writes the receipt", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getOrCreateSessionMock.mockResolvedValue({
       ...BASE_SESSION,
       extracted: {
@@ -244,7 +244,7 @@ describe("POST /api/onboarding/modules/reactions", () => {
 
   it("allows a changed mind: re-reacting to the same posting replaces, not duplicates", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getOrCreateSessionMock.mockResolvedValue({
       ...BASE_SESSION,
       extracted: { ...BASE_SESSION.extracted, reactions: [{ posting_id: "p1", title: "Backend Engineer", company: "Acme", reaction: "not_interested" }] },
@@ -263,7 +263,7 @@ describe("POST /api/onboarding/modules/reactions", () => {
 
   it("calls maybeFireCheckpoint once completion fires", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getOrCreateSessionMock.mockResolvedValue({
       ...BASE_SESSION,
       extracted: {
@@ -277,7 +277,7 @@ describe("POST /api/onboarding/modules/reactions", () => {
 
   it("never records a budget_ledger row / calls the Anthropic client (zero-LLM stage)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     await POST(postRequest({ posting_id: "p1", reaction: "interested" }));
     expect(saveSessionMock).toHaveBeenCalledTimes(1);
   });

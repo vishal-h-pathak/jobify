@@ -2,12 +2,12 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { BUTTON_VARIANT_CLASSES } from "@/components/ui/Button";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { hasClaimedInvite } from "@/lib/db/invites";
+import { hasAccess } from "@/lib/db/access";
 import { intakeComplete } from "@/lib/onboarding/intakeComplete";
 
 const LINK_BUTTON_BASE = "inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium";
 
-// Signed-in visitors with a claimed invite skip the pitch entirely.
+// Signed-in visitors skip the pitch entirely — see below for where each goes.
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
@@ -16,10 +16,15 @@ export default async function Home() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (user && (await hasClaimedInvite(supabase))) {
-    // UX1_DESIGN.md §2: signed-in + incomplete -> straight to /onboarding —
-    // no marketing page for someone mid-intake.
-    redirect((await intakeComplete(supabase, user.id)) ? "/feed" : "/onboarding");
+  if (user) {
+    if (await hasAccess(supabase, user)) {
+      // UX1_DESIGN.md §2: signed-in + incomplete -> straight to /onboarding —
+      // no marketing page for someone mid-intake.
+      redirect((await intakeComplete(supabase, user.id)) ? "/feed" : "/onboarding");
+    }
+    // Signed in but neither claimed, allowlisted, nor admin: same invite
+    // wall as every other gate — not the marketing pitch.
+    redirect("/invite");
   }
 
   return (
@@ -44,10 +49,10 @@ export default async function Home() {
       </p>
 
       <div className="flex items-center gap-4">
-        <Link href="/invite" className={`${LINK_BUTTON_BASE} ${BUTTON_VARIANT_CLASSES.primary}`}>
+        <Link href="/invite" className={`${LINK_BUTTON_BASE} ${BUTTON_VARIANT_CLASSES.ghost}`}>
           I have an invite
         </Link>
-        <Link href="/login" className={`${LINK_BUTTON_BASE} ${BUTTON_VARIANT_CLASSES.ghost}`}>
+        <Link href="/login" className={`${LINK_BUTTON_BASE} ${BUTTON_VARIANT_CLASSES.primary}`}>
           Sign in
         </Link>
       </div>

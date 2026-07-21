@@ -5,8 +5,8 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock } })),
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -38,7 +38,7 @@ function ctx(runId: string) {
 describe("GET /api/tailor/materials/[runId]", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     createSupabaseAdminClientMock.mockClear();
@@ -61,7 +61,7 @@ describe("GET /api/tailor/materials/[runId]", () => {
 
   it("403s without a claimed invite for a non-admin — never queries or signs", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await GET(req(), ctx("run-1"));
     expect(res.status).toBe(403);
     expect(signMaterialsMock).not.toHaveBeenCalled();
@@ -69,7 +69,7 @@ describe("GET /api/tailor/materials/[runId]", () => {
 
   it("await()s the dynamic params instead of destructuring synchronously", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     maybeSingleMock.mockResolvedValue({ data: null, error: null });
     await GET(req(), ctx("run-async-check"));
     expect(eq1Mock).toHaveBeenCalledWith("id", "run-async-check");
@@ -77,7 +77,7 @@ describe("GET /api/tailor/materials/[runId]", () => {
 
   it("404s a run that does not exist", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     maybeSingleMock.mockResolvedValue({ data: null, error: null });
     const res = await GET(req(), ctx("missing-run"));
     expect(res.status).toBe(404);
@@ -87,7 +87,7 @@ describe("GET /api/tailor/materials/[runId]", () => {
 
   it("404s a run belonging to a different user — identical response to not-found (no user-enumeration signal)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     // The fake ownership query is scoped by both id AND user_id, so a row
     // belonging to someone else simply never matches -> null, same as
     // not-found. This asserts the query is scoped to the caller's user_id.
@@ -100,7 +100,7 @@ describe("GET /api/tailor/materials/[runId]", () => {
 
   it("404s a queued run — nothing to sign yet", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     maybeSingleMock.mockResolvedValue({
       data: { user_id: "user-1", posting_id: "posting-1", status: "queued" },
       error: null,
@@ -112,7 +112,7 @@ describe("GET /api/tailor/materials/[runId]", () => {
 
   it("404s a failed run", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     maybeSingleMock.mockResolvedValue({
       data: { user_id: "user-1", posting_id: "posting-1", status: "failed" },
       error: null,
@@ -124,7 +124,7 @@ describe("GET /api/tailor/materials/[runId]", () => {
 
   it("404s a running run", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     maybeSingleMock.mockResolvedValue({
       data: { user_id: "user-1", posting_id: "posting-1", status: "running" },
       error: null,
@@ -136,7 +136,7 @@ describe("GET /api/tailor/materials/[runId]", () => {
 
   it("a succeeded run returns the signed URLs signMaterials produced, called with the 5-minute expiry", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     maybeSingleMock.mockResolvedValue({
       data: { user_id: "user-1", posting_id: "posting-42", status: "succeeded" },
       error: null,
@@ -159,19 +159,18 @@ describe("GET /api/tailor/materials/[runId]", () => {
   it("an admin without a claimed invite can still fetch their own succeeded run", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "admin-1", email: "admin@example.com" } } });
     isAdminMock.mockReturnValue(true);
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(true);
     maybeSingleMock.mockResolvedValue({
       data: { user_id: "admin-1", posting_id: "posting-1", status: "succeeded" },
       error: null,
     });
     const res = await GET(req(), ctx("run-1"));
     expect(res.status).toBe(200);
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 
   it("throws on a SELECT error instead of swallowing it", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     maybeSingleMock.mockResolvedValue({ data: null, error: { message: "rls denied" } });
     await expect(GET(req(), ctx("run-1"))).rejects.toEqual({ message: "rls denied" });
   });

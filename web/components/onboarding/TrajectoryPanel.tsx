@@ -6,11 +6,23 @@ import { TextArea } from "@/components/ui/Input";
 
 export type TrajectoryDirection = "climb" | "switch" | "stabilize" | "experiment";
 
-export const TRAJECTORY_OPTIONS: { direction: TrajectoryDirection; label: string }[] = [
-  { direction: "climb", label: "Climb — bigger scope, bigger title" },
-  { direction: "switch", label: "Switch ladders — different track entirely" },
-  { direction: "stabilize", label: "Same rung, better terms" },
-  { direction: "experiment", label: "Deliberately experimenting" },
+export const TRAJECTORY_OPTIONS: { direction: TrajectoryDirection; label: string; example: string }[] = [
+  { direction: "climb", label: "Climb — bigger scope, bigger title", example: "e.g. senior → staff, IC → manager" },
+  {
+    direction: "switch",
+    label: "Switch tracks — a different kind of work entirely",
+    example: "e.g. IC → PM, agency → in-house",
+  },
+  {
+    direction: "stabilize",
+    label: "Stay put — same kind of role, better terms",
+    example: "e.g. same scope, better pay, team, or flexibility",
+  },
+  {
+    direction: "experiment",
+    label: "Not sure yet — keeping options open",
+    example: "not committing to one direction yet — show me range",
+  },
 ];
 
 export interface TrajectoryState {
@@ -97,7 +109,8 @@ export function TrajectoryPanel({ onComplete, fetchImpl = fetch }: TrajectoryPan
               state.direction === option.direction ? "border-amber" : "border-line hover:border-ink-muted"
             }`}
           >
-            {option.label}
+            <div>{option.label}</div>
+            <div className="text-xs text-ink-muted">{option.example}</div>
           </button>
         ))}
       </div>

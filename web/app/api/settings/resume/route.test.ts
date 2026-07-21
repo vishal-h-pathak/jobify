@@ -5,8 +5,8 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock } })),
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -45,7 +45,7 @@ function jsonRequest(body: unknown) {
 describe("POST /api/settings/resume", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getProfileDocMock.mockReset();
@@ -72,7 +72,7 @@ describe("POST /api/settings/resume", () => {
 
   it("403s without a claimed invite for a non-admin", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await POST(jsonRequest({ resumeText: "some resume text" }));
     expect(res.status).toBe(403);
     expect(runResumeExtractionTurnMock).not.toHaveBeenCalled();
@@ -81,14 +81,14 @@ describe("POST /api/settings/resume", () => {
   it("an admin without a claimed invite still succeeds — bypasses the gate", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "admin-1" } } });
     isAdminMock.mockReturnValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ resumeText: "some resume text" }));
     expect(res.status).toBe(200);
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 
   it("400s when resumeText is missing or blank", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ resumeText: "   " }));
     expect(res.status).toBe(400);
     expect(runResumeExtractionTurnMock).not.toHaveBeenCalled();
@@ -96,7 +96,7 @@ describe("POST /api/settings/resume", () => {
 
   it("404s when the user has no profile yet — never calls the extraction turn", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     getProfileDocMock.mockResolvedValue(null);
     const res = await POST(jsonRequest({ resumeText: "some resume text" }));
     expect(res.status).toBe(404);
@@ -105,7 +105,7 @@ describe("POST /api/settings/resume", () => {
 
   it("a failed extraction propagates and never touches the stored doc (old cv.md survives)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     runResumeExtractionTurnMock.mockRejectedValue(new Error("anthropic boom"));
     await expect(POST(jsonRequest({ resumeText: "some resume text" }))).rejects.toThrow("anthropic boom");
     expect(regenerateCvMock).not.toHaveBeenCalled();
@@ -115,7 +115,7 @@ describe("POST /api/settings/resume", () => {
 
   it("happy path: extracts, ledgers the turn, regenerates via regenerateCv, upserts, and returns provenance", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST(jsonRequest({ resumeText: "  some resume text  " }));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -148,7 +148,7 @@ describe("POST /api/settings/resume", () => {
 
   it("derives 'interview' provenance when the regenerated cv.md carries the synthesized marker", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     regenerateCvMock.mockResolvedValue({ "cv.md": "# CV — assembled from onboarding interview (no resume provided)\n" });
     const res = await POST(jsonRequest({ resumeText: "some resume text" }));
     const body = await res.json();

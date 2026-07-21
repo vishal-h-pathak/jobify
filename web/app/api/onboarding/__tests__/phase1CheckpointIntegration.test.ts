@@ -107,9 +107,9 @@ vi.mock("@/lib/supabase/admin", () => ({
   createSupabaseAdminClient: createSupabaseAdminClientMock,
 }));
 
-const hasClaimedInviteMock = vi.fn(async () => true);
-vi.mock("@/lib/db/invites", () => ({
-  hasClaimedInvite: hasClaimedInviteMock,
+const hasAccessMock = vi.fn(async () => true);
+vi.mock("@/lib/db/access", () => ({
+  hasAccess: hasAccessMock,
 }));
 
 const isAdminMock = vi.fn(() => false);
@@ -239,7 +239,7 @@ beforeEach(() => {
   serverClient = makeServerClient();
   adminClient = makeAdminClient();
   createSupabaseAdminClientMock.mockClear();
-  hasClaimedInviteMock.mockClear();
+  hasAccessMock.mockClear();
   isAdminMock.mockClear();
   getOrCreateSessionMock.mockClear();
   saveSessionMock.mockClear();

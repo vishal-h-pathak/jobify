@@ -5,8 +5,8 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: vi.fn(async () => ({ auth: { getUser: getUserMock } })),
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -27,7 +27,7 @@ function req(query?: string) {
 describe("GET /api/submit/packet", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     createSupabaseAdminClientMock.mockClear();
@@ -43,7 +43,7 @@ describe("GET /api/submit/packet", () => {
 
   it("403s without a claimed invite for a non-admin — never calls buildSubmitPacket", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "alex@example.com" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await GET(req("posting_id=posting-1"));
     expect(res.status).toBe(403);
     expect(buildSubmitPacketMock).not.toHaveBeenCalled();
@@ -51,7 +51,7 @@ describe("GET /api/submit/packet", () => {
 
   it("400s when posting_id is missing — never calls buildSubmitPacket", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "alex@example.com" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await GET(req());
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "posting_id required" });
@@ -60,7 +60,7 @@ describe("GET /api/submit/packet", () => {
 
   it("delegates to buildSubmitPacket with the authed user's id/email and the posting_id param", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "alex@example.com" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     buildSubmitPacketMock.mockResolvedValue({ ok: true, packet: { posting: { id: "posting-1" } } });
 
     await GET(req("posting_id=posting-1"));
@@ -70,7 +70,7 @@ describe("GET /api/submit/packet", () => {
 
   it("falls back to an empty-string email when the authed user has none", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: undefined } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     buildSubmitPacketMock.mockResolvedValue({ ok: true, packet: { posting: { id: "posting-1" } } });
 
     await GET(req("posting_id=posting-1"));
@@ -80,7 +80,7 @@ describe("GET /api/submit/packet", () => {
 
   it("maps the ok:true branch to 200 with the packet body", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "alex@example.com" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const packet = { posting: { id: "posting-1" }, meta: { tailor_run_id: "run-1" } };
     buildSubmitPacketMock.mockResolvedValue({ ok: true, packet });
 
@@ -92,7 +92,7 @@ describe("GET /api/submit/packet", () => {
 
   it("maps the 409 no_application_profile branch", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "alex@example.com" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     buildSubmitPacketMock.mockResolvedValue({ ok: false, status: 409, error: "no_application_profile" });
 
     const res = await GET(req("posting_id=posting-1"));
@@ -103,7 +103,7 @@ describe("GET /api/submit/packet", () => {
 
   it("maps the 404 no_materials branch", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "alex@example.com" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     buildSubmitPacketMock.mockResolvedValue({ ok: false, status: 404, error: "no_materials" });
 
     const res = await GET(req("posting_id=posting-1"));
@@ -115,12 +115,11 @@ describe("GET /api/submit/packet", () => {
   it("an admin without a claimed invite can still hit the route", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "admin-1", email: "admin@example.com" } } });
     isAdminMock.mockReturnValue(true);
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(true);
     buildSubmitPacketMock.mockResolvedValue({ ok: true, packet: {} });
 
     const res = await GET(req("posting_id=posting-1"));
 
     expect(res.status).toBe(200);
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 });

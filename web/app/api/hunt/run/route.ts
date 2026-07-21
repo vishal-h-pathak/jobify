@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { hasClaimedInvite } from "@/lib/db/invites";
+import { hasAccess } from "@/lib/db/access";
 import { isAdmin } from "@/lib/admin/isAdmin";
 import { dispatchHunt } from "@/lib/hunt/dispatchHunt";
 
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
   }
 
   const admin = isAdmin(user);
-  if (!admin && !(await hasClaimedInvite(supabase))) {
+  if (!admin && !(await hasAccess(supabase, user))) {
     return NextResponse.json({ error: "invite required" }, { status: 403 });
   }
 

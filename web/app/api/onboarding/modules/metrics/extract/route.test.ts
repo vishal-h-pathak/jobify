@@ -10,8 +10,8 @@ vi.mock("@/lib/supabase/admin", () => ({
   createSupabaseAdminClient: createSupabaseAdminClientMock,
 }));
 
-const hasClaimedInviteMock = vi.fn();
-vi.mock("@/lib/db/invites", () => ({ hasClaimedInvite: hasClaimedInviteMock }));
+const hasAccessMock = vi.fn();
+vi.mock("@/lib/db/access", () => ({ hasAccess: hasAccessMock }));
 
 const isAdminMock = vi.fn();
 vi.mock("@/lib/admin/isAdmin", () => ({ isAdmin: isAdminMock }));
@@ -57,7 +57,7 @@ const BASE_SESSION = {
 describe("POST /api/onboarding/modules/metrics/extract", () => {
   beforeEach(() => {
     getUserMock.mockReset();
-    hasClaimedInviteMock.mockReset();
+    hasAccessMock.mockReset();
     isAdminMock.mockReset();
     isAdminMock.mockReturnValue(false);
     getOrCreateSessionMock.mockReset();
@@ -83,7 +83,7 @@ describe("POST /api/onboarding/modules/metrics/extract", () => {
 
   it("403s without a claimed invite for a non-admin", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(false);
+    hasAccessMock.mockResolvedValue(false);
     const res = await POST();
     expect(res.status).toBe(403);
     expect(runMetricsExtractionTurnMock).not.toHaveBeenCalled();
@@ -92,14 +92,14 @@ describe("POST /api/onboarding/modules/metrics/extract", () => {
   it("an admin without a claimed invite still succeeds — bypasses the gate", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "admin-1" } } });
     isAdminMock.mockReturnValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST();
     expect(res.status).toBe(200);
-    expect(hasClaimedInviteMock).not.toHaveBeenCalled();
   });
 
   it("happy path: sweeps cv.md + calibration + energy + anchor + user messages, ledgers once, stores pending claims (no module completion)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     const res = await POST();
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -141,7 +141,7 @@ describe("POST /api/onboarding/modules/metrics/extract", () => {
 
   it("drops a fabricated claim that never appears anywhere in the swept text", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    hasClaimedInviteMock.mockResolvedValue(true);
+    hasAccessMock.mockResolvedValue(true);
     runMetricsExtractionTurnMock.mockResolvedValue({
       claims: [
         { id: "claim_1", text: "cut deploy time from 40 minutes to 6", source: "energy", has_number: true },
