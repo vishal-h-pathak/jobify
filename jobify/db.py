@@ -459,22 +459,43 @@ def upsert_posting(job: dict) -> None:
     the same board collapse to ONE row here, never two. On conflict
     (posting already seen), refreshes `last_seen_at` plus every field
     worth re-checking on a re-sighting (`title`, `location`, `description`,
-    `application_url`, `ats_kind`, `link_status`) rather than silently
-    dropping them; `first_seen_at` is deliberately left OUT of the payload
-    so its own column DEFAULT (`now()`) only fires on the initial insert
-    and a re-upsert never overwrites it.
+    `application_url`, `ats_kind`, `link_status`, and — HUNT2 S3 — the six
+    metadata-retention fields below) rather than silently dropping them;
+    `first_seen_at` is deliberately left OUT of the payload so its own
+    column DEFAULT (`now()`) only fires on the initial insert and a
+    re-upsert never overwrites it.
+
+    HUNT2 S3 (migration 0016, `planning/HUNT2_SOURCES.md` §3.5): every
+    fetcher now extracts what its API provides into `raw` (the full
+    source payload, schema-on-read) plus `posted_at`/`department`/
+    `employment_type`/`comp_min`/`comp_max`/`comp_currency` where
+    available. `.get()` throughout — a fetcher that doesn't populate a
+    given key (most don't emit comp, e.g.) upserts NULL for it, never a
+    KeyError.
+
+    HUNT2 S3 addendum (post-merge-review fix): `remote` was previously
+    NOT included in this payload despite every hunt source computing a
+    real tri-state value via `sources.remote_infer.infer_remote` (since
+    HUNT2 P0/session 47) — the value was computed, then silently dropped
+    at the DB write boundary. That severed P0.2 (tri-state remote) and
+    P0.7 (location-tier ranking) end-to-end for every hosted/pooled
+    posting: `jobify.hosted.fanout` reads postings back from this same
+    table (`db.get_unmatched_postings`), so `remote` read back as NULL
+    for 100% of pooled postings regardless of what a fetcher computed,
+    and `jobify.hunt.rubric._location_tier` treats `remote=None` as tier
+    2 — every remote-acceptable posting was silently demoted out of tier
+    1. Fixed here; a stale in-code comment claiming this was intentional
+    has been removed (see `tests/test_db_hosted.py::
+    test_upsert_posting_persists_remote_tri_state` for the tri-state
+    write test and `tests/test_hunt_sources_metadata.py::
+    test_fetcher_remote_value_survives_db_round_trip_into_rubric_tier`
+    for a fetcher-to-tier round-trip proof).
 
     Service-role write via `_get_client()` — matches `upsert_job`'s
     pattern exactly. `postings` RLS allows SELECT-all to authed users but
     has no insert/update policy, so an anon-scoped client would silently
     no-op here.
     """
-    # NOTE: no `remote` field is populated here (no hunt source emits a
-    # top-level `remote` key on its job dicts either, single-user pipeline
-    # included) — `jobify.hunt.rubric.score_posting`'s `remote is True`
-    # location-gate branch is therefore currently dead in the hosted
-    # pipeline. Pre-existing gap this branch surfaces, not a regression;
-    # left as-is (see docs/SCORING.md's gates section).
     _get_client().table("postings").upsert(
         {
             "id": job["id"],
@@ -486,7 +507,15 @@ def upsert_posting(job: dict) -> None:
             "ats_kind": job.get("ats_kind"),
             "link_status": job.get("link_status"),
             "source": job.get("source"),
+            "remote": job.get("remote"),
             "last_seen_at": _utcnow(),
+            "raw": job.get("raw"),
+            "posted_at": job.get("posted_at"),
+            "department": job.get("department"),
+            "employment_type": job.get("employment_type"),
+            "comp_min": job.get("comp_min"),
+            "comp_max": job.get("comp_max"),
+            "comp_currency": job.get("comp_currency"),
         },
         on_conflict="id",
     ).execute()

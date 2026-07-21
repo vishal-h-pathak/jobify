@@ -148,6 +148,234 @@ def test_stage1_title_filter_failure_gets_rejected_title_row(tmp_path, monkeypat
     assert counters["postings_scored"] == 1  # only the survivor reached stage 2
 
 
+# ── Stage 1.5: pre-LLM cheap filters (comp floor + max age, HUNT2 S3) ────
+
+
+def _profile_yaml_with_comp_floor(low: str, high: str = "") -> str:
+    band = f"{low}-{high}" if high else low
+    return (
+        _DEFAULT_PROFILE_YAML
+        + "location_and_compensation:\n"
+        + f"  target_comp_usd: \"{band}\"\n"
+    )
+
+
+def test_prelim_filter_comp_floor_pure_function():
+    # The exact string shape a real hosted profile's
+    # `location_and_compensation.target_comp_usd` carries (post-merge-
+    # review verification item): a hyphenated range, no currency symbol,
+    # no thousands separator. Floor = the range MINIMUM.
+    assert fanout._profile_comp_floor(
+        {"location_and_compensation": {"target_comp_usd": "132000-145000"}}
+    ) == 132000.0
+    assert fanout._profile_comp_floor(
+        {"location_and_compensation": {"target_comp_usd": "175000-205000"}}
+    ) == 175000.0
+    # A plain single number (no range) also parses.
+    assert fanout._profile_comp_floor({"location_and_compensation": {"target_comp_usd": "150000"}}) == 150000.0
+    assert fanout._profile_comp_floor({}) is None
+    # Unparseable comp string (item (c)): no digits at all -> None, filter
+    # no-ops entirely regardless of what any posting publishes.
+    assert fanout._profile_comp_floor({"location_and_compensation": {"target_comp_usd": "n/a"}}) is None
+    assert fanout._profile_comp_floor({"location_and_compensation": {"target_comp_usd": "market rate"}}) is None
+
+
+def test_prelim_filter_posting_comp_value_uses_max_only():
+    """Post-merge-review fix: this used to prefer `comp_min`, which
+    rejected a posting whose band straddled the floor (low end below,
+    high end above) on its low end alone. Comparing against `comp_max`
+    only means a straddling band's `comp_min` is irrelevant here — only
+    the ceiling matters, and an unknown ceiling (no `comp_max`) means
+    unknown, not the min stood in for it."""
+    assert fanout._posting_comp_value({"comp_min": 100000, "comp_max": 150000}) == 150000.0
+    assert fanout._posting_comp_value({"comp_min": 200000, "comp_max": None}) is None
+    assert fanout._posting_comp_value({}) is None
+
+
+def test_prelim_filter_posting_age_days_none_when_unknown():
+    assert fanout._posting_age_days({}) is None
+    assert fanout._posting_age_days({"posted_at": "not-a-date"}) is None
+
+
+def test_prelim_filter_rejects_posting_below_comp_floor(tmp_path, monkeypatch):
+    """The posting's ENTIRE band (comp_min AND comp_max) sits below the
+    floor — the only case the filter should ever reject on."""
+    d = _profile_dir(tmp_path, "user-a", profile_yaml=_profile_yaml_with_comp_floor("150000", "200000"))
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+
+    postings = [_posting("p-lowball", comp_min=80000, comp_max=100000), _posting("p-real")]
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: postings)
+    # No rubric mock needed for p-real if survivors reach stage 2 — but
+    # p-real has no comp fields, so it survives the prelim filter and DOES
+    # reach `_ensure_rubric`; supply a cached rubric so that path is real
+    # but token-free.
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    _fixed_verdict_llm(monkeypatch)
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    rejected = next(kw for pid, kw in upserts if pid == "p-lowball")
+    assert rejected["status"] == "rejected_rubric"
+    assert rejected["reject_reason"] == "comp_below_floor"
+    # The lowball posting never reached stage 2 (rubric scoring) — only
+    # the real survivor did.
+    assert counters["postings_scored"] == 1
+
+
+def test_prelim_filter_passes_posting_whose_band_straddles_the_floor(tmp_path, monkeypatch):
+    """Post-merge-review fix (item 2b): a posting whose comp_min sits
+    below the user's floor but whose comp_max clears it must PASS, not
+    be rejected on its low end alone — the job could plausibly pay at or
+    above the floor."""
+    d = _profile_dir(tmp_path, "user-a", profile_yaml=_profile_yaml_with_comp_floor("150000", "200000"))
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(
+        db, "get_unmatched_postings",
+        lambda uid: [_posting("p-straddle", comp_min=100000, comp_max=180000)],
+    )
+
+    _fixed_verdict_llm(monkeypatch)
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert not any(
+        pid == "p-straddle" and kw.get("reject_reason") == "comp_below_floor" for pid, kw in upserts
+    )
+    assert counters["postings_scored"] == 1
+
+
+def test_prelim_filter_passes_when_profile_comp_string_unparseable(tmp_path, monkeypatch):
+    """Post-merge-review fix (item 2c): a `target_comp_usd` value with no
+    parseable digits at all (e.g. "market rate") must degrade to no floor
+    stated — the filter must never reject, even against a rock-bottom
+    posting."""
+    d = _profile_dir(tmp_path, "user-a", profile_yaml=(
+        _DEFAULT_PROFILE_YAML
+        + "location_and_compensation:\n"
+        + "  target_comp_usd: \"market rate\"\n"
+    ))
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(
+        db, "get_unmatched_postings",
+        lambda uid: [_posting("p-rockbottom", comp_min=1, comp_max=1)],
+    )
+
+    _fixed_verdict_llm(monkeypatch)
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert not any(
+        pid == "p-rockbottom" and kw.get("reject_reason") == "comp_below_floor" for pid, kw in upserts
+    )
+    assert counters["postings_scored"] == 1
+
+
+def test_prelim_filter_passes_when_no_comp_floor_stated(tmp_path, monkeypatch):
+    """No `target_comp_usd` in the profile at all — the comp filter must
+    never reject on a floor that was never stated (BOTH PASS ON NULL)."""
+    d = _profile_dir(tmp_path, "user-a")  # _DEFAULT_PROFILE_YAML has no comp floor
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-cheap", comp_min=1)])
+
+    _fixed_verdict_llm(monkeypatch)
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert not any(pid == "p-cheap" and kw.get("reject_reason") == "comp_below_floor" for pid, kw in upserts)
+    assert counters["postings_scored"] == 1
+
+
+def test_prelim_filter_passes_when_posting_has_no_comp(tmp_path, monkeypatch):
+    """A user with a stated floor but a posting that publishes no comp at
+    all must still pass (absence of data is never a disqualifier)."""
+    d = _profile_dir(tmp_path, "user-a", profile_yaml=_profile_yaml_with_comp_floor("150000", "200000"))
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-no-comp")])
+
+    _fixed_verdict_llm(monkeypatch)
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert not any(pid == "p-no-comp" and kw.get("reject_reason") == "comp_below_floor" for pid, kw in upserts)
+    assert counters["postings_scored"] == 1
+
+
+def test_prelim_filter_rejects_stale_posting(tmp_path, monkeypatch):
+    d = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+
+    from datetime import datetime, timedelta, timezone
+    ancient = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+    postings = [_posting("p-stale", posted_at=ancient), _posting("p-real")]
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: postings)
+
+    _fixed_verdict_llm(monkeypatch)
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    rejected = next(kw for pid, kw in upserts if pid == "p-stale")
+    assert rejected["status"] == "rejected_rubric"
+    assert rejected["reject_reason"] == "stale_posting"
+    assert counters["postings_scored"] == 1
+
+
+def test_prelim_filter_passes_when_posted_at_unknown(tmp_path, monkeypatch):
+    """No `posted_at` at all (the overwhelming majority of postings before
+    HUNT2 S3's fetcher changes backfill it) must never be treated as
+    stale — absence of data is never a disqualifier."""
+    d = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-undated")])
+
+    _fixed_verdict_llm(monkeypatch)
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert not any(pid == "p-undated" and kw.get("reject_reason") == "stale_posting" for pid, kw in upserts)
+    assert counters["postings_scored"] == 1
+
+
 # ── Stage 2: compiled rubric ─────────────────────────────────────────────
 
 

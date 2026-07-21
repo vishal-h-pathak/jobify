@@ -364,6 +364,23 @@ def test_upsert_posting_writes_expected_payload_and_on_conflict(patch_db_client)
     assert "first_seen_at" not in payload
 
 
+@pytest.mark.parametrize("remote_value", [True, False, None])
+def test_upsert_posting_persists_remote_tri_state(patch_db_client, remote_value):
+    """Post-merge-review fix: `remote` used to be silently dropped at this
+    write boundary despite every fetcher computing a real tri-state value
+    (`sources.remote_infer.infer_remote`) — severing P0.2/P0.7 end-to-end
+    (see this function's docstring in `jobify/db.py`). All three states
+    (True/False/None-i.e.-unknown) must survive into the upsert payload
+    unchanged, not just the truthy case."""
+    fake = _FakeClient()
+    patch_db_client(fake)
+
+    db.upsert_posting(_posting_job(remote=remote_value))
+
+    _, q = fake.queries[-1]
+    assert q.upsert_payload["remote"] is remote_value
+
+
 def test_upsert_posting_uses_service_role_client(patch_db_client):
     """Matches upsert_job's pattern exactly: writes go through
     `_get_client()`, the same client attribute the single-user pipeline's

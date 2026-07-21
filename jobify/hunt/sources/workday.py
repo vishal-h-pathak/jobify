@@ -26,6 +26,7 @@ location preference is enforced entirely per-user at scoring/ranking time
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Iterable
 
 from jobify.shared.html import strip_tags
@@ -35,6 +36,19 @@ from sources._portals import title_signals, workday_tenants
 from sources.remote_infer import infer_remote
 
 logger = logging.getLogger("sources.workday")
+
+
+def _posted_at_iso(start_date: str | None) -> str | None:
+    """`jobPostingInfo.startDate` is a plain `YYYY-MM-DD` date string;
+    postings.posted_at is TIMESTAMPTZ, so anchor it at midnight UTC.
+    Missing/malformed input returns None, never a guessed value."""
+    if not start_date:
+        return None
+    try:
+        date.fromisoformat(start_date)
+    except ValueError:
+        return None
+    return f"{start_date}T00:00:00+00:00"
 
 USER_AGENT = "job-hunter/1.0"
 _HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/json"}
@@ -122,6 +136,7 @@ def _fetch_one(row: dict, apply_title_filter: bool = True) -> Iterable[dict]:
 
             # Detail call — only for postings that survived the cheap filters.
             description = ""
+            jp: dict = {}
             if external_path:
                 detail = _fetch_job_detail(tenant, site, dc, external_path)
                 jp = (detail.get("jobPostingInfo") or {})
@@ -148,6 +163,17 @@ def _fetch_one(row: dict, apply_title_filter: bool = True) -> Iterable[dict]:
                 "remote": infer_remote(location, p),
                 "description": description[:3000],
                 "url": link,
+                # `startDate` on the detail payload is the exact posted-on
+                # date, not a future job-start date — confirmed live
+                # (target.wd5/homedepot.wd5): it matches the human-readable
+                # `postedOn` string exactly (e.g. "Posted Yesterday" ==
+                # startDate == today-1). `timeType` ("Full time"/"Part
+                # time"/"Variable") is Workday's employment-type field; no
+                # department or structured comp field is exposed by either
+                # verified tenant, so both stay None (never guessed).
+                "posted_at": _posted_at_iso(jp.get("startDate")),
+                "employment_type": jp.get("timeType") or None,
+                "raw": {"list": p, "detail": jp},
             }
 
         sleep_between_requests()

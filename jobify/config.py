@@ -128,6 +128,15 @@ EMBEDDINGS_ENABLED: Final[bool] = _bool("EMBEDDINGS_ENABLED", "true")
 # gets tuned.
 HOSTED_STAGE4_TOP_N: Final[int] = int(os.environ.get("HOSTED_STAGE4_TOP_N", "15"))
 
+# HUNT2 S3 (planning/HUNT2_SOURCES.md §3.5): the max-posting-age pre-LLM
+# filter's cap, in days. Deliberately generous (60) — this is a ghost-job
+# guard, not a freshness ranking signal, and only ever applies when
+# `postings.posted_at` is known; a posting with no posted_at always
+# passes.
+HOSTED_MAX_POSTING_AGE_DAYS: Final[int] = int(
+    os.environ.get("HOSTED_MAX_POSTING_AGE_DAYS", "60")
+)
+
 # ── Hosted worker: cost rails (H6, jobify.hosted.fanout + keycrypt) ──────────
 # Per-user hard cap: re-check `get_month_to_date_spend` against
 # `get_budget_cap` every K stage-4 verdicts within a single user's ladder

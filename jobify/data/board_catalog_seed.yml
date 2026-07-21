@@ -1,13 +1,30 @@
-# board_catalog_seed.yml — HUNT2 P1 S2 (planning/HUNT2_SOURCES.md §3.3)
+# board_catalog_seed.yml — HUNT2 P1 S2 (planning/HUNT2_SOURCES.md §3.3),
+# extended by P1 S3 (planning/HUNT2_SOURCES.md §3.4) session 50.
 #
-# Initial seed for the global `board_catalog` table. Source: exactly the
-# ats/slug/name triples from the owner's job-pipeline
+# Initial seed (S2) for the global `board_catalog` table. Source: exactly
+# the ats/slug/name triples from the owner's job-pipeline
 # `jobpipe/hunt/profile/portals.yml` (51 hand-verified boards: 19
 # Greenhouse, 32 Ashby) — no other content from that file (title filters,
 # notes, the owner's name) was copied. `tags` are a curation-time judgment
 # call against the fixed vocabulary below, made fresh for this catalog —
 # see the S2 session report for uncertain calls (mostly hardware/biotech
 # companies the vocabulary doesn't have a clean tag for).
+#
+# S3 additions (session 50, verified live 2026-07-21): 126 new boards —
+# 75 Greenhouse, 44 Ashby, 3 Lever, 6 Workday — bringing the catalog to
+# 177 total, spanning all four wired ATS platforms and broadening beyond
+# S2's data-ai/infra depth into fintech, devtools, product SaaS, and
+# enterprise (including three Atlanta-area/hybrid Workday tenants: Home
+# Depot, NCR Voyix, and Global Payments' Worldpay/TSYS tenants). Every S3
+# board was verified live during this session: fetched its real public
+# API endpoint, confirmed HTTP 200 with the response's own company-name
+# field (Greenhouse `jobs[].company_name`) or, where the ATS doesn't
+# return one (Ashby/Lever/Workday), confirmed a live job's own title/
+# description/URL self-references the intended company — full per-board
+# verification table in the S3 session report, not repeated per-line
+# here (matches this file's existing no-per-line-comment convention).
+# `greenhouse` (yes, cataloging the ATS vendor itself) is Greenhouse
+# Software's own real, live job board — not a mistake.
 #
 # tags vocabulary: infra, devtools, product, fintech, data-ai, enterprise,
 # growth-startup, big-tech-adjacent, remote-first
@@ -224,3 +241,537 @@ boards:
     slug: dust
     company_name: Dust
     tags: [product, growth-startup]
+
+  # ── Greenhouse — S3 additions (75, session 50) ────────────────────────
+  - ats: greenhouse
+    slug: stripe
+    company_name: Stripe
+    tags: [fintech, big-tech-adjacent]
+  - ats: greenhouse
+    slug: brex
+    company_name: Brex
+    tags: [fintech, growth-startup]
+  - ats: greenhouse
+    slug: mercury
+    company_name: Mercury
+    tags: [fintech, growth-startup]
+  - ats: greenhouse
+    slug: chime
+    company_name: Chime
+    tags: [fintech, growth-startup]
+  - ats: greenhouse
+    slug: affirm
+    company_name: Affirm
+    tags: [fintech, big-tech-adjacent]
+  - ats: greenhouse
+    slug: robinhood
+    company_name: Robinhood
+    tags: [fintech, big-tech-adjacent]
+  - ats: greenhouse
+    slug: gusto
+    company_name: Gusto
+    tags: [fintech, enterprise]
+  - ats: greenhouse
+    slug: marqeta
+    company_name: Marqeta
+    tags: [fintech, enterprise]
+  - ats: greenhouse
+    slug: block
+    company_name: Block
+    tags: [fintech, big-tech-adjacent]
+  - ats: greenhouse
+    slug: carta
+    company_name: Carta
+    tags: [fintech, enterprise]
+  - ats: greenhouse
+    slug: alloy
+    company_name: Alloy
+    tags: [fintech, growth-startup]
+  - ats: greenhouse
+    slug: highnote
+    company_name: Highnote
+    tags: [fintech, growth-startup]
+  - ats: greenhouse
+    slug: current
+    company_name: Current
+    tags: [fintech, growth-startup]
+  - ats: greenhouse
+    slug: gitlab
+    company_name: GitLab
+    tags: [devtools, remote-first]
+  - ats: greenhouse
+    slug: netlify
+    company_name: Netlify
+    tags: [devtools, infra]
+  - ats: greenhouse
+    slug: cloudflare
+    company_name: Cloudflare
+    tags: [infra, big-tech-adjacent]
+  - ats: greenhouse
+    slug: postman
+    company_name: Postman
+    tags: [devtools, enterprise]
+  - ats: greenhouse
+    slug: launchdarkly
+    company_name: LaunchDarkly
+    tags: [devtools, enterprise]
+  - ats: greenhouse
+    slug: circleci
+    company_name: CircleCI
+    tags: [devtools, infra]
+  - ats: greenhouse
+    slug: warp
+    company_name: Warp
+    tags: [devtools, growth-startup]
+  - ats: greenhouse
+    slug: planetscale
+    company_name: PlanetScale
+    tags: [infra, devtools]
+  - ats: greenhouse
+    slug: buildkite
+    company_name: Buildkite
+    tags: [devtools, infra]
+  - ats: greenhouse
+    slug: honeycomb
+    company_name: Honeycomb
+    tags: [devtools, infra]
+  - ats: greenhouse
+    slug: datadog
+    company_name: Datadog
+    tags: [infra, big-tech-adjacent]
+  - ats: greenhouse
+    slug: newrelic
+    company_name: New Relic
+    tags: [infra, enterprise]
+  - ats: greenhouse
+    slug: figma
+    company_name: Figma
+    tags: [product, big-tech-adjacent]
+  - ats: greenhouse
+    slug: airtable
+    company_name: Airtable
+    tags: [product, enterprise]
+  - ats: greenhouse
+    slug: asana
+    company_name: Asana
+    tags: [product, enterprise]
+  - ats: greenhouse
+    slug: dropbox
+    company_name: Dropbox
+    tags: [product, big-tech-adjacent]
+  - ats: greenhouse
+    slug: calendly
+    company_name: Calendly
+    tags: [product, growth-startup]
+  - ats: greenhouse
+    slug: webflow
+    company_name: Webflow
+    tags: [product, growth-startup]
+  - ats: greenhouse
+    slug: intercom
+    company_name: Intercom
+    tags: [product, enterprise]
+  - ats: greenhouse
+    slug: lattice
+    company_name: Lattice
+    tags: [product, enterprise]
+  - ats: greenhouse
+    slug: typeform
+    company_name: Typeform
+    tags: [product, growth-startup]
+  - ats: greenhouse
+    slug: mixpanel
+    company_name: Mixpanel
+    tags: [product, data-ai]
+  - ats: greenhouse
+    slug: amplitude
+    company_name: Amplitude
+    tags: [product, data-ai]
+  - ats: greenhouse
+    slug: pendo
+    company_name: Pendo
+    tags: [product, enterprise]
+  - ats: greenhouse
+    slug: mongodb
+    company_name: MongoDB
+    tags: [infra, big-tech-adjacent]
+  - ats: greenhouse
+    slug: elastic
+    company_name: Elastic
+    tags: [infra, big-tech-adjacent]
+  - ats: greenhouse
+    slug: twilio
+    company_name: Twilio
+    tags: [infra, big-tech-adjacent]
+  - ats: greenhouse
+    slug: samsara
+    company_name: Samsara
+    tags: [enterprise, infra]
+  - ats: greenhouse
+    slug: assemblyai
+    company_name: AssemblyAI
+    tags: [data-ai, growth-startup]
+  - ats: greenhouse
+    slug: lightningai
+    company_name: Lightning AI
+    tags: [data-ai, infra]
+  - ats: greenhouse
+    slug: comet
+    company_name: Comet
+    tags: [data-ai, devtools]
+  - ats: greenhouse
+    slug: abnormalsecurity
+    company_name: Abnormal Security
+    tags: [enterprise, growth-startup]
+  - ats: greenhouse
+    slug: chainguard
+    company_name: Chainguard
+    tags: [infra, growth-startup]
+  - ats: greenhouse
+    slug: socket
+    company_name: Socket
+    tags: [devtools, growth-startup]
+  - ats: greenhouse
+    slug: airbnb
+    company_name: Airbnb
+    tags: [big-tech-adjacent, product]
+  - ats: greenhouse
+    slug: lyft
+    company_name: Lyft
+    tags: [big-tech-adjacent, product]
+  - ats: greenhouse
+    slug: instacart
+    company_name: Instacart
+    tags: [big-tech-adjacent, product]
+  - ats: greenhouse
+    slug: pinterest
+    company_name: Pinterest
+    tags: [big-tech-adjacent, product]
+  - ats: greenhouse
+    slug: squarespace
+    company_name: Squarespace
+    tags: [product, enterprise]
+  - ats: greenhouse
+    slug: peloton
+    company_name: Peloton
+    tags: [enterprise, product]
+  - ats: greenhouse
+    slug: duolingo
+    company_name: Duolingo
+    tags: [product, big-tech-adjacent]
+  - ats: greenhouse
+    slug: coursera
+    company_name: Coursera
+    tags: [product, enterprise]
+  - ats: greenhouse
+    slug: udemy
+    company_name: Udemy
+    tags: [product, enterprise]
+  - ats: greenhouse
+    slug: khanacademy
+    company_name: Khan Academy
+    tags: [product, remote-first]
+  - ats: greenhouse
+    slug: outschool
+    company_name: Outschool
+    tags: [product, remote-first]
+  - ats: greenhouse
+    slug: masterclass
+    company_name: MasterClass
+    tags: [product, growth-startup]
+  - ats: greenhouse
+    slug: medium
+    company_name: Medium
+    tags: [product, remote-first]
+  - ats: greenhouse
+    slug: discord
+    company_name: Discord
+    tags: [product, big-tech-adjacent]
+  - ats: greenhouse
+    slug: boxinc
+    company_name: Box
+    tags: [enterprise, big-tech-adjacent]
+  - ats: greenhouse
+    slug: smartsheet
+    company_name: Smartsheet
+    tags: [enterprise, product]
+  - ats: greenhouse
+    slug: zoominfo
+    company_name: ZoomInfo
+    tags: [enterprise, data-ai]
+  - ats: greenhouse
+    slug: 6sense
+    company_name: 6sense
+    tags: [data-ai, enterprise]
+  - ats: greenhouse
+    slug: attentive
+    company_name: Attentive
+    tags: [data-ai, enterprise]
+  - ats: greenhouse
+    slug: klaviyo
+    company_name: Klaviyo
+    tags: [data-ai, enterprise]
+  - ats: greenhouse
+    slug: iterable
+    company_name: Iterable
+    tags: [data-ai, enterprise]
+  - ats: greenhouse
+    slug: braze
+    company_name: Braze
+    tags: [data-ai, enterprise]
+  - ats: greenhouse
+    slug: customerio
+    company_name: Customer.io
+    tags: [data-ai, growth-startup]
+  - ats: greenhouse
+    slug: truelayer
+    company_name: TrueLayer
+    tags: [fintech, infra]
+  - ats: greenhouse
+    slug: treasuryprime
+    company_name: Treasury Prime
+    tags: [fintech, infra]
+  - ats: greenhouse
+    slug: lithic
+    company_name: Lithic
+    tags: [fintech, infra]
+  - ats: greenhouse
+    slug: justworks
+    company_name: Justworks
+    tags: [fintech, enterprise]
+  - ats: greenhouse
+    slug: greenhouse
+    company_name: Greenhouse Software
+    tags: [enterprise, devtools]
+
+  # ── Ashby — S3 additions (44, session 50) ─────────────────────────────
+  - ats: ashby
+    slug: plaid
+    company_name: Plaid
+    tags: [fintech, growth-startup]
+  - ats: ashby
+    slug: ramp
+    company_name: Ramp
+    tags: [fintech, growth-startup]
+  - ats: ashby
+    slug: unit
+    company_name: Unit
+    tags: [fintech, infra]
+  - ats: ashby
+    slug: moderntreasury
+    company_name: Modern Treasury
+    tags: [fintech, infra]
+  - ats: ashby
+    slug: column
+    company_name: Column
+    tags: [fintech, infra]
+  - ats: ashby
+    slug: expensify
+    company_name: Expensify
+    tags: [fintech, product]
+  - ats: ashby
+    slug: highbeam
+    company_name: Highbeam
+    tags: [fintech, growth-startup]
+  - ats: ashby
+    slug: capchase
+    company_name: Capchase
+    tags: [fintech, growth-startup]
+  - ats: ashby
+    slug: clearco
+    company_name: Clearco
+    tags: [fintech, growth-startup]
+  - ats: ashby
+    slug: parafin
+    company_name: Parafin
+    tags: [fintech, growth-startup]
+  - ats: ashby
+    slug: synctera
+    company_name: Synctera
+    tags: [fintech, infra]
+  - ats: ashby
+    slug: sentry
+    company_name: Sentry
+    tags: [devtools, infra]
+  - ats: ashby
+    slug: temporal
+    company_name: Temporal
+    tags: [infra, devtools]
+  - ats: ashby
+    slug: render
+    company_name: Render
+    tags: [infra, devtools]
+  - ats: ashby
+    slug: railway
+    company_name: Railway
+    tags: [infra, devtools]
+  - ats: ashby
+    slug: workos
+    company_name: WorkOS
+    tags: [devtools, infra]
+  - ats: ashby
+    slug: supabase
+    company_name: Supabase
+    tags: [infra, devtools]
+  - ats: ashby
+    slug: neon
+    company_name: Neon
+    tags: [infra, devtools]
+  - ats: ashby
+    slug: chromatic
+    company_name: Chromatic
+    tags: [devtools, product]
+  - ats: ashby
+    slug: coder
+    company_name: Coder
+    tags: [devtools, infra]
+  - ats: ashby
+    slug: semgrep
+    company_name: Semgrep
+    tags: [devtools, infra]
+  - ats: ashby
+    slug: vanta
+    company_name: Vanta
+    tags: [enterprise, growth-startup]
+  - ats: ashby
+    slug: drata
+    company_name: Drata
+    tags: [enterprise, growth-startup]
+  - ats: ashby
+    slug: secureframe
+    company_name: Secureframe
+    tags: [enterprise, growth-startup]
+  - ats: ashby
+    slug: materialsecurity
+    company_name: Material Security
+    tags: [enterprise, growth-startup]
+  - ats: ashby
+    slug: snowflake
+    company_name: Snowflake
+    tags: [data-ai, big-tech-adjacent]
+  - ats: ashby
+    slug: confluent
+    company_name: Confluent
+    tags: [infra, enterprise]
+  - ats: ashby
+    slug: abridge
+    company_name: Abridge
+    tags: [data-ai, growth-startup]
+  - ats: ashby
+    slug: character
+    company_name: Character.AI
+    tags: [data-ai, growth-startup]
+  - ats: ashby
+    slug: deepgram
+    company_name: Deepgram
+    tags: [data-ai, infra]
+  - ats: ashby
+    slug: elevenlabs
+    company_name: ElevenLabs
+    tags: [data-ai, growth-startup]
+  - ats: ashby
+    slug: suno
+    company_name: Suno
+    tags: [data-ai, growth-startup]
+  - ats: ashby
+    slug: crusoe
+    company_name: Crusoe
+    tags: [infra, data-ai]
+  - ats: ashby
+    slug: braintrust
+    company_name: Braintrust
+    tags: [data-ai, devtools]
+  - ats: ashby
+    slug: vellum
+    company_name: Vellum
+    tags: [data-ai, devtools]
+  - ats: ashby
+    slug: langfuse
+    company_name: Langfuse
+    tags: [data-ai, devtools]
+  - ats: ashby
+    slug: zapier
+    company_name: Zapier
+    tags: [product, remote-first]
+  - ats: ashby
+    slug: buffer
+    company_name: Buffer
+    tags: [product, remote-first]
+  - ats: ashby
+    slug: oyster
+    company_name: Oyster
+    tags: [product, remote-first]
+  - ats: ashby
+    slug: miro
+    company_name: Miro
+    tags: [product, enterprise]
+  - ats: ashby
+    slug: clickup
+    company_name: ClickUp
+    tags: [product, growth-startup]
+  - ats: ashby
+    slug: patreon
+    company_name: Patreon
+    tags: [product, growth-startup]
+  - ats: ashby
+    slug: substack
+    company_name: Substack
+    tags: [product, growth-startup]
+  - ats: ashby
+    slug: fullstory
+    company_name: Fullstory
+    tags: [product, data-ai]
+
+  # ── Lever — S3 additions (3, session 50; also completes §3.4's "add
+  # Lever companies to the catalog") ────────────────────────────────────
+  - ats: lever
+    slug: palantir
+    company_name: Palantir
+    tags: [enterprise, big-tech-adjacent]
+  - ats: lever
+    slug: outreach
+    company_name: Outreach
+    tags: [enterprise, data-ai]
+  - ats: lever
+    slug: toptal
+    company_name: Toptal
+    tags: [remote-first, product]
+
+  # ── Workday — S3 additions (6, session 50 — new ATS platform; three
+  # confirmed Atlanta-area/hybrid: Home Depot, NCR Voyix, and Global
+  # Payments' Worldpay/TSYS tenants). `board_catalog.slug` is one TEXT
+  # column (0015_board_catalog.sql) with no dedicated tenant/site/dc
+  # columns, so Workday's `slug` here encodes `tenant/dc/site` (matching
+  # `jobify.hunt.sources.workday`'s own URL path order) — trivially
+  # `.split("/")`-able once something downstream needs to reconstruct a
+  # tenant row. KNOWN GAP (not this session's scope — flagged in the S3
+  # report): `web/lib/portals/tierPacks.ts`'s `SlugProbeAts` type only
+  # covers greenhouse/ashby/lever, so these six Workday rows are valid,
+  # seeded `board_catalog` data but are NOT YET auto-seeded into a new
+  # user's `portals.yml` by the onboarding tier-pack flow — only a
+  # hand-edited `workday:` section (schema already supports it) reaches
+  # them today. ──────────────────────────────────────────────────────────
+  - ats: workday
+    slug: micron/wd1/External
+    company_name: Micron Technology
+    tags: [enterprise, infra]
+  - ats: workday
+    slug: target/wd5/targetcareers
+    company_name: Target
+    tags: [enterprise, product]
+  - ats: workday
+    slug: homedepot/wd5/CareerDepot
+    company_name: The Home Depot
+    tags: [enterprise, product]
+  - ats: workday
+    slug: ncr/wd1/ext_us
+    company_name: NCR Voyix
+    tags: [enterprise, infra]
+  - ats: workday
+    slug: worldpay/wd5/Worldpay_External_Careers_Site
+    company_name: Worldpay (Global Payments)
+    tags: [enterprise, fintech]
+  - ats: workday
+    slug: tsys/wd1/TSYS
+    company_name: TSYS (Global Payments)
+    tags: [enterprise, fintech]

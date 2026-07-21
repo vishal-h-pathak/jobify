@@ -13,6 +13,7 @@ location preference is enforced entirely per-user at scoring/ranking time
 """
 
 import logging
+from datetime import datetime, timezone
 
 from jobify.shared.html import strip_tags
 from jobify.shared.jobid import make_job_id
@@ -25,6 +26,19 @@ logger = logging.getLogger("sources.lever")
 
 # Last-resort fallback if portals.yml is missing. Canonical list lives there.
 _FALLBACK_COMPANIES: list[tuple[str, str]] = []
+
+
+def _created_at_iso(job: dict) -> str | None:
+    """Lever's `createdAt` is epoch milliseconds; postings.posted_at is
+    TIMESTAMPTZ, so convert to ISO 8601. Missing/malformed is None, never
+    guessed."""
+    raw = job.get("createdAt")
+    if not isinstance(raw, (int, float)):
+        return None
+    try:
+        return datetime.fromtimestamp(raw / 1000, tz=timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
@@ -48,7 +62,7 @@ def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
     for job in data:
         raw += 1
         title = job.get("text", "")
-        categories = job.get("categories", {}) or {}
+        categories = job.get("categories") or {}
         location = categories.get("location", "Unknown")
         description = job.get("descriptionPlain") or ""
         if not description:
@@ -78,6 +92,10 @@ def _fetch_one(slug: str, display_name: str, apply_title_filter: bool = True):
             "remote": infer_remote(location, job),
             "description": description[:3000],
             "url": link,
+            "posted_at": _created_at_iso(job),
+            "department": categories.get("department") or None,
+            "employment_type": categories.get("commitment") or None,
+            "raw": job,
         }
     logger.info(
         "lever: %s yielded=%d (raw=%d, title-filtered=%d)",

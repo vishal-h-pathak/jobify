@@ -158,6 +158,17 @@ def fetch(queries: list[str] | None = None):
                 "remote": remote,
                 "description": description[:3000],
                 "url": link,
+                # JSearch's documented response schema (RapidAPI) — never
+                # verified live against a real key in this repo (no
+                # JSEARCH_API_KEY configured in this environment; see HUNT2
+                # session 50 report). `.get()` throughout so an undocumented
+                # schema drift degrades to None per-field, never a crash.
+                "posted_at": job.get("job_posted_at_datetime_utc") or None,
+                "employment_type": job.get("job_employment_type") or None,
+                "comp_min": job.get("job_min_salary"),
+                "comp_max": job.get("job_max_salary"),
+                "comp_currency": job.get("job_salary_currency") or None,
+                "raw": job,
             }
         logger.info("jsearch: q=%r yielded %d new (publisher=%s)",
                     query, page_yield,
