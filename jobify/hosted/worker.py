@@ -48,7 +48,10 @@ import logging
 from datetime import datetime, timezone
 
 from jobify import config, db
-from jobify.hosted import discovery, fanout
+from jobify.hosted import candidates, discovery, fanout
+from jobify.hosted.feeders import aggregator as aggregator_feeder
+from jobify.hosted.feeders import hn as hn_feeder
+from jobify.hosted.feeders import serpapi_dork as serpapi_dork_feeder
 from jobify.notify import send_ntfy_summary
 
 logging.basicConfig(
@@ -76,6 +79,7 @@ def _summary_line(
     fanout_summary: dict,
     global_spend: float | None = None,
     global_cap: float | None = None,
+    candidates_summary: dict | None = None,
 ) -> str:
     """Render both cycles' summary dicts as one terminal/GHA-step-summary
     line. Field names are read straight off Task 2/3's own return-dict
@@ -108,7 +112,43 @@ def _summary_line(
     )
     if global_spend is not None and global_cap is not None:
         line += f" | pool_spend=${global_spend:.2f}/${global_cap:.2f}"
+    if candidates_summary is not None:
+        line += (
+            f" | candidates: seen={candidates_summary.get('seen')} "
+            f"inserted={candidates_summary.get('inserted')} "
+            f"auto_admitted={candidates_summary.get('auto_admitted')}"
+        )
     return line
+
+
+def _run_candidates_pass() -> dict:
+    """Post-discovery step (P2 S4, planning/HUNT2_SOURCES.md §4.2): the
+    three feeders each surface candidate companies from a different
+    signal — HN thread extraction, aggregator-unknown-company routing,
+    SerpAPI ATS-site dorks — concatenated and handed to
+    `jobify.hosted.candidates.run_candidates_cycle`'s single queue write
+    path (dedup + probe + auto-admit + volume rails). Clearly separated
+    from discovery proper: this only READS what discovery just wrote
+    (`postings`) and what the last fan-out cycle wrote (`matches`) — it
+    never writes to either table itself, and never hooks into
+    `discovery.py` / `fanout.py` inline.
+
+    One feeder's failure doesn't drop the others — each gets its own
+    try/except, matching every other hosted-cycle module's per-item
+    resilience posture (`discovery._dedup_fetch`, `fanout.run_fanout_cycle`'s
+    per-user loop).
+    """
+    items: list[dict] = []
+    for name, feeder in (
+        ("hn", hn_feeder.extract_candidates),
+        ("aggregator", aggregator_feeder.route_candidates),
+        ("serpapi_dork", serpapi_dork_feeder.dork_candidates),
+    ):
+        try:
+            items.extend(feeder())
+        except Exception as exc:  # noqa: BLE001 — one feeder's failure must not drop the others
+            logger.error("hosted worker: candidates feeder %s failed: %s", name, exc)
+    return candidates.run_candidates_cycle(items)
 
 
 def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
@@ -146,10 +186,24 @@ def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
     started_at = datetime.now(timezone.utc).isoformat()
     discovery_summary: dict | None = None
     fanout_summary: dict | None = None
+    candidates_summary: dict | None = None
     error: str | None = None
 
     try:
         discovery_summary = discovery.run_discovery_cycle()
+
+        # P2 S4: the candidate-board discovery loop's post-discovery step.
+        # Its own try/except — a bug in the (brand new) candidates pass
+        # must never block the paid fan-out phase below it. Runs in every
+        # mode (full/discovery_only/single-user), same as discovery
+        # itself, since it's zero-LLM and reads global state, not
+        # per-user state.
+        try:
+            candidates_summary = _run_candidates_pass()
+        except Exception as exc:  # noqa: BLE001 — the candidates pass is a side quest; never abort the cycle over it
+            candidates_summary = {"error": str(exc)}
+            logger.error("hosted worker: candidates pass failed: %s", exc)
+
         if discovery_only:
             fanout_summary = dict(_EMPTY_FANOUT_SUMMARY)
         else:
@@ -161,7 +215,7 @@ def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
         global_spend = db.get_global_month_to_date_spend()
         global_cap = config.HOSTED_GLOBAL_MONTHLY_CAP_USD
         summary_line = _summary_line(
-            mode, discovery_summary, fanout_summary, global_spend, global_cap
+            mode, discovery_summary, fanout_summary, global_spend, global_cap, candidates_summary,
         )
 
         # Logs/print always fire regardless of ntfy's outcome (unset topic,
@@ -170,13 +224,13 @@ def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
         # the success path, same as before ADM-2 Task 2 — a failure never
         # gets a summary line (there's nothing coherent to summarize).
         logger.info(
-            "hosted worker cycle done: discovery=%s fanout=%s",
-            discovery_summary, fanout_summary,
+            "hosted worker cycle done: discovery=%s fanout=%s candidates=%s",
+            discovery_summary, fanout_summary, candidates_summary,
         )
         print(summary_line)
         send_ntfy_summary(summary_line)
 
-        return {"discovery": discovery_summary, "fanout": fanout_summary}
+        return {"discovery": discovery_summary, "fanout": fanout_summary, "candidates": candidates_summary}
     except Exception as exc:  # noqa: BLE001 — record, then re-raise unchanged (fail-loud policy above)
         error = str(exc)
         raise
@@ -195,9 +249,14 @@ def _execute(discovery_only: bool = False, user_id: str | None = None) -> dict:
         # ever ran (e.g. discovery raised before either was assigned) —
         # preserves the pre-P0.4 "nothing to report" signal rather than
         # writing an empty dict.
+        # P2 S4: candidates' own counter names (seen/inserted/duplicate/...)
+        # are prefixed `candidates_*` when folded in here — they don't
+        # collide with discovery's/fanout's own keys today, but the prefix
+        # makes that guarantee explicit rather than accidental.
+        prefixed_candidates = {f"candidates_{k}": v for k, v in (candidates_summary or {}).items()}
         merged_counters = (
-            {**(discovery_summary or {}), **(fanout_summary or {})}
-            if discovery_summary is not None or fanout_summary is not None
+            {**(discovery_summary or {}), **(fanout_summary or {}), **prefixed_candidates}
+            if discovery_summary is not None or fanout_summary is not None or candidates_summary is not None
             else None
         )
         try:

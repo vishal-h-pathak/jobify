@@ -681,6 +681,100 @@ def get_unmatched_postings(user_id: str) -> list[dict]:
     ]
 
 
+# ── HOSTED — candidate-board discovery loop (HUNT2 P2 S4) ────────────────
+# `board_catalog` (H4/P1 S2, 0015) and `candidate_boards` (P2 S4, 0017) —
+# see `jobify.hosted.candidates` module docstring for the full contract.
+
+
+def list_board_catalog_rows() -> list[dict]:
+    """Every `board_catalog` row's `(ats, slug, company_name)` — read once
+    per candidates-cycle by `jobify.hosted.candidates.run_candidates_cycle`
+    for its dedup pass. Client-side full-table pull, same acceptable-at-
+    this-scale convention as `get_unmatched_postings` / `list_profile_user_ids`.
+    """
+    return (
+        _get_client().table("board_catalog")
+        .select("ats,slug,company_name")
+        .execute().data or []
+    )
+
+
+def insert_board_catalog_row(*, ats: str, slug: str, company_name: str, tags: list[str], added_by: str) -> None:
+    """Auto-admit a probed candidate into the global `board_catalog`
+    (`jobify.hosted.candidates.enqueue`'s auto-admit path). Upserts on
+    `(ats, slug)` — the table's own UNIQUE constraint (0015) — so a
+    concurrent double-admit of the same board degrades to a harmless
+    overwrite rather than a conflict error.
+    """
+    _get_client().table("board_catalog").upsert(
+        {
+            "ats": ats,
+            "slug": slug,
+            "company_name": company_name,
+            "tags": tags,
+            "status": "active",
+            "added_by": added_by,
+            "verified_at": _utcnow(),
+        },
+        on_conflict="ats,slug",
+    ).execute()
+
+
+def list_postings_by_source(source: str) -> list[dict]:
+    """Every `postings` row with `source == source`. Read by
+    `jobify.hosted.feeders.hn.extract_candidates` (P2 S4) — reuses
+    postings the discovery cycle's `hn_whoshiring` fetch already wrote
+    into the shared pool rather than re-hitting HN's Algolia API a
+    second time. Client-side filter, same convention as
+    `get_unmatched_postings`.
+    """
+    rows = _get_client().table("postings").select("*").eq("source", source).execute().data or []
+    return rows
+
+
+def list_non_title_rejected_matches() -> list[dict]:
+    """Every `matches` row whose `status` isn't `rejected_title` — i.e. it
+    passed at least the stage-1 title filter. Read by
+    `jobify.hosted.feeders.aggregator.route_candidates` (P2 S4): "a real
+    user's filter liked a job at a company we don't track" is the
+    system's highest-precision discovery signal. Client-side filter, same
+    convention as `get_unmatched_postings`.
+    """
+    rows = _get_client().table("matches").select("posting_id,status").execute().data or []
+    return [r for r in rows if r.get("status") != "rejected_title"]
+
+
+def get_candidate_board(normalized_name: str) -> dict | None:
+    """Return the `candidate_boards` row for `normalized_name` (ANY
+    status), or `None` if it has never been proposed. Every enqueue path
+    must check this before inserting — a REJECTED candidate is never
+    re-proposed (the multi-user version of job-pipeline's Skipped ledger).
+    """
+    rows = (
+        _get_client().table("candidate_boards")
+        .select("*")
+        .eq("normalized_name", normalized_name)
+        .execute().data or []
+    )
+    return rows[0] if rows else None
+
+
+def insert_candidate_board(**fields: Any) -> dict:
+    """Insert one `candidate_boards` row and return it (including the
+    server-generated `id`) — `jobify.hosted.candidates.enqueue`'s insert
+    path, called only after both dedup checks (queue + catalog) miss.
+    """
+    result = _get_client().table("candidate_boards").insert(fields).execute()
+    return result.data[0]
+
+
+def update_candidate_board(candidate_id: str, **fields: Any) -> None:
+    """Update one `candidate_boards` row by id — records `probe_result`
+    and, on auto-admit, `status='auto_admitted'` + `decided_at`.
+    """
+    _get_client().table("candidate_boards").update(fields).eq("id", candidate_id).execute()
+
+
 def get_posting_reactions(user_id: str) -> list[dict]:
     """Every `posting_reactions` row for `user_id`: `{user_id, posting_id,
     reaction, note, created_at}`. No history — the table's PK is
