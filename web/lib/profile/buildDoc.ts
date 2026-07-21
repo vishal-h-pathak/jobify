@@ -90,6 +90,12 @@ export interface TurnLogEntry {
   input_tokens: number;
   output_tokens: number;
   ts: string;
+  // Fix B (session 57): explicit target-intent + advancement marker so the
+  // two-strike/alternation logic can walk turn_log without re-deriving them
+  // from intent_keys[0] (Set-insertion-order — currentIntent always index 0
+  // — but an explicit field is less fragile than relying on that).
+  target_intent: string;
+  intent_advanced: boolean;
 }
 
 export interface ExtractedState {

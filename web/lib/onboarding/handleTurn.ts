@@ -146,6 +146,24 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
   // trusts this assumption blindly (see the no-progress override below).
   const nextIntentHypothetical = firstMissingIntent(extractedBefore, { excludeIntent: currentIntent });
 
+  // Fix B (session 57): walk the trailing turn_log entries to see how many
+  // consecutive PRIOR turns were stuck on this exact intent, and whether
+  // the most recent of them already used the askHint template. Feeds both
+  // the two-strike threshold and the anti-repeat alternation below. Stops
+  // at the first entry that targeted a different intent or advanced —
+  // i.e. only counts the CURRENT unbroken stuck streak.
+  const priorTurnLog = extractedBefore.turn_log ?? [];
+  let priorStuckStreak = 0;
+  let priorTemplateUsesInStreak = 0;
+  let lastEntryUsedTemplateForThisIntent = false;
+  for (let i = priorTurnLog.length - 1; i >= 0; i--) {
+    const entry = priorTurnLog[i];
+    if (entry.target_intent !== currentIntent || entry.intent_advanced) break;
+    if (i === priorTurnLog.length - 1) lastEntryUsedTemplateForThisIntent = entry.askhint_fallback_used;
+    priorStuckStreak++;
+    if (entry.askhint_fallback_used) priorTemplateUsesInStreak++;
+  }
+
   let engineResult = await runTurn({ history, extracted: extractedBefore, currentIntent, nextIntent: nextIntentHypothetical });
   const usages = [engineResult.usage];
   let retryUsed = false;
@@ -174,21 +192,36 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
   // only thing the assistantText below trusts.
   const targetAfter = firstMissingIntent(extracted);
   const done = targetAfter === null;
+  const intentAdvancedThisTurn = targetAfter !== currentIntent;
+  const stuckThisTurn = targetAfter !== null && targetAfter === currentIntent;
+  const totalStuckStreak = stuckThisTurn ? priorStuckStreak + 1 : 0;
 
   let assistantText: string;
   let fallbackKind: HandleTurnResult["fallback_kind"];
 
-  if (targetAfter !== null && targetAfter === currentIntent) {
+  // Fix B point 1 (two-strike threshold): the askHint override fires only
+  // from the SECOND consecutive stuck round on this intent onward — the
+  // first stuck round keeps the model's own phrasing, since that's the
+  // correct behavior when the user pushes back or asks a clarifying
+  // question rather than genuinely stalling.
+  // Fix B point 2 (anti-repeat alternation): if the template already fired
+  // last turn for this same intent, this turn keeps the model's phrasing
+  // instead — NO-REPEAT must never see the same rendered template text
+  // twice in a row.
+  if (stuckThisTurn && totalStuckStreak >= 2 && !lastEntryUsedTemplateForThisIntent) {
     // Engine contract point 4's loop-breaker: a full round-trip happened
     // (we asked, the user answered) but currentIntent still isn't fully
     // resolved — the model's `question` (if any) was phrased about the
     // hypothetical next topic, which would be premature to surface. Render
     // a stable, deterministic re-ask instead of drifting to that topic.
-    assistantText = renderFallbackQuestion(targetAfter, extracted);
+    // `attempt` selects a distinct phrasing variant on repeat renders.
+    assistantText = renderFallbackQuestion(targetAfter, extracted, priorTemplateUsesInStreak + 1);
     fallbackKind = "no_progress";
   } else if (engineResult.question.trim() === "") {
-    // Retry already ran above and still came back blank.
-    assistantText = targetAfter !== null ? renderFallbackQuestion(targetAfter, extracted) : DONE_FALLBACK_TEXT;
+    // Retry already ran above and still came back blank — no model text to
+    // fall back on, so the template fires regardless of the stuck streak.
+    assistantText =
+      targetAfter !== null ? renderFallbackQuestion(targetAfter, extracted, priorTemplateUsesInStreak + 1) : DONE_FALLBACK_TEXT;
     fallbackKind = "retry_exhausted";
   } else {
     assistantText = engineResult.question.trim();
@@ -216,6 +249,8 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     input_tokens: usages.reduce((sum, u) => sum + u.inputTokens, 0),
     output_tokens: usages.reduce((sum, u) => sum + u.outputTokens, 0),
     ts: new Date().toISOString(),
+    target_intent: currentIntent,
+    intent_advanced: intentAdvancedThisTurn,
   };
   extracted = { ...extracted, turn_log: [...(extractedBefore.turn_log ?? []), turnLogEntry] };
 

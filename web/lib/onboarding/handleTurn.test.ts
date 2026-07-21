@@ -181,31 +181,163 @@ describe("handleOnboardingTurn", () => {
     expect(result.fallback_kind).toBeUndefined();
   });
 
-  it("engine contract point 4b: no progress on the current target overrides the model's (premature) question with the deterministic askHint, without retrying", async () => {
-    const runTurn = vi.fn(async () => ({
-      // The model asked about something else entirely instead of making
-      // progress on identity — a non-empty but premature question.
-      question: "Which of those directions would you pick first?",
-      extractedUpdates: {},
-      usage: { inputTokens: 40, outputTokens: 10 },
-    }));
+  describe("engine contract point 4b (Fix B, session 57: two-strike threshold + anti-repeat alternation)", () => {
+    it("the FIRST non-advancing round on an intent keeps the model's own (premature) phrasing — no override", async () => {
+      const runTurn = vi.fn(async () => ({
+        // The model asked about something else entirely instead of making
+        // progress on identity — a non-empty but premature question.
+        question: "Which of those directions would you pick first?",
+        extractedUpdates: {},
+        usage: { inputTokens: 40, outputTokens: 10 },
+      }));
 
-    const result = await handleOnboardingTurn({
-      userId: "user-1",
-      userEmail: "user-1@example.com",
-      userMessage: "not sure yet",
-      session: baseSession({ extracted: RESUME_DONE }),
-      supabase: fakeClient,
-      admin: fakeClient,
-      runTurn,
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "not sure yet",
+        session: baseSession({ extracted: RESUME_DONE }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(runTurn).toHaveBeenCalledTimes(1);
+      expect(result.fallback_kind).toBeUndefined();
+      expect(result.assistantText).toBe("Which of those directions would you pick first?");
     });
 
-    // No retry — the question wasn't blank, just premature; the loop-breaker
-    // fires on the post-merge recompute instead.
-    expect(runTurn).toHaveBeenCalledTimes(1);
-    expect(result.fallback_kind).toBe("no_progress");
-    expect(result.assistantText).not.toBe("Which of those directions would you pick first?");
-    expect(result.assistantText).toMatch(/logistics|name/i);
+    it("the SECOND consecutive non-advancing round on the same intent overrides with the deterministic askHint", async () => {
+      const runTurn = vi.fn(async () => ({
+        question: "Which of those directions would you pick first?",
+        extractedUpdates: {},
+        usage: { inputTokens: 40, outputTokens: 10 },
+      }));
+
+      const stuckOnce: ExtractedState = {
+        ...RESUME_DONE,
+        turn_log: [
+          {
+            intent_keys: ["identity"],
+            retry_used: false,
+            askhint_fallback_used: false,
+            input_tokens: 40,
+            output_tokens: 10,
+            ts: "2026-01-01T00:00:00.000Z",
+            target_intent: "identity",
+            intent_advanced: false,
+          },
+        ],
+      };
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "still not sure",
+        session: baseSession({ extracted: stuckOnce }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(runTurn).toHaveBeenCalledTimes(1);
+      expect(result.fallback_kind).toBe("no_progress");
+      expect(result.assistantText).not.toBe("Which of those directions would you pick first?");
+      expect(result.assistantText).toMatch(/logistics|name/i);
+    });
+
+    it("alternation: the round right after a template fire keeps the model's phrasing instead of repeating the template", async () => {
+      const runTurn = vi.fn(async () => ({
+        question: "Which of those directions would you pick first?",
+        extractedUpdates: {},
+        usage: { inputTokens: 40, outputTokens: 10 },
+      }));
+
+      // Simulates arriving at round 3: round 1 stuck (no template), round 2
+      // stuck (template fired).
+      const stuckTwiceTemplateJustFired: ExtractedState = {
+        ...RESUME_DONE,
+        turn_log: [
+          {
+            intent_keys: ["identity"],
+            retry_used: false,
+            askhint_fallback_used: false,
+            input_tokens: 40,
+            output_tokens: 10,
+            ts: "2026-01-01T00:00:00.000Z",
+            target_intent: "identity",
+            intent_advanced: false,
+          },
+          {
+            intent_keys: ["identity"],
+            retry_used: false,
+            askhint_fallback_used: true,
+            input_tokens: 40,
+            output_tokens: 10,
+            ts: "2026-01-01T00:01:00.000Z",
+            target_intent: "identity",
+            intent_advanced: false,
+          },
+        ],
+      };
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "still not sure",
+        session: baseSession({ extracted: stuckTwiceTemplateJustFired }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.fallback_kind).toBeUndefined();
+      expect(result.assistantText).toBe("Which of those directions would you pick first?");
+    });
+
+    it("alternation: the NEXT stuck round after that fires the template again with a distinct phrasing variant", async () => {
+      const runTurn = vi.fn(async () => ({
+        question: "Which of those directions would you pick first?",
+        extractedUpdates: {},
+        usage: { inputTokens: 40, outputTokens: 10 },
+      }));
+
+      // Simulates arriving at round 4: round 1 stuck (no template), round 2
+      // stuck (template fired, attempt 1), round 3 stuck (alternation —
+      // model phrasing kept, no template).
+      const priorEntries = [
+        { askhint_fallback_used: false, ts: "2026-01-01T00:00:00.000Z" },
+        { askhint_fallback_used: true, ts: "2026-01-01T00:01:00.000Z" },
+        { askhint_fallback_used: false, ts: "2026-01-01T00:02:00.000Z" },
+      ].map((e) => ({
+        intent_keys: ["identity"],
+        retry_used: false,
+        input_tokens: 40,
+        output_tokens: 10,
+        target_intent: "identity",
+        intent_advanced: false,
+        ...e,
+      }));
+
+      const stuckThrice: ExtractedState = { ...RESUME_DONE, turn_log: priorEntries };
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "still not sure",
+        session: baseSession({ extracted: stuckThrice }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.fallback_kind).toBe("no_progress");
+      // Attempt-2 variant text, distinct from attempt-1's rendering (used
+      // implicitly at round 2 above) — "What should I call you?" for the
+      // name-only-missing branch's attempt>=2 variant vs attempt 1's
+      // "What's your name?".
+      expect(result.assistantText).not.toBe("Which of those directions would you pick first?");
+      expect(result.assistantText).toMatch(/logistics|name/i);
+    });
   });
 
   it("engine contract point 5: anything_else opportunistically merges fields outside this turn's target", async () => {

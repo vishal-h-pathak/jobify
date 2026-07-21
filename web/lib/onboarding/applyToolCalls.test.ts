@@ -44,13 +44,33 @@ describe("mergeExtractedUpdates — calibration", () => {
     expect(result.calibration?.background_summary).toBe("Backend engineer with platform depth.");
   });
 
-  it("a genuinely empty skills/evidence array is still recorded as given (not a fallback case)", () => {
+  it("Fix A (never-shrink, session 57): an empty skills/evidence re-touch preserves the previous non-empty array instead of wiping it", () => {
     const previous: ExtractedState = { calibration: { skills: ["Go"], evidence: ["old evidence"] } };
     const result = mergeExtractedUpdates(previous, {
       calibration: { skills: [], evidence: [], range_statement: "r", background_summary: "b" },
     });
-    expect(result.calibration?.skills).toEqual([]);
-    expect(result.calibration?.evidence).toEqual([]);
+    expect(result.calibration?.skills).toEqual(["Go"]);
+    expect(result.calibration?.evidence).toEqual(["old evidence"]);
+  });
+
+  it("Fix A: a legitimate non-empty replacement still lands", () => {
+    const previous: ExtractedState = { calibration: { skills: ["Go"], evidence: ["old evidence"] } };
+    const result = mergeExtractedUpdates(previous, {
+      calibration: { skills: ["Go", "Python"], evidence: ["new evidence"], range_statement: "r", background_summary: "b" },
+    });
+    expect(result.calibration?.skills).toEqual(["Go", "Python"]);
+    expect(result.calibration?.evidence).toEqual(["new evidence"]);
+  });
+
+  it("Fix C: a sentinel range_statement/background_summary does not clobber a previously-recorded real value", () => {
+    const previous: ExtractedState = {
+      calibration: { range_statement: "Open to adjacent work", background_summary: "Backend engineer." },
+    };
+    const result = mergeExtractedUpdates(previous, {
+      calibration: { skills: [], evidence: [], range_statement: "N/A", background_summary: "unknown" },
+    });
+    expect(result.calibration?.range_statement).toBe("Open to adjacent work");
+    expect(result.calibration?.background_summary).toBe("Backend engineer.");
   });
 });
 
@@ -71,6 +91,12 @@ describe("mergeExtractedUpdates — resume", () => {
     const result = mergeExtractedUpdates({}, { resume: {} });
     expect(result.resumeResolved).toBeUndefined();
     expect(result.resume).toBeUndefined();
+  });
+
+  it("Fix A: an empty key_technical_skills re-touch preserves the previous non-empty array", () => {
+    const previous: ExtractedState = { resume: { cv_markdown: "# CV", key_technical_skills: ["Go", "Python"] } };
+    const result = mergeExtractedUpdates(previous, { resume: { cv_markdown: "# CV v2", key_technical_skills: [] } });
+    expect(result.resume?.key_technical_skills).toEqual(["Go", "Python"]);
   });
 });
 
@@ -102,6 +128,31 @@ describe("mergeExtractedUpdates — identity", () => {
     expect(corrected.identity?.name).toBe("Alex Quinn");
     expect(corrected.identity?.location_and_compensation?.target_comp_usd).toBe("175000-205000");
     expect(corrected.identity?.location_and_compensation?.base).toBe("Denver, CO");
+  });
+
+  describe("Fix C (session 57): sentinel placeholder values cannot land or clobber", () => {
+    it("'<UNKNOWN>' does not satisfy identity_name — the motivating live defect", () => {
+      const result = mergeExtractedUpdates({}, { identity: { name: "<UNKNOWN>", email: "alex@example.com" } });
+      expect(result.identity?.name).toBe("");
+    });
+
+    it("a sentinel in extracted_updates cannot clobber a real stored name", () => {
+      const first = mergeExtractedUpdates({}, { identity: { name: "Alex Quinn", email: "alex@example.com" } });
+      const corrected = mergeExtractedUpdates(first, { identity: { name: "<UNKNOWN>", email: "alex@example.com" } });
+      expect(corrected.identity?.name).toBe("Alex Quinn");
+    });
+
+    it("a sentinel target_comp_usd in a location_and_compensation update does not clobber a real stored value", () => {
+      const first = mergeExtractedUpdates(
+        {},
+        { identity: { name: "Alex", location_and_compensation: { base: "Denver, CO", target_comp_usd: "175000+" } } }
+      );
+      const corrected = mergeExtractedUpdates(first, {
+        identity: { location_and_compensation: { target_comp_usd: "TBD" } },
+      });
+      expect(corrected.identity?.location_and_compensation?.target_comp_usd).toBe("175000+");
+      expect(corrected.identity?.location_and_compensation?.base).toBe("Denver, CO");
+    });
   });
 
   it("location_and_compensation itself merges field-by-field (a correction to target_comp_usd doesn't drop remote_acceptable)", () => {
@@ -138,6 +189,34 @@ describe("mergeExtractedUpdates — targeting", () => {
   it("records the optional dream_companies seed", () => {
     const result = mergeExtractedUpdates({}, { targeting: { tiers: [], thesis_summary: "t", dream_companies: ["Acme"] } });
     expect(result.targeting?.dream_companies).toEqual(["Acme"]);
+  });
+
+  it("Fix A: an empty tiers/dream_companies re-touch preserves previously-recorded non-empty arrays", () => {
+    const previous: ExtractedState = {
+      targeting: {
+        tiers: [{ key: "tier_1", label: "Backend" }],
+        dream_companies: ["Acme"],
+        hard_disqualifiers: ["no crypto"],
+        soft_concerns: ["no on-call"],
+        thesis_summary: "t",
+      },
+    };
+    const result = mergeExtractedUpdates(previous, {
+      targeting: { tiers: [], dream_companies: [], hard_disqualifiers: [], soft_concerns: [], thesis_summary: "t2" },
+    });
+    expect(result.targeting?.tiers).toEqual([{ key: "tier_1", label: "Backend" }]);
+    expect(result.targeting?.dream_companies).toEqual(["Acme"]);
+    expect(result.targeting?.hard_disqualifiers).toEqual(["no crypto"]);
+    expect(result.targeting?.soft_concerns).toEqual(["no on-call"]);
+    expect(result.targeting?.thesis_summary).toBe("t2");
+  });
+
+  it("Fix C: a sentinel thesis_summary does not clobber a previously-recorded real value", () => {
+    const previous: ExtractedState = {
+      targeting: { tiers: [], hard_disqualifiers: [], soft_concerns: [], thesis_summary: "Wants backend roles." },
+    };
+    const result = mergeExtractedUpdates(previous, { targeting: { tiers: [], thesis_summary: "TBD" } });
+    expect(result.targeting?.thesis_summary).toBe("Wants backend roles.");
   });
 });
 

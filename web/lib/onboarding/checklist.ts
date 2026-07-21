@@ -119,10 +119,41 @@ function getByPath(obj: unknown, path: string): unknown {
   }, obj);
 }
 
+/**
+ * Fix C (session 57): placeholder/sentinel strings the model must never
+ * invent in place of real user-supplied data — a hallucinated "<UNKNOWN>"
+ * for `identity.name` previously satisfied `isFieldPresent` and let the
+ * interview complete with garbage stored as a real name. Mirrored by the
+ * matching prompt hard-rule (interview.ts) and the mergers' guard
+ * (applyToolCalls.ts) — this list is the single source of truth for all
+ * three layers.
+ */
+export const SENTINEL_PLACEHOLDER_VALUES = [
+  "unknown",
+  "n/a",
+  "na",
+  "tbd",
+  "not provided",
+  "not specified",
+  "none provided",
+  "none given",
+] as const;
+
+/** Case-insensitive, bracket/angle/brace-stripped match against the sentinel list. */
+export function isSentinelPlaceholder(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const stripped = value
+    .trim()
+    .toLowerCase()
+    .replace(/^[<[{]+|[>\]}]+$/g, "")
+    .trim();
+  return (SENTINEL_PLACEHOLDER_VALUES as readonly string[]).includes(stripped);
+}
+
 /** Presence, not truthiness: an explicit `false` or `0` still counts as answered. */
 export function isFieldPresent(value: unknown): boolean {
   if (value === undefined || value === null) return false;
-  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "string") return value.trim().length > 0 && !isSentinelPlaceholder(value);
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value === "object") return Object.keys(value as object).length > 0;
   return true;

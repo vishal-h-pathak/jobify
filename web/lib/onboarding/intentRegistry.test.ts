@@ -11,7 +11,7 @@ describe("INTENT_REGISTRY", () => {
       expect(typeof intent.extractionGuidance).toBe("string");
       expect(intent.extractionGuidance.length).toBeGreaterThan(0);
       expect(typeof intent.askGuidance({})).toBe("string");
-      expect(typeof intent.renderFallbackQuestion({})).toBe("string");
+      expect(typeof intent.renderFallbackQuestion({}, 1)).toBe("string");
     }
   });
 
@@ -82,6 +82,57 @@ describe("calibration renderFallbackQuestion — reuses the first generated cali
 
   it("falls back to a generic prompt when no prompts were generated yet", () => {
     expect(renderFallbackQuestion("calibration", {})).toMatch(/tell me about the core of your work/i);
+  });
+});
+
+describe("Fix B (session 57): renderFallbackQuestion attempt variants are distinct, never verbatim repeats", () => {
+  it("calibration: attempt 2 differs from attempt 1", () => {
+    const extracted: ExtractedState = { calibration: { prompts: ["Tell me about a hard bug.", "b", "c", "d"] } };
+    const attempt1 = renderFallbackQuestion("calibration", extracted, 1);
+    const attempt2 = renderFallbackQuestion("calibration", extracted, 2);
+    expect(attempt2).not.toBe(attempt1);
+  });
+
+  it("resume: attempt 2 differs from attempt 1", () => {
+    const attempt1 = renderFallbackQuestion("resume", {}, 1);
+    const attempt2 = renderFallbackQuestion("resume", {}, 2);
+    expect(attempt2).not.toBe(attempt1);
+  });
+
+  it("identity: attempt 2 differs from attempt 1 in every missing-field branch", () => {
+    const bothMissing: ExtractedState = {};
+    expect(renderFallbackQuestion("identity", bothMissing, 2)).not.toBe(renderFallbackQuestion("identity", bothMissing, 1));
+
+    const nameOnly: ExtractedState = { identity: { name: "", email: "", location_and_compensation: { base: "Denver" } } };
+    expect(renderFallbackQuestion("identity", nameOnly, 2)).not.toBe(renderFallbackQuestion("identity", nameOnly, 1));
+
+    const logisticsOnly: ExtractedState = { identity: { name: "Alex", email: "" } };
+    expect(renderFallbackQuestion("identity", logisticsOnly, 2)).not.toBe(renderFallbackQuestion("identity", logisticsOnly, 1));
+  });
+
+  it("targeting: attempt 2 differs from attempt 1", () => {
+    const extracted: ExtractedState = { anchor: { current_title: "Staff Engineer" } };
+    expect(renderFallbackQuestion("targeting", extracted, 2)).not.toBe(renderFallbackQuestion("targeting", extracted, 1));
+  });
+
+  it("a long stuck streak (attempts 1-6) never repeats a prior render — the corrective-persona regression: a 2-variant collapse still repeated verbatim on the 3rd+ template fire", () => {
+    const nameOnly: ExtractedState = { identity: { name: "", email: "", location_and_compensation: { base: "Denver" } } };
+    const seen = new Set<string>();
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      const text = renderFallbackQuestion("identity", nameOnly, attempt);
+      expect(seen.has(text)).toBe(false);
+      seen.add(text);
+    }
+  });
+
+  it("targeting: attempts 1-4 are pairwise distinct", () => {
+    const extracted: ExtractedState = { anchor: { current_title: "Staff Engineer" } };
+    const seen = new Set<string>();
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      const text = renderFallbackQuestion("targeting", extracted, attempt);
+      expect(seen.has(text)).toBe(false);
+      seen.add(text);
+    }
   });
 });
 

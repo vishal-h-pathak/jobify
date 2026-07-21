@@ -6,11 +6,13 @@ import type { ModulesState } from "../lib/onboarding/moduleRegistry";
 /**
  * A fully in-memory stand-in for the Supabase clients `handleOnboardingTurn`
  * and `maybeGenerateCalibrationPrompts` are injected with. It does NOT try
- * to be a general Supabase mock — it implements exactly the three call
- * shapes those two real functions (`saveSession`, `upsertProfileDoc`,
- * `recordOnboardingTurn`) make, nothing more, so the sim can run the real
- * db-layer code against real in-memory state instead of a hand-rolled
- * double that could silently drift from what those functions actually do.
+ * to be a general Supabase mock — it implements exactly the call shapes
+ * those real functions (`saveSession`, `upsertProfileDoc`,
+ * `recordOnboardingTurn`, and — Fix D, session 57 — `seedUserPortals`'s
+ * three-table read + one-table update) make, nothing more, so the sim can
+ * run the real db-layer code against real in-memory state instead of a
+ * hand-rolled double that could silently drift from what those functions
+ * actually do.
  *
  * The "never touch a real database" guarantee (session-prompt 45, task 1)
  * comes from this file alone: nothing here performs I/O of any kind.
@@ -57,6 +59,12 @@ export function createFakeSupabase(): FakeSupabase {
   const profiles = new Map<string, FakeProfileRow>();
   const ledger: FakeLedgerRow[] = [];
   const updateCounts = new Map<string, number>();
+  // Fix D: empty by construction — nothing in the sim seeds board_catalog
+  // rows (no persona exercises real board discovery), so seedUserPortals's
+  // tier-pack computation legitimately sees zero candidate boards. That's a
+  // valid empty state, not an error — the point of this fix is exercising
+  // the completion-path read/update round-trip itself, not board matching.
+  const boardCatalog: Record<string, unknown>[] = [];
 
   function from(table: string) {
     return {
@@ -70,8 +78,40 @@ export function createFakeSupabase(): FakeSupabase {
                 sessions.set(userId, { ...existing, ...patch } as FakeSessionRow);
                 updateCounts.set(userId, (updateCounts.get(userId) ?? 0) + 1);
               }
+            } else if (table === "profiles" && column === "user_id") {
+              const userId = String(value);
+              const existing = profiles.get(userId);
+              if (existing) profiles.set(userId, { ...existing, ...patch } as FakeProfileRow);
             }
             return Promise.resolve({ error: null });
+          },
+        };
+      },
+      // Fix D: only the three shapes seedUserPortals.ts actually calls —
+      // `.select(...).eq(...).maybeSingle()` for onboarding_sessions/profiles,
+      // `.select(...).eq(...)` awaited directly for board_catalog. The
+      // returned value is a real Promise (so a bare `await` on it resolves
+      // the array-shaped `{data, error}`) with `.maybeSingle` attached as an
+      // extra synchronous method, covering both call shapes with one object.
+      select(_columns: string) {
+        return {
+          eq(column: string, value: unknown) {
+            let rows: Record<string, unknown>[] = [];
+            if (table === "onboarding_sessions" && column === "user_id") {
+              const row = sessions.get(String(value));
+              rows = row ? [{ extracted: row.extracted }] : [];
+            } else if (table === "profiles" && column === "user_id") {
+              const row = profiles.get(String(value));
+              rows = row ? [{ doc: row.doc }] : [];
+            } else if (table === "board_catalog" && column === "status") {
+              rows = boardCatalog.filter((r) => r.status === value);
+            }
+            const arrayResult = { data: rows, error: null };
+            const promise = Promise.resolve(arrayResult) as Promise<typeof arrayResult> & {
+              maybeSingle: () => Promise<{ data: Record<string, unknown> | null; error: null }>;
+            };
+            promise.maybeSingle = () => Promise.resolve({ data: rows[0] ?? null, error: null });
+            return promise;
           },
         };
       },

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   INTERVIEW_CHECKLIST,
   isFieldPresent,
+  isSentinelPlaceholder,
   missingFields,
   isInterviewDone,
   firstMissingIntent,
@@ -82,6 +83,38 @@ describe("isFieldPresent", () => {
   it("treats a defined boolean/number as present regardless of value (false/0 are real answers)", () => {
     expect(isFieldPresent(false)).toBe(true);
     expect(isFieldPresent(0)).toBe(true);
+  });
+
+  describe("Fix C (session 57): hallucinated placeholder values do not satisfy presence", () => {
+    it("'<UNKNOWN>' does not satisfy identity_name — the motivating live defect", () => {
+      expect(isFieldPresent("<UNKNOWN>")).toBe(false);
+    });
+
+    it("rejects every named sentinel, case-insensitively and decoration-insensitively", () => {
+      for (const raw of ["unknown", "UNKNOWN", "Unknown", "<UNKNOWN>", "N/A", "n/a", "TBD", "tbd", "Not Provided", "[unknown]"]) {
+        expect(isFieldPresent(raw)).toBe(false);
+      }
+    });
+
+    it("a real value that merely contains a sentinel word as a substring is still present (no over-matching)", () => {
+      expect(isFieldPresent("Not Provided Consulting LLC")).toBe(true);
+      expect(isFieldPresent("Unknown Pleasures Records")).toBe(true);
+    });
+  });
+});
+
+describe("isSentinelPlaceholder", () => {
+  it("matches bracket/angle/brace-decorated and bare forms alike", () => {
+    for (const raw of ["<UNKNOWN>", "unknown", "[unknown]", "{unknown}", "  unknown  "]) {
+      expect(isSentinelPlaceholder(raw)).toBe(true);
+    }
+  });
+
+  it("does not match non-sentinel strings or non-strings", () => {
+    expect(isSentinelPlaceholder("Alex Quinn")).toBe(false);
+    expect(isSentinelPlaceholder(undefined)).toBe(false);
+    expect(isSentinelPlaceholder(null)).toBe(false);
+    expect(isSentinelPlaceholder(42)).toBe(false);
   });
 });
 

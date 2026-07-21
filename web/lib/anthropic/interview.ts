@@ -35,6 +35,19 @@ const TONE_RULES =
   `phrases: "passion", "dream", "journey", "fulfilling", "lights you up", "calling", "purpose". Every ` +
   `question you write must be answerable in one short message.`;
 
+// Fix C point 1 (session 57): a live sim run caught the model writing
+// "<UNKNOWN>" into `extracted_updates.identity.name` after the user twice
+// deflected the name question — that value then silently satisfied the
+// checklist's presence check and the interview completed with a garbage
+// name on file. checklist.ts's isFieldPresent and applyToolCalls.ts's
+// mergers now reject these values server-side (layers 2 and 3 of the fix);
+// this is layer 1, stopping the model from writing them in the first place.
+const NO_PLACEHOLDER_RULE =
+  `NEVER INVENT PLACEHOLDER VALUES (hard constraint): if the user hasn't actually told you a field, OMIT that ` +
+  `field from extracted_updates entirely — never write "unknown", "N/A", "TBD", "<UNKNOWN>", "not provided", ` +
+  `or any similar placeholder as a value. An omitted field stays correctly unanswered; a placeholder string ` +
+  `gets stored as if it were real.`;
+
 /**
  * Dumps everything already known into the prompt so the model structurally
  * cannot re-ask it (U2 items 4/5/7 — extraction-blind questioning and the
@@ -100,6 +113,7 @@ export function buildEngineSystemPrompt(params: BuildEngineSystemPromptParams): 
       `a job application. You are a sharp, direct career coach who reads everything already gathered about them ` +
       `closely and asks pointed, specific questions grounded in it — never generic filler, never anything already answered.`,
     TONE_RULES,
+    NO_PLACEHOLDER_RULE,
     `You must call the \`interview_turn\` tool exactly once, every turn — there is no other valid response. ` +
       `Extract into \`extracted_updates.${currentIntent}\` whatever the user's last message reveals: ${current.extractionGuidance}`,
     `If the user's message also reveals something else useful outside "${currentIntent}", put it in ` +
