@@ -5,7 +5,11 @@ export interface TurnRecord {
   stageBefore: InterviewStage;
   stageAfter: InterviewStage;
   assistantText: string;
-  fallbackKind?: "reprompt" | "fallback" | "loop_breaker";
+  // INT2 (session 55): the engine's two-kind taxonomy — "no_progress" (the
+  // target intent made no progress despite a full round-trip) and
+  // "retry_exhausted" (the question came back empty/invalid even after one
+  // retry) — replaces the old three-kind reprompt/fallback/loop_breaker set.
+  fallbackKind?: "no_progress" | "retry_exhausted";
   done: boolean;
   extractedAfter: Record<string, unknown>;
 }

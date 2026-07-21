@@ -1,124 +1,163 @@
-import type { InterviewToolCall } from "../anthropic/interview";
 import type { ExtractedState, LocationAndCompensation, TargetingTier } from "../profile/buildDoc";
-import type { InterviewStage } from "../anthropic/interview";
+import type { IntentKey } from "./checklist";
 
-export interface ApplyResult {
-  extracted: ExtractedState;
-  stage: InterviewStage;
-  done: boolean;
+/**
+ * INT2 engine contract point 5: "Extraction preserved, merge-not-replace."
+ * Same field-present-and-nonempty-wins, deep-merge semantics the old
+ * per-tool-call switch in this file used to apply — just re-keyed to merge
+ * a slice of the new `interview_turn` tool's `extracted_updates` object
+ * instead of one legacy named tool's `input`. Each merger is a pure
+ * function: (previous ExtractedState, this intent's raw update value) ->
+ * next ExtractedState.
+ */
+
+export function mergeCalibration(prev: ExtractedState, updates: unknown): ExtractedState {
+  const input = (updates ?? {}) as Record<string, unknown>;
+  const previous = prev.calibration;
+  return {
+    ...prev,
+    // `prompts` is set by runCalibrationGeneration before the ingest turn
+    // ever fires — spreading `previous` first preserves it; this is a merge
+    // into the existing calibration object, never a replacement of it. A
+    // malformed/incomplete update (e.g. a truncated tool call) falls back to
+    // the previously-recorded field rather than wiping it to empty; a
+    // genuinely-empty array the model gives us is still recorded as given.
+    calibration: {
+      ...previous,
+      skills: Array.isArray(input.skills) ? (input.skills as string[]) : (previous?.skills ?? []),
+      evidence: Array.isArray(input.evidence) ? (input.evidence as string[]) : (previous?.evidence ?? []),
+      range_statement:
+        typeof input.range_statement === "string" ? input.range_statement : previous?.range_statement,
+      background_summary:
+        typeof input.background_summary === "string" ? input.background_summary : previous?.background_summary,
+    },
+  };
 }
 
 /**
- * Merges the tool calls Claude emitted this turn into the session's
- * accumulated `extracted` state, advancing `stage` as each stage's tool
- * fires. Tool inputs are Anthropic-schema-validated JSON already, so this
- * is a straight merge, not re-validation.
+ * `skipped: true` is the chat-native way to resolve the resume step without
+ * uploaded content (the RESUME_SKIP_MESSAGE UI sentinel resolves it even
+ * more directly, writing `resumeResolved` itself before any model call —
+ * see handleTurn.ts). A call with neither real content nor an explicit skip
+ * is a no-op: it must not flip `resumeResolved` early on a turn that didn't
+ * actually resolve anything.
  */
-export function applyToolCalls(
-  toolCalls: InterviewToolCall[],
-  previous: ExtractedState,
-  previousStage: InterviewStage
-): ApplyResult {
-  const extracted: ExtractedState = { ...previous };
-  let stage = previousStage;
-  let done = false;
+export function mergeResume(prev: ExtractedState, updates: unknown): ExtractedState {
+  const input = (updates ?? {}) as Record<string, unknown>;
+  const cvMarkdown = typeof input.cv_markdown === "string" ? input.cv_markdown.trim() : "";
+  const skipped = input.skipped === true;
+  if (!cvMarkdown && !skipped) return prev;
 
-  for (const call of toolCalls) {
-    switch (call.name) {
-      case "record_calibration":
-        // Preserve the already-generated `prompts` (set by
-        // runCalibrationGeneration before this ingest turn ever fires) —
-        // this is a merge into the existing calibration object, not a
-        // replacement of it. INTSIM live-run fix: a malformed/incomplete
-        // re-call (e.g. a truncated tool call) must fall back to the
-        // PREVIOUSLY-recorded field, not a hard default — an invalid
-        // field is never evidence the real value should be erased. A
-        // genuinely-empty array from the model is still a valid array
-        // and is recorded as given, same as before.
-        extracted.calibration = {
-          ...previous.calibration,
-          skills: Array.isArray(call.input.skills) ? (call.input.skills as string[]) : previous.calibration?.skills ?? [],
-          evidence: Array.isArray(call.input.evidence)
-            ? (call.input.evidence as string[])
-            : previous.calibration?.evidence ?? [],
-          range_statement:
-            typeof call.input.range_statement === "string"
-              ? call.input.range_statement
-              : previous.calibration?.range_statement,
-          background_summary:
-            typeof call.input.background_summary === "string"
-              ? call.input.background_summary
-              : previous.calibration?.background_summary,
-        };
-        if (stage === "calibration") stage = "resume";
-        break;
-      case "record_resume":
-        extracted.resume = {
-          cv_markdown: String(call.input.cv_markdown ?? ""),
-          key_technical_skills: Array.isArray(call.input.key_technical_skills)
-            ? (call.input.key_technical_skills as string[])
-            : undefined,
-          background_summary:
-            typeof call.input.background_summary === "string" ? call.input.background_summary : undefined,
-        };
-        // ONB-A: resume now feeds directly into targeting — the old
-        // resume -> identity -> targeting chain collapsed once "identity"
-        // stopped being its own db stage (0010_onboarding_stage_v2.sql).
-        if (stage === "resume") stage = "targeting";
-        break;
-      case "record_identity": {
-        // ONB-A: record_identity fires *during* the targeting stage now
-        // (the logistics opener), so it never advances the stage itself —
-        // only finish_interview (via record_targeting first) does.
-        //
-        // Live-fire fix (2026-07-19): MERGE, never replace. The model
-        // sometimes re-calls record_identity later in targeting with only a
-        // subset of fields; wholesale replacement destroyed a real user's
-        // already-recorded phone + full location_and_compensation block
-        // (salary floor included) mid-interview. A field the new call omits
-        // keeps its previously recorded value — same posture as
-        // record_calibration's prompts-preserving merge above. (INTSIM's
-        // corrective-persona run independently hit the same live bug and
-        // converged on the same merge shape; this keeps the empty-string
-        // guard on name/email that its version didn't have.)
-        const prev = extracted.identity;
-        const newLc =
-          typeof call.input.location_and_compensation === "object" && call.input.location_and_compensation !== null
-            ? (call.input.location_and_compensation as LocationAndCompensation)
-            : undefined;
-        const mergedLc =
-          newLc || prev?.location_and_compensation
-            ? { ...prev?.location_and_compensation, ...newLc }
-            : undefined;
-        extracted.identity = {
-          name: typeof call.input.name === "string" && call.input.name !== "" ? call.input.name : prev?.name ?? "",
-          email: typeof call.input.email === "string" && call.input.email !== "" ? call.input.email : prev?.email ?? "",
-          phone: typeof call.input.phone === "string" ? call.input.phone : prev?.phone,
-          location_base:
-            typeof call.input.location_base === "string" ? call.input.location_base : prev?.location_base,
-          linkedin: typeof call.input.linkedin === "string" ? call.input.linkedin : prev?.linkedin,
-          website: typeof call.input.website === "string" ? call.input.website : prev?.website,
-          github: typeof call.input.github === "string" ? call.input.github : prev?.github,
-          location_and_compensation: mergedLc,
-        };
-        break;
-      }
-      case "record_targeting":
-        extracted.targeting = {
-          tiers: Array.isArray(call.input.tiers) ? (call.input.tiers as TargetingTier[]) : [],
-          dream_companies: Array.isArray(call.input.dream_companies) ? (call.input.dream_companies as string[]) : undefined,
-          hard_disqualifiers: Array.isArray(call.input.hard_disqualifiers) ? (call.input.hard_disqualifiers as string[]) : [],
-          soft_concerns: Array.isArray(call.input.soft_concerns) ? (call.input.soft_concerns as string[]) : [],
-          degree_gate: typeof call.input.degree_gate === "string" ? call.input.degree_gate : undefined,
-          thesis_summary: String(call.input.thesis_summary ?? ""),
-        };
-        break;
-      case "finish_interview":
-        done = true;
-        stage = "done";
-        break;
+  const next: ExtractedState = { ...prev, resumeResolved: true };
+  if (cvMarkdown) {
+    next.resume = {
+      cv_markdown: cvMarkdown,
+      key_technical_skills: Array.isArray(input.key_technical_skills)
+        ? (input.key_technical_skills as string[])
+        : prev.resume?.key_technical_skills,
+      background_summary:
+        typeof input.background_summary === "string" ? input.background_summary : prev.resume?.background_summary,
+    };
+  }
+  return next;
+}
+
+/**
+ * MERGE, never replace. The model sometimes re-calls with only a subset of
+ * fields (a correction turn); wholesale replacement previously destroyed a
+ * real user's already-recorded phone + full location_and_compensation block
+ * mid-interview (INTSIM MONOTONIC-STATE fix). A field this update omits
+ * keeps its previously recorded value, and `location_and_compensation`
+ * itself merges field-by-field for the same reason.
+ */
+export function mergeIdentity(prev: ExtractedState, updates: unknown): ExtractedState {
+  const input = (updates ?? {}) as Record<string, unknown>;
+  const previous = prev.identity;
+  const newLc =
+    typeof input.location_and_compensation === "object" && input.location_and_compensation !== null
+      ? (input.location_and_compensation as LocationAndCompensation)
+      : undefined;
+  const mergedLc =
+    newLc || previous?.location_and_compensation ? { ...previous?.location_and_compensation, ...newLc } : undefined;
+
+  return {
+    ...prev,
+    identity: {
+      name: typeof input.name === "string" && input.name !== "" ? input.name : (previous?.name ?? ""),
+      email: typeof input.email === "string" && input.email !== "" ? input.email : (previous?.email ?? ""),
+      phone: typeof input.phone === "string" ? input.phone : previous?.phone,
+      location_base: typeof input.location_base === "string" ? input.location_base : previous?.location_base,
+      linkedin: typeof input.linkedin === "string" ? input.linkedin : previous?.linkedin,
+      website: typeof input.website === "string" ? input.website : previous?.website,
+      github: typeof input.github === "string" ? input.github : previous?.github,
+      location_and_compensation: mergedLc,
+    },
+  };
+}
+
+/**
+ * hard_disqualifiers/soft_concerns/degree_gate are accepted (harmless empty
+ * defaults) but never targeted by this checklist — the dealbreakers module
+ * owns that ground now (U2 item 6). dream_companies is the optional seed,
+ * folded into this same intent's schema rather than a separate gating field.
+ */
+export function mergeTargeting(prev: ExtractedState, updates: unknown): ExtractedState {
+  const input = (updates ?? {}) as Record<string, unknown>;
+  const previous = prev.targeting;
+  return {
+    ...prev,
+    targeting: {
+      tiers: Array.isArray(input.tiers) ? (input.tiers as TargetingTier[]) : (previous?.tiers ?? []),
+      dream_companies: Array.isArray(input.dream_companies)
+        ? (input.dream_companies as string[])
+        : previous?.dream_companies,
+      hard_disqualifiers: Array.isArray(input.hard_disqualifiers)
+        ? (input.hard_disqualifiers as string[])
+        : (previous?.hard_disqualifiers ?? []),
+      soft_concerns: Array.isArray(input.soft_concerns)
+        ? (input.soft_concerns as string[])
+        : (previous?.soft_concerns ?? []),
+      degree_gate: typeof input.degree_gate === "string" ? input.degree_gate : previous?.degree_gate,
+      thesis_summary: typeof input.thesis_summary === "string" ? input.thesis_summary : (previous?.thesis_summary ?? ""),
+    },
+  };
+}
+
+const MERGERS: Record<IntentKey, (prev: ExtractedState, updates: unknown) => ExtractedState> = {
+  calibration: mergeCalibration,
+  resume: mergeResume,
+  identity: mergeIdentity,
+  targeting: mergeTargeting,
+};
+
+const INTENT_KEYS: readonly IntentKey[] = ["calibration", "resume", "identity", "targeting"];
+
+/**
+ * Engine contract point 5's generic merge entry point. `updates` is the
+ * forced `interview_turn` tool's `extracted_updates` value: zero or more of
+ * the four intent keys, plus an optional `anything_else` object carrying
+ * opportunistic captures in the SAME nested shape — routed through the
+ * identical per-key mergers via one level of recursion, so a fact the model
+ * notices outside this turn's target intent merges no differently than one
+ * inside it.
+ */
+export function mergeExtractedUpdates(
+  prev: ExtractedState,
+  updates: Record<string, unknown> | null | undefined
+): ExtractedState {
+  if (!updates || typeof updates !== "object") return prev;
+
+  let next = prev;
+  for (const key of INTENT_KEYS) {
+    if (updates[key] !== undefined) {
+      next = MERGERS[key](next, updates[key]);
     }
   }
 
-  return { extracted, stage, done };
+  const anythingElse = updates.anything_else;
+  if (anythingElse && typeof anythingElse === "object") {
+    next = mergeExtractedUpdates(next, anythingElse as Record<string, unknown>);
+  }
+
+  return next;
 }

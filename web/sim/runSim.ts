@@ -28,7 +28,7 @@ import { formatVerdictTable, type PersonaVerdict } from "./report";
 import { loadDotEnvLocalIntoProcessEnv } from "./envFile";
 import { handleOnboardingTurn, type SessionSnapshot } from "../lib/onboarding/handleTurn";
 import { maybeGenerateCalibrationPrompts } from "../lib/onboarding/maybeGenerateCalibration";
-import { runInterviewTurn, runCalibrationGeneration, type ChatMessage } from "../lib/anthropic/interview";
+import { runEngineTurn, runCalibrationGeneration, type ChatMessage, type EngineTurnParams } from "../lib/anthropic/interview";
 import type { ExtractedState } from "../lib/profile/buildDoc";
 
 const DEFAULT_MAX_TURNS = 25;
@@ -111,9 +111,9 @@ async function runPersona(personaName: PersonaName, maxTurns: number): Promise<P
     }
   }
 
-  const countedRunTurn = async (history: ChatMessage[]) => {
+  const countedRunTurn = async (params: EngineTurnParams) => {
     modelCallCount++;
-    const result = await runInterviewTurn(history);
+    const result = await runEngineTurn(params);
     recordTruncationIfCapped(result);
     return result;
   };

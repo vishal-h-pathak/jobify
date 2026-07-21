@@ -1,6 +1,8 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { anthropicClient, ONBOARDING_MODEL } from "./client";
-import type { AnchorStageData } from "../profile/buildDoc";
+import type { AnchorStageData, ExtractedState } from "../profile/buildDoc";
+import type { IntentKey } from "../onboarding/checklist";
+import { INTENT_REGISTRY, buildExtractedUpdatesSchema } from "../onboarding/intentRegistry";
 
 export type ChatRole = "user" | "assistant";
 export interface ChatMessage {
@@ -9,14 +11,16 @@ export interface ChatMessage {
 }
 
 // ONB-A (2026-07-05): v2 stage machine — anchor -> calibration -> resume
-// (optional) -> targeting -> done. The legacy "identity" literal was
-// removed (UX1-B audit, 2026-07-19): the live DB CHECK never allowed it
-// (migration 0010 remapped every historical row to 'targeting'), so it was
-// dead weight — v2 code never produced it.
+// (optional) -> targeting -> done. INT2 (session 55) retired the model-
+// driven turn logic these stage names used to gate, but the STRING VALUES
+// stay: `components/onboarding/moduleOrder.ts`, the anchor route, and the
+// sim harness all key off this exact union, and handleTurn.ts still derives
+// one every turn (from the checklist, not a model signal) purely for their
+// backward-compat benefit.
 export type InterviewStage = "anchor" | "calibration" | "resume" | "targeting" | "done";
 
 /**
- * Legacy: the v1 resume-first opener. Never produced by v2 code — the
+ * Legacy: the v1 resume-first opener. Never produced by v2+ code — the
  * calibration-generation turn (`runCalibrationGeneration`) now owns the
  * conversation's opening beat. Kept exported only because
  * `web/app/(app)/onboarding/page.tsx` (session B's territory) still
@@ -26,268 +30,173 @@ export const SEEDED_GREETING =
   "Welcome. Paste your resume (or upload a .txt/.md) and we'll get through " +
   "this fast — a few pointed questions after, about five minutes total.";
 
+const TONE_RULES =
+  `TONE RULES (hard constraint): direct, second person, no exclamation marks. Never use these words or ` +
+  `phrases: "passion", "dream", "journey", "fulfilling", "lights you up", "calling", "purpose". Every ` +
+  `question you write must be answerable in one short message.`;
+
 /**
- * System prompt for the main conversational turns: calibration ingest,
- * optional resume, and targeting (planning/ONBOARDING_REDESIGN.md §2). The
- * anchor stage never reaches this prompt at all — it's a zero-LLM form
- * (POST /api/onboarding/anchor) — and calibration's four prompts are
- * generated separately (CALIBRATION_GENERATION_SYSTEM_PROMPT below), so
- * this prompt only ever sees the calibration *ingest* turn onward.
- *
- * FIX-1 (2026-07-05) turn-structure / empty-reply rules and the PII bans
- * are carried forward verbatim per the ONB-A session prompt's hard
- * requirements.
+ * Dumps everything already known into the prompt so the model structurally
+ * cannot re-ask it (U2 items 4/5/7 — extraction-blind questioning and the
+ * canned re-prompt loop both die here, per the engine contract's point 3).
  */
-export const INTERVIEW_SYSTEM_PROMPT = `You are interviewing a new user to build their jobify hunting profile — \
-a job-search targeting profile, NOT a job application. You are a sharp, direct career coach who reads \
-everything already gathered about them closely and asks pointed, specific questions grounded in it — never \
-generic filler, and never anything already answered.
-
-TONE RULES (hard constraint): direct, second person, no exclamation marks. Never use these words or \
-phrases: "passion", "dream", "journey", "fulfilling", "lights you up", "calling", "purpose". Every \
-question must be answerable in one short message.
-
-TURN-STRUCTURE RULE (hard constraint): every assistant message you send, until stage is done, MUST \
-end with exactly one question — the single next thing you need from the user. A brief acknowledgment \
-clause is allowed ONLY as a lead-in immediately before that question (e.g. "Got it — where are you \
-based, remote-only or is some onsite fine, and what's the salary floor?"), never as the entire \
-message. Standalone acknowledgment-only turns are forbidden: never send "Good, moving on.", "Got it — \
-locked in.", "Noted.", or any other turn that has no question in it. Never return an empty message. \
-Advancing to a new stage is never itself a free turn — the same message that acknowledges the prior \
-stage's answer must already ask the new stage's first question; see the explicit same-message \
-instructions in each stage below.
-
-NEVER RE-ASK KNOWN FIELDS (hard constraint): the anchor form already captured current/most recent job \
-title, company, and tenure (or a free-text description of their situation) before this chat began — \
-never ask for any of it again. Calibration already captured their skills, evidence, and range \
-statement — never ask for those again either. If a resume is later provided, name, current/last role, \
-employer, education, skills, and location (if present) come from it — use what you extracted, never \
-ask the user for any of them again. If one specific field the interview still genuinely needs is \
-missing (e.g. no location listed anywhere), ask for THAT missing field only, never the whole set.
-
-You pick up the conversation partway through — the anchor (role/company or free-text situation) and \
-four calibration answers are already known to you as context. Run the remaining stages, in order:
-
-1. CALIBRATION INGEST. The user has just answered four open-ended prompts about the work itself — a \
-depth probe, a breadth probe, a range/realignment probe, and an evidence probe — delivered to you as \
-one message covering all four. NEVER evaluate, grade, praise, or compare their answers to an expected \
-answer — you are recording signal, not judging performance. Do not solicit confidential employer \
-specifics from what they wrote: describe the shape, not the secrets. From their answers, extract: \
-skills mentioned across the depth/breadth/evidence answers into a flat skills list; one or two \
-concrete evidence bullets (what they'd actually show someone) from the evidence answer and the \
-concrete parts of the depth answer; the range/realignment answer, close to verbatim, as a range \
-statement; and synthesize a 2-4 sentence background_summary from all four, written the way they'd \
-describe themselves to a peer. Call record_calibration with all of that — and in that SAME message \
-immediately ask whether they have a resume handy (stage 2's opener below); do not send a bare \
-acknowledgment turn first.
-
-2. RESUME (optional). Ask: "Have a resume handy? Paste/upload it — or skip, we already have plenty." \
-If they paste or upload resume text, read it, extract roles, dates, titles, employers, skills, \
-education, and every metric mentioned, then REFLECT BACK a compact summary — current/last role, years \
-of experience, 3-4 core skills, and location if present — ending with exactly this question: "— \
-anything wrong or missing?" Once the user corrects or confirms, move on immediately; do not repeat the \
-reflect-back a second time (one correction turn max). Once confirmed, call record_resume with a clean \
-markdown "cv.md" body (their master CV, one section per role plus skills/education), their key \
-technical skills as a flat list, and a 2-4 sentence background_summary — and in that SAME message \
-immediately ask stage 3's batched logistics question below; do not send a bare acknowledgment turn \
-first. (An explicit skip never reaches you as a chat turn — it's handled before this stage's model \
-call ever fires, so every resume-stage turn you see has real resume text in it.)
-
-3. TARGETING. Do NOT ask for their name, current/last role, employer, education, or skills again — \
-those come from the anchor, calibration, and resume (if given). Ask for logistics in ONE batched turn, \
-not four separate questions: "Logistics, all in one go: where are you based, remote-only or is some \
-onsite fine (and where), and what's the salary floor below which you won't even look?" — and if no \
-resume was given and their name is still genuinely unknown, fold "and what's your name?" into that same \
-batched question. CRITICAL RULE: do NOT ask about work authorization, visa sponsorship, earliest start \
-date, relocation-for-forms, in-person-for-forms, AI-policy acknowledgement, or prior interviews with \
-any company — those are application-form defaults this product never collects, and asking about them \
-is a bug, not a nice-to-have. Phone, LinkedIn, website, and GitHub are volunteer-only: record them if \
-the user offers them unprompted, but never ask for them. Once you have name and the logistics above, \
-call record_identity — and in that SAME message immediately ask your first generated targeting \
-question below; do not send a bare acknowledgment turn first.
-
-Then ask 2-4 pointed questions, one per turn, fully generated from everything known so far (anchor + \
-calibration + resume-if-any) — never fixed wording, never generic filler. Use this coverage checklist \
-of four archetypes for what each question should draw from, skipping any archetype already answered by \
-context you already have and dropping the count as low as 2 when it is:
-   a. DIRECTION (forced choice, options derived from their actual background): propose 2-3 concrete \
-next-role directions built from what they actually do. Pick, combine, or correct. Feeds tiers.
-   b. TRADE-OFF (a rubric-relevant contrast, phrased for their actual field): two postings, same \
-title, a context-appropriate contrast derived from their field — which ranks higher for them, or \
-genuinely no preference. Feeds thesis energy / term-group weighting in thesis_summary.
-   c. MORE-OF / DONE-WITH: from their actual last role, one thing they want more of and one they're \
-done with, phrased as work activities, not feelings. Feeds thesis energy signals in thesis_summary.
-   d. OPTIONAL SEED (skippable, no follow-up if skipped): any specific companies for the watchlist. \
-Feeds dream_companies.
-Dealbreakers are no longer asked here — the dealbreakers module owns that ground now. \
-Generation freedom never excuses a missing field: tiers and thesis_summary are ALL still required \
-non-empty on record_targeting regardless of how few questions you asked to get there. After each \
-answer, acknowledge it briefly and immediately ask the next \
-question in the SAME message — never send the acknowledgment alone. Synthesize a one-paragraph \
-judgment thesis from everything they've told you — especially the trade-off and more-of/done-with \
-answers — into thesis_summary. Once every required field is gathered and confirmed, call \
-record_targeting, then call finish_interview. In the same turn as finish_interview, write a short \
-plain-words summary of the profile you just built — what you'll rank up, what you'll never show them, \
-and a one-line logistics recap — followed by exactly this sentence: "Head to your feed and hit \"Run \
-my hunt\" to get your first results."
-
-Always include a short conversational reply for the user in the SAME turn as any tool call — never a \
-tool call with no visible text. Keep messages concise; this is a chat, not a form. Degrade gracefully \
-if the user is sparse (a single tier, few disqualifiers) rather than pushing endlessly — this is fine \
-per the tiers/disqualifiers contract, which only requires non-empty lists at the seeding step, not \
-exhaustive ones.`;
-
-const TIER_SCHEMA = {
-  type: "object" as const,
-  properties: {
-    key: { type: "string", description: "snake_case key, e.g. tier_1" },
-    label: { type: "string" },
-    notes: { type: "string" },
-    reference_role: { type: "string" },
-  },
-  required: ["key", "label"],
-};
-
-export const INTERVIEW_TOOLS: Anthropic.Tool[] = [
-  {
-    name: "record_calibration",
-    description: "Record the calibration ingest turn's synthesis of the four calibration answers.",
-    input_schema: {
-      type: "object",
-      properties: {
-        skills: { type: "array", items: { type: "string" } },
-        evidence: { type: "array", items: { type: "string" } },
-        range_statement: { type: "string" },
-        background_summary: { type: "string" },
-      },
-      required: ["skills", "evidence", "range_statement", "background_summary"],
-    },
-  },
-  {
-    name: "record_resume",
-    description: "Record the outcome of the optional resume stage once the user confirms the summary.",
-    input_schema: {
-      type: "object",
-      properties: {
-        cv_markdown: { type: "string", description: "The full master CV as clean markdown." },
-        key_technical_skills: { type: "array", items: { type: "string" } },
-        background_summary: { type: "string" },
-      },
-      required: ["cv_markdown"],
-    },
-  },
-  {
-    name: "record_identity",
-    description: "Record the outcome of the targeting stage's logistics opener. Never include application_defaults fields.",
-    input_schema: {
-      type: "object",
-      properties: {
-        name: { type: "string" },
-        email: { type: "string" },
-        phone: { type: "string" },
-        location_base: { type: "string" },
-        linkedin: { type: "string" },
-        website: { type: "string" },
-        github: { type: "string" },
-        location_and_compensation: {
-          type: "object",
-          properties: {
-            base: { type: "string" },
-            remote_acceptable: { type: "boolean" },
-            in_person_acceptable: { type: "string" },
-            relocation: { type: "string" },
-            current_comp_usd: { type: "number" },
-            target_comp_usd: { type: "string" },
-          },
-        },
-      },
-      required: ["name"],
-    },
-  },
-  {
-    name: "record_targeting",
-    description: "Record the outcome of the targeting stage's generated questions once gathered.",
-    input_schema: {
-      type: "object",
-      properties: {
-        tiers: { type: "array", items: TIER_SCHEMA, minItems: 1 },
-        dream_companies: { type: "array", items: { type: "string" } },
-        hard_disqualifiers: { type: "array", items: { type: "string" } },
-        soft_concerns: { type: "array", items: { type: "string" } },
-        degree_gate: { type: "string" },
-        thesis_summary: { type: "string" },
-      },
-      required: ["tiers", "thesis_summary"],
-    },
-  },
-  {
-    name: "finish_interview",
-    description: "Signal that all stages are recorded and confirmed by the user — triggers profile-doc generation.",
-    input_schema: { type: "object", properties: {} },
-  },
-];
-
-export interface InterviewToolCall {
-  name: string;
-  input: Record<string, unknown>;
+function knownContextLines(extracted: ExtractedState): string[] {
+  const lines: string[] = [];
+  if (extracted.anchor?.current_title) {
+    const company = extracted.anchor.current_company ? ` at ${extracted.anchor.current_company}` : "";
+    const tenure = extracted.anchor.years_in_role ? ` (${extracted.anchor.years_in_role})` : "";
+    lines.push(`- Current/most recent role: ${extracted.anchor.current_title}${company}${tenure}`);
+  } else if (extracted.anchor?.free_text) {
+    lines.push(`- Situation: ${extracted.anchor.free_text}`);
+  }
+  if (extracted.calibration?.background_summary) {
+    lines.push(`- Background: ${extracted.calibration.background_summary}`);
+  }
+  if (extracted.calibration?.skills?.length) {
+    lines.push(`- Known skills: ${extracted.calibration.skills.join(", ")}`);
+  }
+  if (extracted.resume?.cv_markdown) {
+    lines.push(`- A resume was provided — do not ask for it, or for anything it already covers, again.`);
+  } else if (extracted.resumeResolved) {
+    lines.push(`- Resume was skipped — do not ask about it again.`);
+  }
+  if (extracted.identity?.name) lines.push(`- Name: ${extracted.identity.name}`);
+  if (extracted.identity?.location_and_compensation) {
+    lines.push(`- Logistics already known: ${JSON.stringify(extracted.identity.location_and_compensation)}`);
+  }
+  return lines;
 }
 
-// INTSIM reviewer addendum 2: named (not magic-number) caps, each also
-// returned on its call's result below as `maxTokens` — a TRUNCATION-
-// invariant check needs to know the cap a response was measured against,
-// not just its token count, to tell "the model stopped naturally" from
-// "the response was decapitated at the cap" (motivating live bug:
-// record_targeting truncated at this cap, indistinguishable downstream
-// from an empty turn).
-// Live-fire fix (2026-07-19): was 1536, which decapitated the interview's
-// biggest turn — record_targeting (tiers + disqualifiers + thesis
-// paragraph) + finish_interview + the closing summary — at EXACTLY the
-// cap, three times in a row in production (ledger rows at 1536 on the
-// nose). A truncated tool_use block arrives as no tool call and no
-// text, so the turn looked empty and the fallback loop fired. Raised to
-// 4096, then to 8192 after prod hit that flush twice too (cap audit
-// 2026-07-19).
-export const INTERVIEW_MAX_TOKENS = 8192;
+export interface BuildEngineSystemPromptParams {
+  /** The intent whose answer the user's latest message is expected to supply. */
+  currentIntent: IntentKey;
+  /** The intent to phrase a question about next, or null once nothing required remains. */
+  nextIntent: IntentKey | null;
+  extracted: ExtractedState;
+}
 
-export interface InterviewTurnResult {
-  assistantText: string;
-  toolCalls: InterviewToolCall[];
+/**
+ * INT2 engine contract point 3: "the prompt tells the model WHAT to ask
+ * (intent + askHint + relevant extracted context so it never re-asks what's
+ * known); the model decides only HOW to phrase it." Rebuilt fresh every
+ * turn from the server-computed target — there is no static prompt anymore.
+ */
+export function buildEngineSystemPrompt(params: BuildEngineSystemPromptParams): string {
+  const { currentIntent, nextIntent, extracted } = params;
+  const current = INTENT_REGISTRY[currentIntent];
+  const known = knownContextLines(extracted);
+
+  const neverReAsk = known.length
+    ? " NEVER RE-ASK KNOWN FIELDS (hard constraint): never ask for anything already listed under KNOWN CONTEXT below."
+    : "";
+  const askInstruction = nextIntent
+    ? `Then write \`question\`: a single, direct question asking about ${INTENT_REGISTRY[nextIntent].askGuidance(extracted)}.${neverReAsk}`
+    : `There is nothing left to ask. Instead of a question, write \`question\` as a short plain-words closing ` +
+      `summary of the profile you've built — what you'll rank up, what you'll filter out, a one-line logistics ` +
+      `recap — ending with exactly this sentence: "Head to your feed and hit \\"Run my hunt\\" to get your first results."`;
+
+  const sections = [
+    `You are interviewing a new user to build their jobify hunting profile — a job-search targeting profile, NOT ` +
+      `a job application. You are a sharp, direct career coach who reads everything already gathered about them ` +
+      `closely and asks pointed, specific questions grounded in it — never generic filler, never anything already answered.`,
+    TONE_RULES,
+    `You must call the \`interview_turn\` tool exactly once, every turn — there is no other valid response. ` +
+      `Extract into \`extracted_updates.${currentIntent}\` whatever the user's last message reveals: ${current.extractionGuidance}`,
+    `If the user's message also reveals something else useful outside "${currentIntent}", put it in ` +
+      `\`extracted_updates.anything_else\` using the same nested shape (e.g. {"identity": {"location_base": "Denver, CO"}}) ` +
+      `— never invent content that wasn't actually said.`,
+    askInstruction,
+  ];
+  if (known.length) {
+    sections.push(`KNOWN CONTEXT (already recorded — never re-ask any of this):\n${known.join("\n")}`);
+  }
+  return sections.join("\n\n");
+}
+
+/** The forced tool's dynamic `extracted_updates` schema, scoped to this turn's current target (point 2). */
+export function buildEngineTool(currentIntent: IntentKey): Anthropic.Tool {
+  return {
+    name: ENGINE_TOOL_NAME,
+    description:
+      "Record this turn's extraction into extracted_updates and the single next question (or, once nothing " +
+      "remains, a closing summary) to show the user, in `question`.",
+    input_schema: {
+      type: "object",
+      properties: {
+        question: {
+          type: "string",
+          description: "The single next question to ask the user — or, once nothing remains, a closing summary.",
+        },
+        extracted_updates: buildExtractedUpdatesSchema(currentIntent),
+      },
+      required: ["question", "extracted_updates"],
+    },
+  };
+}
+
+/**
+ * INT2 engine contract point 2: one tool, `interview_turn`, forced via
+ * `tool_choice` — there are zero unforced calls in the new engine, which
+ * eliminates the empty-turn failure mode BY CONSTRUCTION (it only ever bit
+ * unforced calls).
+ */
+export const ENGINE_TOOL_NAME = "interview_turn";
+
+// The new per-turn schema only ever targets one intent's fields (plus
+// anything_else) rather than the old mega record_targeting call (tiers +
+// disqualifiers + thesis + finish_interview + a closing paragraph all in
+// one shot), so the payload this cap has to hold is inherently smaller —
+// engine contract point 2 pins this at 4096.
+export const ENGINE_MAX_TOKENS = 4096;
+
+export interface EngineTurnParams {
+  history: ChatMessage[];
+  extracted: ExtractedState;
+  currentIntent: IntentKey;
+  nextIntent: IntentKey | null;
+}
+
+export interface EngineTurnResult {
+  question: string;
+  extractedUpdates: Record<string, unknown>;
   usage: { inputTokens: number; outputTokens: number };
   maxTokens?: number;
 }
 
-export async function runInterviewTurn(history: ChatMessage[]): Promise<InterviewTurnResult> {
+export async function runEngineTurn(params: EngineTurnParams): Promise<EngineTurnResult> {
+  const { history, extracted, currentIntent, nextIntent } = params;
   const response = await anthropicClient().messages.create({
     model: ONBOARDING_MODEL,
-    max_tokens: INTERVIEW_MAX_TOKENS,
-    system: INTERVIEW_SYSTEM_PROMPT,
-    tools: INTERVIEW_TOOLS,
+    max_tokens: ENGINE_MAX_TOKENS,
+    system: buildEngineSystemPrompt({ currentIntent, nextIntent, extracted }),
+    tools: [buildEngineTool(currentIntent)],
+    tool_choice: { type: "tool", name: ENGINE_TOOL_NAME },
     messages: history.map((m) => ({ role: m.role, content: m.content })),
   });
 
   if (response.stop_reason === "max_tokens") {
-    console.warn("runInterviewTurn: response truncated at max_tokens — tool calls may be lost", {
+    console.warn("runEngineTurn: response truncated at max_tokens — question/extracted_updates may be lost", {
       outputTokens: response.usage.output_tokens,
     });
   }
 
-  const textParts: string[] = [];
-  const toolCalls: InterviewToolCall[] = [];
+  let question = "";
+  let extractedUpdates: Record<string, unknown> = {};
   for (const block of response.content) {
-    if (block.type === "text") textParts.push(block.text);
-    if (block.type === "tool_use") {
-      toolCalls.push({ name: block.name, input: block.input as Record<string, unknown> });
+    if (block.type === "tool_use" && block.name === ENGINE_TOOL_NAME) {
+      const input = block.input as { question?: unknown; extracted_updates?: unknown };
+      if (typeof input.question === "string") question = input.question;
+      if (input.extracted_updates && typeof input.extracted_updates === "object") {
+        extractedUpdates = input.extracted_updates as Record<string, unknown>;
+      }
     }
   }
 
   return {
-    assistantText: textParts.join("\n\n").trim(),
-    toolCalls,
-    usage: {
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-    },
-    maxTokens: INTERVIEW_MAX_TOKENS,
+    question: question.trim(),
+    extractedUpdates,
+    usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
+    maxTokens: ENGINE_MAX_TOKENS,
   };
 }
 
@@ -296,7 +205,8 @@ export async function runInterviewTurn(history: ChatMessage[]): Promise<Intervie
  * generated (tailored to the anchor) but structurally fixed to these four
  * probes. Ships the exact copy from the owner's shipped framing (§2) as a
  * static constant rather than model output — only the four prompt bodies
- * below are generated.
+ * below are generated. Out of INT2 scope: this is a separate, self-
+ * contained one-shot call before the checklist engine's turns ever begin.
  */
 export const CALIBRATION_INTRO_COPY =
   "Four short prompts about the work itself. Not a test — no scores, no wrong answers. " +
@@ -348,7 +258,8 @@ export const CALIBRATION_GENERATION_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
-// Cap audit (2026-07-19): was 1024, raised alongside INTERVIEW_MAX_TOKENS above.
+// Cap audit (2026-07-19): was 1024, raised alongside the (now-retired)
+// INTERVIEW_MAX_TOKENS.
 export const CALIBRATION_GENERATION_MAX_TOKENS = 2048;
 
 export interface CalibrationGenerationResult {
@@ -393,9 +304,8 @@ export async function runCalibrationGeneration(anchor: AnchorStageData): Promise
 /**
  * Backs `web/lib/profile/regenerateCv.ts` (ONB-A decision #3): a focused
  * extraction call, separate from the main interview, for re-extracting a
- * resume uploaded after onboarding. The settings-UI route that reads the
- * user's profiles row and calls regenerateCv with this injected is a
- * separate session's job — this only ships the real extraction call.
+ * resume uploaded after onboarding. Out of INT2 scope — unrelated to the
+ * checklist engine's turn loop.
  */
 export const RESUME_EXTRACTION_SYSTEM_PROMPT = `Extract a clean master CV and background summary from a pasted \
 resume, for a job-search targeting profile (not a job application). Read the resume text, extract roles, \

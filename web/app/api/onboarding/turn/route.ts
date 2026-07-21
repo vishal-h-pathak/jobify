@@ -3,7 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getOrCreateSession } from "@/lib/db/onboardingSession";
 import { hasAccess } from "@/lib/db/access";
-import { runInterviewTurn } from "@/lib/anthropic/interview";
+import { runEngineTurn } from "@/lib/anthropic/interview";
 import { handleOnboardingTurn } from "@/lib/onboarding/handleTurn";
 import type { ModulesState } from "@/lib/onboarding/moduleRegistry";
 
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     },
     supabase,
     admin: createSupabaseAdminClient(),
-    runTurn: runInterviewTurn,
+    runTurn: runEngineTurn,
   });
 
   return NextResponse.json(result);
