@@ -6,6 +6,7 @@ targeting tiers, times remote-acceptability and/or base metro.
 
 from __future__ import annotations
 
+from jobify.profile_loader import GENERATED_QUERIES_KEY
 from jobify.hunt.sources.query_templates import build_queries_for_profile, union_queries
 
 
@@ -72,6 +73,35 @@ def test_owner_like_fixture_no_longer_emits_atlanta_unless_profile_says_so():
 
     atlanta_user = _profile(titles=["Platform Engineer"], remote_acceptable=True, base="Atlanta, GA")
     assert any("atlanta" in q.lower() for q in build_queries_for_profile(atlanta_user))
+
+
+# ── HUNT2 S5: generated queries preferred over the P0.6 template ────────
+
+
+def test_build_queries_prefers_generated_queries_when_present():
+    profile = _profile(titles=["Platform Engineer"], remote_acceptable=True, base="Denver, CO")
+    profile[GENERATED_QUERIES_KEY] = ["Site Reliability Engineer remote", "SRE Denver"]
+    assert build_queries_for_profile(profile) == [
+        "Site Reliability Engineer remote", "SRE Denver",
+    ]
+
+
+def test_build_queries_falls_back_to_templates_when_generated_key_absent():
+    profile = _profile(titles=["Platform Engineer"], remote_acceptable=True, base="")
+    assert GENERATED_QUERIES_KEY not in profile
+    assert build_queries_for_profile(profile) == ["Platform Engineer remote"]
+
+
+def test_build_queries_falls_back_to_templates_when_generated_list_empty():
+    profile = _profile(titles=["Platform Engineer"], remote_acceptable=True, base="")
+    profile[GENERATED_QUERIES_KEY] = []
+    assert build_queries_for_profile(profile) == ["Platform Engineer remote"]
+
+
+def test_build_queries_generated_list_strips_blank_and_non_string_entries():
+    profile = _profile(titles=["Platform Engineer"], remote_acceptable=True, base="")
+    profile[GENERATED_QUERIES_KEY] = ["  Real Query  ", "", "   ", None]
+    assert build_queries_for_profile(profile) == ["Real Query"]
 
 
 def test_union_queries_dedups_across_users_case_insensitively():

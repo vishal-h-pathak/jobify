@@ -168,7 +168,10 @@ def fetch(queries: list[str] | None = None):
                 "comp_min": job.get("job_min_salary"),
                 "comp_max": job.get("job_max_salary"),
                 "comp_currency": job.get("job_salary_currency") or None,
-                "raw": job,
+                # HUNT2 S5: provenance — which paid-search query surfaced
+                # this posting (S6's rollups read `_jobify_query` back out
+                # of `postings.raw`). A copy, not a mutation of `job`.
+                "raw": {**job, "_jobify_query": query},
             }
         logger.info("jsearch: q=%r yielded %d new (publisher=%s)",
                     query, page_yield,
