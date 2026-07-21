@@ -87,13 +87,15 @@ describe("/admin page", () => {
     requireAdminMock.mockResolvedValue({ ok: true, user: { id: "admin-1" }, supabase: {} });
 
     const result = await AdminPage();
-    const [heading, spendCard, invitesCard, friendsCard, usersCard, poolCard] = result.props.children;
+    const [heading, spendCard, invitesCard, friendsCard, usersCard, candidatesCard, poolCard] =
+      result.props.children;
 
     expect(heading.props.children).toBe("Admin");
     expect(spendCard.props.children[0].props.children).toBe("Spend");
     expect(invitesCard.props.children[0].props.children).toBe("Invites");
     expect(friendsCard.props.children[0].props.children).toBe("Friends");
     expect(usersCard.props.children[0].props.children).toBe("Users");
+    expect(candidatesCard.props.children[0].props.children).toBe("Candidate boards");
     expect(poolCard.props.children[0].props.children).toBe("Pool health");
     expect(createSupabaseAdminClientMock).toHaveBeenCalled();
     expect(listAllowlistedEmailsMock).toHaveBeenCalled();

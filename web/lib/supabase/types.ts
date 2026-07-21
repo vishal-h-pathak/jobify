@@ -469,6 +469,48 @@ export interface Database {
         };
         Relationships: [];
       };
+      // HUNT2 P2 S4 (0017_candidate_boards.sql): the global candidate-board
+      // discovery-loop queue — three feeders enqueue, jobify.hosted.candidates
+      // probes + maybe auto-admits into board_catalog, the admin candidates
+      // UI (web/app/(app)/admin/CandidatesCard.tsx) approves/rejects whatever
+      // stays pending. RLS: service-role ALL only — no `authenticated`
+      // policy, unlike board_catalog; every read/write here goes through
+      // requireAdmin()-gated server routes.
+      candidate_boards: {
+        Row: {
+          id: string;
+          company_name: string;
+          normalized_name: string;
+          evidence_kind: "hn_thread" | "aggregator_match" | "serpapi_dork" | "relocation" | "manual";
+          evidence_url: string | null;
+          proposed_ats: string | null;
+          proposed_slug: string | null;
+          probe_result: Record<string, unknown> | null;
+          status: "pending" | "auto_admitted" | "approved" | "rejected";
+          reject_reason: string | null;
+          created_at: string;
+          decided_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          company_name: string;
+          normalized_name: string;
+          evidence_kind: "hn_thread" | "aggregator_match" | "serpapi_dork" | "relocation" | "manual";
+          evidence_url?: string | null;
+          proposed_ats?: string | null;
+          proposed_slug?: string | null;
+          probe_result?: Record<string, unknown> | null;
+          status?: "pending" | "auto_admitted" | "approved" | "rejected";
+          reject_reason?: string | null;
+          decided_at?: string | null;
+        };
+        Update: {
+          status?: "pending" | "auto_admitted" | "approved" | "rejected";
+          reject_reason?: string | null;
+          decided_at?: string | null;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {

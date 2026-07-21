@@ -12,6 +12,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { MintInviteForm } from "./MintInviteForm";
 import { FriendsCard } from "./FriendsCard";
 import { ProfileReviewRow } from "./ProfileReviewRow";
+import { CandidatesCard } from "./CandidatesCard";
 
 // Every field here changes as friends sign up / the worker runs — never
 // statically cache (same reasoning as the settings page).
@@ -176,6 +177,15 @@ export default async function AdminPage() {
             </table>
           </div>
         )}
+      </Card>
+
+      <Card className="flex flex-col gap-4">
+        <h2 className="font-medium text-ink">Candidate boards</h2>
+        <p className="text-xs text-ink-muted">
+          The discovery loop&apos;s candidate queue (HN extraction, aggregator-unknown-company routing, SerpAPI
+          dorks) — review what stayed pending; auto-admits already landed in the catalog.
+        </p>
+        <CandidatesCard />
       </Card>
 
       <Card className="flex flex-col gap-3">

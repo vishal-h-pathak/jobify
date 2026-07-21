@@ -50,6 +50,22 @@ _FANOUT_SUMMARY = {
     "users_budget_stopped": 0,
 }
 
+# P2 S4: `_execute()` now runs `_run_candidates_pass()` between discovery
+# and fan-out. Every test below that drives a full successful `_execute()`
+# call fakes this out too — the real pass hits `jobify.db` (no live
+# Supabase in tests), and `jobify.hosted.candidates` /
+# `jobify.hosted.feeders.*` have their own dedicated test files.
+_CANDIDATES_SUMMARY = {
+    "seen": 0,
+    "duplicate": 0,
+    "invalid": 0,
+    "inserted": 0,
+    "auto_admitted": 0,
+    "dropped_enqueue_cap": 0,
+    "dropped_auto_admit_cap": 0,
+    "errored": 0,
+}
+
 
 def test_execute_calls_discovery_then_fanout(monkeypatch, capsys):
     calls: list[str] = []
@@ -63,7 +79,12 @@ def test_execute_calls_discovery_then_fanout(monkeypatch, capsys):
         assert user_ids is None  # _execute() calls the default (all users), not a subset
         return dict(_FANOUT_SUMMARY)
 
+    def fake_candidates_pass():
+        calls.append("candidates")
+        return dict(_CANDIDATES_SUMMARY)
+
     monkeypatch.setattr(worker.discovery, "run_discovery_cycle", fake_discovery)
+    monkeypatch.setattr(worker, "_run_candidates_pass", fake_candidates_pass)
     monkeypatch.setattr(worker.fanout, "run_fanout_cycle", fake_fanout)
     monkeypatch.setattr(worker.db, "get_global_month_to_date_spend", lambda: 12.34)
     monkeypatch.setattr(worker.config, "HOSTED_GLOBAL_MONTHLY_CAP_USD", 100.0)
@@ -74,8 +95,11 @@ def test_execute_calls_discovery_then_fanout(monkeypatch, capsys):
 
     result = worker._execute()
 
-    assert calls == ["discovery", "fanout"]
-    assert result == {"discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY}
+    # P2 S4: candidates pass runs between discovery and fan-out.
+    assert calls == ["discovery", "candidates", "fanout"]
+    assert result == {
+        "discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY, "candidates": _CANDIDATES_SUMMARY,
+    }
 
     printed = capsys.readouterr().out
     # The printed summary line names the fields discovery/fanout already
@@ -120,6 +144,35 @@ def test_execute_aborts_cycle_when_discovery_raises(monkeypatch):
     assert fanout_calls == []
 
 
+def test_execute_candidates_pass_failure_does_not_abort_fanout(monkeypatch, capsys):
+    """P2 S4: unlike discovery, the candidates pass is NOT on the
+    fail-loud path — a bug in the (brand new) three-feeder pass must
+    never block the paid fan-out phase. `_execute()` still returns
+    normally, with `candidates` recording the error instead of a real
+    summary."""
+    fanout_calls: list[str] = []
+
+    def fake_candidates_pass():
+        raise RuntimeError("candidates pass blew up")
+
+    monkeypatch.setattr(worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY))
+    monkeypatch.setattr(worker, "_run_candidates_pass", fake_candidates_pass)
+    monkeypatch.setattr(
+        worker.fanout,
+        "run_fanout_cycle",
+        lambda user_ids=None: fanout_calls.append("fanout") or dict(_FANOUT_SUMMARY),
+    )
+    monkeypatch.setattr(worker.db, "get_global_month_to_date_spend", lambda: 0.0)
+    monkeypatch.setattr(worker.config, "HOSTED_GLOBAL_MONTHLY_CAP_USD", 100.0)
+    monkeypatch.setattr(worker, "send_ntfy_summary", lambda line: False)
+
+    result = worker._execute()
+
+    assert fanout_calls == ["fanout"]
+    assert result["candidates"] == {"error": "candidates pass blew up"}
+    assert result["fanout"] == _FANOUT_SUMMARY
+
+
 def test_run_parses_once_flag_and_executes_one_cycle(monkeypatch):
     calls: list[tuple] = []
     monkeypatch.setattr(
@@ -138,6 +191,7 @@ def test_execute_discovery_only_never_calls_fanout(monkeypatch, capsys):
     monkeypatch.setattr(
         worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY)
     )
+    monkeypatch.setattr(worker, "_run_candidates_pass", lambda: dict(_CANDIDATES_SUMMARY))
     monkeypatch.setattr(
         worker.fanout,
         "run_fanout_cycle",
@@ -164,6 +218,7 @@ def test_execute_with_user_id_scores_exactly_one_user(monkeypatch):
     monkeypatch.setattr(
         worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY)
     )
+    monkeypatch.setattr(worker, "_run_candidates_pass", lambda: dict(_CANDIDATES_SUMMARY))
 
     def fake_fanout(user_ids=None):
         seen_user_ids.append(user_ids)
@@ -224,6 +279,7 @@ def test_execute_persists_hunt_cycle_row_on_success(monkeypatch):
     monkeypatch.setattr(
         worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY)
     )
+    monkeypatch.setattr(worker, "_run_candidates_pass", lambda: dict(_CANDIDATES_SUMMARY))
     monkeypatch.setattr(
         worker.fanout, "run_fanout_cycle", lambda user_ids=None: dict(_FANOUT_SUMMARY)
     )
@@ -238,7 +294,9 @@ def test_execute_persists_hunt_cycle_row_on_success(monkeypatch):
 
     result = worker._execute()
 
-    assert result == {"discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY}
+    assert result == {
+        "discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY, "candidates": _CANDIDATES_SUMMARY,
+    }
     assert len(persisted) == 1
     row = persisted[0]
     assert row["error"] is None
@@ -247,7 +305,10 @@ def test_execute_persists_hunt_cycle_row_on_success(monkeypatch):
     assert row["users_scored"] == _FANOUT_SUMMARY["users_processed"]
     assert row["postings_fetched"] == _DISCOVERY_SUMMARY["fetched"]
     assert row["postings_upserted"] == _DISCOVERY_SUMMARY["upserted"]
-    assert row["counters"] == {**_DISCOVERY_SUMMARY, **_FANOUT_SUMMARY}
+    # P2 S4: candidates counters land in the same jsonb, prefixed to avoid
+    # any (currently nonexistent) key collision with discovery's/fanout's.
+    prefixed_candidates = {f"candidates_{k}": v for k, v in _CANDIDATES_SUMMARY.items()}
+    assert row["counters"] == {**_DISCOVERY_SUMMARY, **_FANOUT_SUMMARY, **prefixed_candidates}
     assert row["cost_usd"] == _FANOUT_SUMMARY.get("cost_usd", 0.0)
     assert row["started_at"] and row["finished_at"]
 
@@ -297,6 +358,7 @@ def test_execute_persist_failure_does_not_crash_a_successful_cycle(monkeypatch):
     monkeypatch.setattr(
         worker.discovery, "run_discovery_cycle", lambda: dict(_DISCOVERY_SUMMARY)
     )
+    monkeypatch.setattr(worker, "_run_candidates_pass", lambda: dict(_CANDIDATES_SUMMARY))
     monkeypatch.setattr(
         worker.fanout, "run_fanout_cycle", lambda user_ids=None: dict(_FANOUT_SUMMARY)
     )
@@ -311,4 +373,6 @@ def test_execute_persist_failure_does_not_crash_a_successful_cycle(monkeypatch):
 
     result = worker._execute()
 
-    assert result == {"discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY}
+    assert result == {
+        "discovery": _DISCOVERY_SUMMARY, "fanout": _FANOUT_SUMMARY, "candidates": _CANDIDATES_SUMMARY,
+    }
