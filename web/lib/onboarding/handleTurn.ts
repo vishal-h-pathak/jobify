@@ -1,9 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "../supabase/types";
-import type { ChatMessage, InterviewStage, InterviewTurnResult } from "../anthropic/interview";
+import type { ChatMessage, InterviewStage, EngineTurnParams, EngineTurnResult } from "../anthropic/interview";
 import { ONBOARDING_MODEL } from "../anthropic/client";
-import { applyToolCalls } from "./applyToolCalls";
-import { buildProfileDoc, type ExtractedState } from "../profile/buildDoc";
+import { mergeExtractedUpdates } from "./applyToolCalls";
+import { firstMissingIntent, missingFieldsForIntent, isInterviewDone, type IntentKey } from "./checklist";
+import { renderFallbackQuestion } from "./intentRegistry";
+import { buildProfileDoc, type ExtractedState, type TurnLogEntry } from "../profile/buildDoc";
 import { saveSession } from "../db/onboardingSession";
 import { upsertProfileDoc } from "../db/profiles";
 import { recordOnboardingTurn } from "../db/ledger";
@@ -25,7 +27,7 @@ export interface HandleTurnDeps {
   session: SessionSnapshot;
   supabase: SupabaseClient<Database>;
   admin: SupabaseClient<Database>;
-  runTurn: (history: ChatMessage[]) => Promise<InterviewTurnResult>;
+  runTurn: (params: EngineTurnParams) => Promise<EngineTurnResult>;
 }
 
 export interface HandleTurnResult {
@@ -33,11 +35,14 @@ export interface HandleTurnResult {
   stage: InterviewStage;
   done: boolean;
   validation?: { status: "valid" | "invalid"; errors: string[] };
-  // INTSIM task 4: set whenever the re-prompt or a fallback fires this
-  // turn, so the sim (and later, admin telemetry) can see it without
-  // parsing assistantText. Undefined on an ordinary turn. No schema change
-  // — this is a return-value field only, never persisted.
-  fallback_kind?: "reprompt" | "fallback" | "loop_breaker";
+  // INT2: set whenever the deterministic askHint path overrides the model's
+  // own phrasing this turn (engine contract point 4) — "no_progress" when
+  // the target intent made no progress despite a full round-trip,
+  // "retry_exhausted" when the question came back empty/invalid even after
+  // one retry. Undefined on an ordinary turn. Return-value field only,
+  // never persisted (the real, structured telemetry is `extracted.turn_log`,
+  // appended every turn).
+  fallback_kind?: "no_progress" | "retry_exhausted";
 }
 
 // ONB-A: an explicit Skip button sends this reserved sentinel through the
@@ -47,71 +52,42 @@ export interface HandleTurnResult {
 export const RESUME_SKIP_MESSAGE = "__skip_resume__";
 const RESUME_SKIP_DISPLAY_TEXT = "Skipped — using the anchor and range answers instead.";
 
-const RESUME_STAGE_FALLBACK = "Have a resume handy? Paste/upload it — or skip, we already have plenty.";
-const TARGETING_STAGE_FALLBACK =
-  "Logistics, all in one go: where are you based, remote-only or is some onsite fine (and where), " +
-  "and what's the salary floor below which you won't even look?";
-const CALIBRATION_STAGE_GENERIC_FALLBACK =
-  "Let's capture your range — tell me about the core of your work in a few sentences.";
-// Live-fire fix (2026-07-19): once record_identity has landed the logistics
-// block, the targeting fallback must nudge FORWARD into the generated
-// questions, never re-ask the logistics opener — the context-blind opener
-// turned one question-less model turn into an infinite re-ask loop (the
-// model acknowledged, the post-check appended the opener, the user answered
-// again, forever).
-const TARGETING_DIRECTION_FALLBACK =
-  "Logistics locked. Now direction: name the two or three kinds of next role you'd actually " +
-  "want — or describe the one you keep imagining.";
-// Live-fire fix v2 (2026-07-19, second loop): if the same canned question
-// would be appended twice in a row, ask this instead — never repeat.
-const LOOP_BREAKER_QUESTION =
-  "What's the one thing I haven't asked about that matters most for your search?";
-
-// ADM-3 Part 2: exported so admin telemetry (lib/admin/onboardingOverview.ts)
-// can best-effort-detect a fallback-tainted turn by scanning stored
-// `messages` content for these exact strings — `fallback_kind` itself is a
-// return-value-only field (see HandleTurnResult), never persisted. Only
-// "fallback" and "loop_breaker" leave a durable textual marker this way;
-// "reprompt" lets the model continue in its own words, so it's invisible to
-// this technique and undercounted in that admin view.
-export const FALLBACK_TEXT_MARKERS = [
-  RESUME_STAGE_FALLBACK,
-  TARGETING_STAGE_FALLBACK,
-  CALIBRATION_STAGE_GENERIC_FALLBACK,
-  TARGETING_DIRECTION_FALLBACK,
-] as const;
-export { LOOP_BREAKER_QUESTION };
-
 const DONE_FALLBACK_TEXT =
   'Your profile is built — head to your feed and hit "Run my hunt" to get your first results.';
 
+// ADM-3 Part 2: kept ONLY so `lib/admin/onboardingOverview.ts` (admin
+// pages — off-limits this session, per session-prompts/55's collision
+// section) keeps compiling and can still best-effort-scan historical
+// sessions written by the pre-INT2 engine. The INT2 engine's control flow
+// never produces or checks these strings anymore — point 7's `turn_log` is
+// the real telemetry going forward; nothing in this file references either
+// constant below except this comment.
+export const LOOP_BREAKER_QUESTION =
+  "What's the one thing I haven't asked about that matters most for your search?";
+export const FALLBACK_TEXT_MARKERS = [
+  "Have a resume handy? Paste/upload it — or skip, we already have plenty.",
+  "Logistics, all in one go: where are you based, remote-only or is some onsite fine (and where), " +
+    "and what's the salary floor below which you won't even look?",
+  "Let's capture your range — tell me about the core of your work in a few sentences.",
+] as const;
+
 /**
- * FIX-1 (2026-07-05), extended for ONB-A's 5-stage machine: deterministic
- * fallback text, keyed by the stage the turn lands on. Used both when the
- * model returns an empty response (after one retry) and, via the
- * post-check below, when a non-empty response has no question mark in it
- * at all. `calibration`'s fallback re-surfaces the first of the four
- * already-generated prompts (extracted.calibration.prompts) rather than a
- * fixed string, since the ingest turn's only real content IS those
- * prompts; `anchor` never reaches a chat turn in v2 (the anchor stage is a
- * zero-LLM form), so it falls back to the targeting text defensively.
+ * INT2 engine contract: `stage` is no longer control flow (the checklist
+ * is), but the exact same string union is still persisted and read by code
+ * outside this session's surface — `components/onboarding/moduleOrder.ts`'s
+ * `isModuleComplete` fallback, the anchor route's re-submission guard, and
+ * the sim harness's own types all key off it. Pure derivation, recomputed
+ * fresh every turn from `extracted` — never itself a source of truth.
  */
-function fallbackAssistantText(stage: InterviewStage, extracted: ExtractedState): string {
-  switch (stage) {
-    case "done":
-      return DONE_FALLBACK_TEXT;
-    case "calibration":
-      return extracted.calibration?.prompts?.[0] ?? CALIBRATION_STAGE_GENERIC_FALLBACK;
-    case "resume":
-      return RESUME_STAGE_FALLBACK;
-    case "targeting":
-    case "anchor":
-    default:
-      // Logistics already recorded -> push forward, don't re-ask it.
-      return extracted.identity?.location_and_compensation
-        ? TARGETING_DIRECTION_FALLBACK
-        : TARGETING_STAGE_FALLBACK;
-  }
+function deriveStage(extracted: ExtractedState): InterviewStage {
+  if (isInterviewDone(extracted)) return "done";
+  if (missingFieldsForIntent("calibration", extracted).length > 0) return "calibration";
+  if (!extracted.resumeResolved) return "resume";
+  return "targeting";
+}
+
+function intentJustResolved(intent: IntentKey, before: ExtractedState, after: ExtractedState): boolean {
+  return missingFieldsForIntent(intent, before).length > 0 && missingFieldsForIntent(intent, after).length === 0;
 }
 
 /**
@@ -129,165 +105,156 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
   }
 
   // ONB-A: the resume stage's explicit Skip button — zero LLM call, zero
-  // ledger row, deterministic transition straight to targeting. cv.md gets
-  // synthesized from anchor + calibration later, at buildDoc time.
+  // ledger row, deterministic transition. cv.md gets synthesized from
+  // anchor + calibration later, at buildDoc time. `resumeResolved` (not
+  // `extracted.resume`, which stays undefined here on purpose) is the
+  // checklist's presence marker for this step.
   if (session.stage === "resume" && userMessage === RESUME_SKIP_MESSAGE) {
-    const assistantText = TARGETING_STAGE_FALLBACK;
+    const extracted: ExtractedState = { ...session.extracted, resumeResolved: true };
+    const receipt = MODULE_REGISTRY.evidence.receipt(extracted as unknown as Record<string, unknown>);
+    const modules = receipt ? markModuleComplete({ modules: session.modules }, "evidence", receipt) : session.modules;
+
+    const nextIntent = firstMissingIntent(extracted);
+    const assistantText = nextIntent ? renderFallbackQuestion(nextIntent, extracted) : DONE_FALLBACK_TEXT;
     const newMessages: ChatMessage[] = [
       ...session.messages,
       { role: "user", content: RESUME_SKIP_DISPLAY_TEXT },
       { role: "assistant", content: assistantText },
     ];
-    // extracted.resume is never set on this path — evidenceReceipt falls
-    // through to the calibration-present branch and returns "built from
-    // your answers" — so mark evidence complete unconditionally; skipping
-    // the resume upload is always a valid completion of the evidence
-    // module (cv.md is synthesized from anchor + calibration later).
-    const modules = markModuleComplete({ modules: session.modules }, "evidence", "built from your answers");
-    await saveSession(supabase, userId, {
-      messages: newMessages,
-      extracted: session.extracted as unknown as Record<string, unknown>,
-      stage: "targeting",
-      status: "in_progress",
+
+    return persistAndReturn({
+      admin,
+      supabase,
+      userId,
+      extracted,
       modules,
+      newMessages,
+      assistantText,
+      usages: [],
     });
-    return { assistantText, stage: "targeting", done: false };
   }
 
-  // ONB-A: the calibration-generation turn (runCalibrationGeneration,
-  // triggered from GET /state) already appends the opening assistant
-  // message before any user turn reaches here, so there is no seeded
-  // greeting to prepend anymore — session.messages is the full history.
+  const extractedBefore = session.extracted;
   const history: ChatMessage[] = [...session.messages, { role: "user", content: userMessage }];
-  let turnResult = await runTurn(history);
-  const usages = [turnResult.usage];
 
-  // FIX-1: a model turn that comes back empty/whitespace-only must never
-  // reach the user as a blank bubble. Retry once (still one real attempt at
-  // getting substantive text); if it's still empty, the caller below falls
-  // back to a deterministic stage-appropriate question. The turn is still
-  // billed either way — that's acceptable, the user must just never see
-  // nothing.
-  // Adversarial-review fix (2026-07-19, F1/CRITICAL): only retry when the
-  // turn was TRULY empty — no text AND no tool calls. The old guard retried
-  // on empty text alone, silently DISCARDING a first attempt whose entire
-  // output was a perfect record_* tool call (the model's normal tool-use
-  // shape), double-billing and losing recorded data.
-  // INTSIM live-run fix: the first (empty) attempt is still a real, billed
-  // Anthropic call — push its usage before the retry, don't let reassigning
-  // `turnResult` below silently drop it. One ledger row per real LLM call,
-  // no exceptions.
-  if (turnResult.assistantText.trim() === "" && turnResult.toolCalls.length === 0) {
-    turnResult = await runTurn(history);
-    usages.push(turnResult.usage);
+  // The intent whose fields the user's incoming message is expected to
+  // answer — computed from state as of the END of the previous turn, so it
+  // always matches whatever the previous turn's `nextIntent` asked about.
+  const currentIntent: IntentKey = firstMissingIntent(extractedBefore) ?? "targeting";
+  // The hypothetical "what comes after this turn resolves currentIntent" —
+  // used only to tell the model what to ask about next; the server never
+  // trusts this assumption blindly (see the no-progress override below).
+  const nextIntentHypothetical = firstMissingIntent(extractedBefore, { excludeIntent: currentIntent });
+
+  let engineResult = await runTurn({ history, extracted: extractedBefore, currentIntent, nextIntent: nextIntentHypothetical });
+  const usages = [engineResult.usage];
+  let retryUsed = false;
+
+  // Engine contract point 4: an empty/invalid question gets exactly one
+  // retry (both calls ledgered) before falling to the deterministic
+  // askHint path below. The forced tool call means extraction can still
+  // have landed even on a blank-question attempt — never discarded.
+  if (engineResult.question.trim() === "") {
+    retryUsed = true;
+    engineResult = await runTurn({ history, extracted: extractedBefore, currentIntent, nextIntent: nextIntentHypothetical });
+    usages.push(engineResult.usage);
   }
 
-  let { extracted, stage, done } = applyToolCalls(turnResult.toolCalls, session.extracted, session.stage);
-  let allToolCalls = [...turnResult.toolCalls];
+  let extracted = mergeExtractedUpdates(extractedBefore, engineResult.extractedUpdates);
 
-  let assistantText = turnResult.assistantText.trim();
-  // INTSIM task 4: additive telemetry — set (and console.warn'd) at whichever
-  // site below actually fires this turn; undefined on an ordinary turn.
+  // The authenticated user's real email always wins over whatever the model
+  // supplied (or fabricated) — overwrite unconditionally, every turn
+  // `identity` exists, per the human-confirmed decision that a hallucinated
+  // or mistyped chat email must never reach storage.
+  if (extracted.identity) {
+    extracted = { ...extracted, identity: { ...extracted.identity, email: userEmail } };
+  }
+
+  // Real recompute, post-merge — the only thing that decides `done` and the
+  // only thing the assistantText below trusts.
+  const targetAfter = firstMissingIntent(extracted);
+  const done = targetAfter === null;
+
+  let assistantText: string;
   let fallbackKind: HandleTurnResult["fallback_kind"];
-  // Live-fire fix v2 (2026-07-19, second loop): a non-empty turn with no
-  // question must be continued BY THE MODEL, not papered over with a canned
-  // append — deterministic repeats poison the history and self-sustain (the
-  // model imitates the ack-only pattern it sees). One re-prompt turn: cheap,
-  // honest, and it can also land the record_* call the ack forgot. The
-  // synthetic continue nudge is NOT persisted to history below.
-  if (assistantText !== "" && !done && stage !== "done" && !assistantText.includes("?")) {
-    fallbackKind = "reprompt";
-    console.warn("onboarding_fallback", { userId, stage, kind: "reprompt" });
-    const continueHistory: ChatMessage[] = [
-      ...history,
-      { role: "assistant", content: assistantText },
-      {
-        role: "user",
-        content:
-          "(Continue — in one message: call any record_* tool you already have enough to fill, then ask your next question.)",
-      },
-    ];
-    const followup = await runTurn(continueHistory);
-    usages.push(followup.usage);
-    const applied = applyToolCalls(followup.toolCalls, extracted, stage);
-    extracted = applied.extracted;
-    stage = applied.stage;
-    done = applied.done;
-    allToolCalls = [...allToolCalls, ...followup.toolCalls];
-    const followText = followup.assistantText.trim();
-    if (followText !== "") assistantText = `${assistantText} ${followText}`;
+
+  if (targetAfter !== null && targetAfter === currentIntent) {
+    // Engine contract point 4's loop-breaker: a full round-trip happened
+    // (we asked, the user answered) but currentIntent still isn't fully
+    // resolved — the model's `question` (if any) was phrased about the
+    // hypothetical next topic, which would be premature to surface. Render
+    // a stable, deterministic re-ask instead of drifting to that topic.
+    assistantText = renderFallbackQuestion(targetAfter, extracted);
+    fallbackKind = "no_progress";
+  } else if (engineResult.question.trim() === "") {
+    // Retry already ran above and still came back blank.
+    assistantText = targetAfter !== null ? renderFallbackQuestion(targetAfter, extracted) : DONE_FALLBACK_TEXT;
+    fallbackKind = "retry_exhausted";
+  } else {
+    assistantText = engineResult.question.trim();
   }
 
-  // Live-fire fix (2026-07-19, dead-end #4): completion is a SERVER decision,
-  // not a model courtesy. Once every field the profile requires exists
-  // (targeting tiers + thesis, identity name), the interview IS complete —
-  // even if the model never emits finish_interview. In production a
-  // record_targeting landed perfectly (2,292 tokens) with no text and no
-  // finish signal, stranding a fully-collected profile behind a canned
-  // fallback forever. finish_interview stays the happy path (it carries the
-  // closing summary); this is the deterministic floor beneath it.
-  if (
-    !done &&
-    stage === "targeting" &&
-    (extracted.targeting?.tiers?.length ?? 0) > 0 &&
-    extracted.targeting?.thesis_summary &&
-    extracted.identity?.name
-  ) {
-    done = true;
-    stage = "done";
-  }
-
-  // V3A-B2: mark range/evidence complete when their tool calls land this
-  // turn. `{ modules }` matches markModuleComplete's `{ modules: ModulesState
-  // }` signature (it only reads `.modules`) — chain by threading the local
-  // variable through, same pattern as every existing module route. Left
-  // untouched (== session.modules) on a turn that fires neither tool, so a
-  // later read via getOrCreateSession stays accurate.
+  // Module-progress glue (unchanged mapping from the v2 machine): only
+  // calibration/resume map to a ModuleKey (range/evidence respectively);
+  // identity/targeting map to none, same as before INT2.
   let modules: ModulesState = session.modules;
-  const firedCalibration = allToolCalls.some((c) => c.name === "record_calibration");
-  const firedResume = allToolCalls.some((c) => c.name === "record_resume");
-  if (firedCalibration) {
+  if (intentJustResolved("calibration", extractedBefore, extracted)) {
     const receipt = MODULE_REGISTRY.range.receipt(extracted as unknown as Record<string, unknown>);
     if (receipt) modules = markModuleComplete({ modules }, "range", receipt);
   }
-  if (firedResume) {
+  if (intentJustResolved("resume", extractedBefore, extracted)) {
     const receipt = MODULE_REGISTRY.evidence.receipt(extracted as unknown as Record<string, unknown>);
     if (receipt) modules = markModuleComplete({ modules }, "evidence", receipt);
   }
 
-  if (assistantText === "") {
-    console.warn("handleOnboardingTurn: empty assistant response survived retry, using stage fallback", {
-      userId,
-      stage,
-    });
-    fallbackKind = "fallback";
-    console.warn("onboarding_fallback", { userId, stage, kind: "fallback" });
-    assistantText = fallbackAssistantText(stage, extracted);
-  } else if (stage !== "done" && !done && !assistantText.includes("?")) {
-    // Last-resort append (the model was already re-prompted once above and
-    // STILL asked nothing) — with the loop breaker: never the same canned
-    // question twice in a row.
-    const fallback = fallbackAssistantText(stage, extracted);
-    const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
-    const usingLoopBreaker = lastAssistant.includes(fallback);
-    fallbackKind = usingLoopBreaker ? "loop_breaker" : "fallback";
-    console.warn("onboarding_fallback", { userId, stage, kind: fallbackKind });
-    assistantText = `${assistantText} ${usingLoopBreaker ? LOOP_BREAKER_QUESTION : fallback}`;
-  }
+  // Engine contract point 7: structured per-turn telemetry, persisted (not
+  // inferred from scanning message text).
+  const turnLogEntry: TurnLogEntry = {
+    intent_keys: Array.from(new Set([currentIntent, ...(nextIntentHypothetical ? [nextIntentHypothetical] : [])])),
+    retry_used: retryUsed,
+    askhint_fallback_used: fallbackKind !== undefined,
+    input_tokens: usages.reduce((sum, u) => sum + u.inputTokens, 0),
+    output_tokens: usages.reduce((sum, u) => sum + u.outputTokens, 0),
+    ts: new Date().toISOString(),
+  };
+  extracted = { ...extracted, turn_log: [...(extractedBefore.turn_log ?? []), turnLogEntry] };
 
   const newMessages: ChatMessage[] = [...history, { role: "assistant", content: assistantText }];
 
-  // The authenticated user's real email always wins over whatever the model
-  // supplied (or fabricated) via record_identity — overwrite unconditionally,
-  // every turn `identity` exists, per the human-confirmed decision that a
-  // hallucinated or mistyped chat email must never reach storage.
-  if (extracted.identity) {
-    extracted.identity = { ...extracted.identity, email: userEmail };
-  }
+  const result = await persistAndReturn({
+    admin,
+    supabase,
+    userId,
+    extracted,
+    modules,
+    newMessages,
+    assistantText,
+    usages,
+  });
+  return { ...result, fallback_kind: fallbackKind };
+}
 
-  // One ledger row per real LLM call (constitutional) — the continue
-  // re-prompt, when it fired, is its own call and its own row.
-  for (const usage of usages) {
+interface PersistParams {
+  admin: SupabaseClient<Database>;
+  supabase: SupabaseClient<Database>;
+  userId: string;
+  extracted: ExtractedState;
+  modules: ModulesState;
+  newMessages: ChatMessage[];
+  assistantText: string;
+  usages: { inputTokens: number; outputTokens: number }[];
+}
+
+/**
+ * Shared tail for both the resume-skip fast path and the main engine-turn
+ * path: bill the ledger, decide done via `isInterviewDone` (the server,
+ * always — engine contract point 1), persist, and on completion build +
+ * upsert the profile doc and seed portals (fail-open).
+ */
+async function persistAndReturn(params: PersistParams): Promise<HandleTurnResult> {
+  const { admin, supabase, userId, extracted, modules, newMessages, assistantText } = params;
+
+  for (const usage of params.usages) {
     await recordOnboardingTurn(admin, {
       userId,
       model: ONBOARDING_MODEL,
@@ -296,6 +263,8 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     });
   }
 
+  const stage = deriveStage(extracted);
+  const done = isInterviewDone(extracted);
   // onboarding_sessions.extracted is a generic JSONB column (Record<string,
   // unknown> in Database); ExtractedState is the narrower shape this
   // module works with, so it's an intentional widen on write.
@@ -313,11 +282,9 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
       modules,
     });
     // ADM-3 Part 0: seed portals.yml (dream-company probe + tier pack)
-    // right on completion, so a friend's feed isn't empty until an admin
-    // manually runs reseedPortals.ts. Fail-open — a seeding error must
-    // never break the user's final onboarding turn; the row it reads is
-    // now fully committed (both the profile doc upsert and the session
-    // save above have landed), so it never acts on stale state.
+    // right on completion. Fail-open — a seeding error must never break
+    // the user's final onboarding turn; both writes above have already
+    // landed, so it never acts on stale state.
     try {
       await seedUserPortals(admin, userId);
     } catch (err) {
@@ -333,5 +300,5 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     });
   }
 
-  return { assistantText, stage, done, validation, fallback_kind: fallbackKind };
+  return { assistantText, stage, done, validation };
 }

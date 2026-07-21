@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ChatMessage } from "../anthropic/interview";
+import type { ExtractedState } from "../profile/buildDoc";
 
 const saveSessionMock = vi.fn(async (..._args: unknown[]) => {});
 const upsertProfileDocMock = vi.fn(async (_supabase: unknown, _userId: string, _doc: Record<string, string>) => ({
@@ -24,11 +25,29 @@ const { handleOnboardingTurn, RESUME_SKIP_MESSAGE } = await import("./handleTurn
 
 const fakeClient = {} as never;
 
+// currentIntent resolves to "calibration" from just this.
+const ANCHOR_ONLY: ExtractedState = { anchor: { current_title: "Staff Engineer", current_company: "Acme" } };
+
+// currentIntent resolves to "resume".
+const CALIBRATION_DONE: ExtractedState = {
+  ...ANCHOR_ONLY,
+  calibration: { skills: ["Go"], evidence: ["Shipped a thing"], range_statement: "r", background_summary: "b" },
+};
+
+// currentIntent resolves to "identity".
+const RESUME_DONE: ExtractedState = { ...CALIBRATION_DONE, resumeResolved: true };
+
+// currentIntent resolves to "targeting" — nothing else missing after it.
+const IDENTITY_DONE: ExtractedState = {
+  ...RESUME_DONE,
+  identity: { name: "Alex", email: "alex@example.com", location_and_compensation: { base: "Denver, CO" } },
+};
+
 function baseSession(overrides: Partial<Parameters<typeof handleOnboardingTurn>[0]["session"]> = {}) {
   return {
     stage: "resume" as const,
-    messages: [],
-    extracted: {},
+    messages: [] as ChatMessage[],
+    extracted: RESUME_DONE,
     status: "in_progress" as const,
     modules: {},
     ...overrides,
@@ -50,20 +69,18 @@ describe("handleOnboardingTurn", () => {
     });
   });
 
-  it("records exactly one budget_ledger row per LLM call (single-call turn)", async () => {
-    // The reply contains a question, so the v2 continue re-prompt does NOT
-    // fire — exactly one model call, exactly one ledger row.
+  it("records exactly one budget_ledger row per LLM call when the target resolves cleanly", async () => {
     const runTurn = vi.fn(async () => ({
-      assistantText: "Thanks — tell me about your background?",
-      toolCalls: [],
+      question: "Logistics, all in one go: where are you based?",
+      extractedUpdates: { identity: { name: "Alex", location_and_compensation: { base: "Denver, CO" } } },
       usage: { inputTokens: 100, outputTokens: 50 },
     }));
 
-    await handleOnboardingTurn({
+    const result = await handleOnboardingTurn({
       userId: "user-1",
       userEmail: "user-1@example.com",
-      userMessage: "here is my resume",
-      session: baseSession(),
+      userMessage: "Alex, based in Denver",
+      session: baseSession({ extracted: RESUME_DONE }),
       supabase: fakeClient,
       admin: fakeClient,
       runTurn,
@@ -75,62 +92,150 @@ describe("handleOnboardingTurn", () => {
       fakeClient,
       expect.objectContaining({ userId: "user-1", inputTokens: 100, outputTokens: 50 })
     );
+    expect(result.done).toBe(false);
+    expect(result.fallback_kind).toBeUndefined();
   });
 
-  it("v2 loop fix: a question-less turn triggers ONE continue re-prompt, and BOTH calls get ledger rows", async () => {
+  it("passes the server-computed currentIntent/nextIntent to runTurn (server picks the target, not the model)", async () => {
+    const runTurn = vi.fn(async () => ({
+      question: "Have a resume handy?",
+      extractedUpdates: { calibration: { skills: ["a"], evidence: ["b"], range_statement: "c", background_summary: "d" } },
+      usage: { inputTokens: 10, outputTokens: 10 },
+    }));
+
+    await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "here are my four answers",
+      session: baseSession({ extracted: ANCHOR_ONLY }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    expect(runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ currentIntent: "calibration", nextIntent: "resume", extracted: ANCHOR_ONLY })
+    );
+  });
+
+  it("engine contract point 4a: an empty question retries exactly once, then falls back to the deterministic askHint for the real next target — both calls ledgered", async () => {
+    // Extraction succeeds both times (identity resolves), but the model
+    // never phrases a question — this must fall to "retry_exhausted"
+    // (targeting, the real next target), not "no_progress" (identity
+    // itself resolved cleanly, so it's not the loop-breaker case).
     const runTurn = vi
       .fn()
       .mockResolvedValueOnce({
-        // Ack-only turn: no question mark -> the re-prompt must fire.
-        assistantText: "Got it — that gives real shape to direction.",
-        toolCalls: [],
-        usage: { inputTokens: 100, outputTokens: 40 },
+        question: "",
+        extractedUpdates: { identity: { name: "Alex", location_and_compensation: { base: "Denver, CO" } } },
+        usage: { inputTokens: 5, outputTokens: 0 },
       })
       .mockResolvedValueOnce({
-        // The model continues properly on the nudge.
-        assistantText: "Which of those directions would you pick first?",
-        toolCalls: [],
-        usage: { inputTokens: 120, outputTokens: 30 },
+        question: "",
+        extractedUpdates: { identity: { name: "Alex", location_and_compensation: { base: "Denver, CO" } } },
+        usage: { inputTokens: 6, outputTokens: 0 },
       });
 
     const result = await handleOnboardingTurn({
       userId: "user-1",
       userEmail: "user-1@example.com",
-      userMessage: "I'd want roles applying frontier AI across my interest areas.",
-      session: baseSession({ stage: "targeting" }),
+      userMessage: "ok",
+      session: baseSession({ extracted: RESUME_DONE }),
       supabase: fakeClient,
       admin: fakeClient,
       runTurn,
     });
 
     expect(runTurn).toHaveBeenCalledTimes(2);
-    // The synthetic continue nudge is never persisted to history.
-    const secondCallHistory = runTurn.mock.calls[1]![0] as ChatMessage[];
-    expect(secondCallHistory[secondCallHistory.length - 1]!.content).toContain("Continue");
-    const savedMessages = (saveSessionMock.mock.calls[0]![2] as { messages: ChatMessage[] }).messages;
-    expect(savedMessages.some((m) => m.content.includes("(Continue"))).toBe(false);
-    // Combined text = ack + the model's own follow-up question, no canned append.
-    expect(result.assistantText).toBe(
-      "Got it — that gives real shape to direction. Which of those directions would you pick first?"
-    );
-    // Constitutional: one ledger row per real LLM call — two calls, two rows.
+    expect(result.assistantText.trim()).not.toBe("");
+    expect(result.fallback_kind).toBe("retry_exhausted");
     expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(2);
-    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(
-      1,
-      fakeClient,
-      expect.objectContaining({ inputTokens: 100, outputTokens: 40 })
-    );
-    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(
-      2,
-      fakeClient,
-      expect.objectContaining({ inputTokens: 120, outputTokens: 30 })
-    );
+    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(1, fakeClient, expect.objectContaining({ inputTokens: 5, outputTokens: 0 }));
+    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(2, fakeClient, expect.objectContaining({ inputTokens: 6, outputTokens: 0 }));
+  });
+
+  it("recovers if the retry attempt returns real text (uses the retry's text, not the fallback)", async () => {
+    let call = 0;
+    const runTurn = vi.fn(async () => {
+      call += 1;
+      if (call === 1) return { question: "", extractedUpdates: {}, usage: { inputTokens: 5, outputTokens: 0 } };
+      return {
+        question: "What's your target comp?",
+        extractedUpdates: { identity: { name: "Alex", location_and_compensation: { base: "Denver, CO" } } },
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+    });
+
+    const result = await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "ok",
+      session: baseSession({ extracted: RESUME_DONE }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    expect(runTurn).toHaveBeenCalledTimes(2);
+    expect(result.assistantText).toBe("What's your target comp?");
+    expect(result.fallback_kind).toBeUndefined();
+  });
+
+  it("engine contract point 4b: no progress on the current target overrides the model's (premature) question with the deterministic askHint, without retrying", async () => {
+    const runTurn = vi.fn(async () => ({
+      // The model asked about something else entirely instead of making
+      // progress on identity — a non-empty but premature question.
+      question: "Which of those directions would you pick first?",
+      extractedUpdates: {},
+      usage: { inputTokens: 40, outputTokens: 10 },
+    }));
+
+    const result = await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "not sure yet",
+      session: baseSession({ extracted: RESUME_DONE }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    // No retry — the question wasn't blank, just premature; the loop-breaker
+    // fires on the post-merge recompute instead.
+    expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(result.fallback_kind).toBe("no_progress");
+    expect(result.assistantText).not.toBe("Which of those directions would you pick first?");
+    expect(result.assistantText).toMatch(/logistics|name/i);
+  });
+
+  it("engine contract point 5: anything_else opportunistically merges fields outside this turn's target", async () => {
+    const runTurn = vi.fn(async () => ({
+      question: "Have a resume handy?",
+      extractedUpdates: {
+        calibration: { skills: ["a"], evidence: ["b"], range_statement: "c", background_summary: "d" },
+        anything_else: { identity: { name: "Alex Quinn" } },
+      },
+      usage: { inputTokens: 10, outputTokens: 10 },
+    }));
+
+    await handleOnboardingTurn({
+      userId: "user-1",
+      userEmail: "user-1@example.com",
+      userMessage: "here are my four answers, by the way I'm Alex Quinn",
+      session: baseSession({ extracted: ANCHOR_ONLY }),
+      supabase: fakeClient,
+      admin: fakeClient,
+      runTurn,
+    });
+
+    const saved = saveSessionMock.mock.calls[0][2] as { extracted: { identity?: { name?: string } } };
+    expect(saved.extracted.identity?.name).toBe("Alex Quinn");
   });
 
   it("saves the session as in_progress and does not upsert a profile mid-interview", async () => {
     const runTurn = vi.fn(async () => ({
-      assistantText: "Got it — what's your target comp?",
-      toolCalls: [{ name: "record_identity", input: { name: "A", email: "a@example.com" } }],
+      question: "What's your target comp?",
+      extractedUpdates: { identity: { name: "A", location_and_compensation: { base: "X" } } },
       usage: { inputTokens: 10, outputTokens: 10 },
     }));
 
@@ -138,30 +243,23 @@ describe("handleOnboardingTurn", () => {
       userId: "user-1",
       userEmail: "user-1@example.com",
       userMessage: "Alex, alex@example.com",
-      session: baseSession({ stage: "targeting" }),
+      session: baseSession({ extracted: RESUME_DONE }),
       supabase: fakeClient,
       admin: fakeClient,
       runTurn,
     });
 
     expect(result.done).toBe(false);
-    // ONB-A: record_identity now fires during targeting (not a separate
-    // identity stage) and no longer advances the stage itself.
-    expect(result.stage).toBe("targeting");
     expect(upsertProfileDocMock).not.toHaveBeenCalled();
-    expect(saveSessionMock).toHaveBeenCalledWith(
-      fakeClient,
-      "user-1",
-      expect.objectContaining({ status: "in_progress", stage: "targeting" })
-    );
+    expect(saveSessionMock).toHaveBeenCalledWith(fakeClient, "user-1", expect.objectContaining({ status: "in_progress" }));
   });
 
-  it("overwrites a model-supplied (bogus) record_identity email with deps.userEmail, unconditionally", async () => {
-    const runTurn = vi.fn(async (_history: ChatMessage[]) => ({
-      assistantText: "Got it — what's your target comp?",
-      toolCalls: [
-        { name: "record_identity", input: { name: "Alex", email: "totally-made-up@nowhere.invalid" } },
-      ],
+  it("overwrites a model-supplied (bogus) identity email with deps.userEmail, unconditionally", async () => {
+    const runTurn = vi.fn(async () => ({
+      question: "What's your target comp?",
+      extractedUpdates: {
+        identity: { name: "Alex", email: "totally-made-up@nowhere.invalid", location_and_compensation: { base: "Denver" } },
+      },
       usage: { inputTokens: 10, outputTokens: 10 },
     }));
 
@@ -169,31 +267,23 @@ describe("handleOnboardingTurn", () => {
       userId: "user-1",
       userEmail: "real-auth-email@example.com",
       userMessage: "Alex, totally-made-up@nowhere.invalid",
-      session: baseSession({ stage: "targeting" }),
+      session: baseSession({ extracted: RESUME_DONE }),
       supabase: fakeClient,
       admin: fakeClient,
       runTurn,
     });
 
-    // The tool call the (mocked) model returned genuinely included a bogus
-    // email — assert on the history/tool-call itself so this test can't
-    // pass by accident (e.g. if applyToolCalls were changed to drop email).
-    const historyArg = runTurn.mock.calls[0][0];
-    expect(historyArg.at(-1)).toEqual({ role: "user", content: "Alex, totally-made-up@nowhere.invalid" });
-
-    // The persisted extracted.identity.email must be the auth email, never
-    // the model-supplied one, even though the model DID supply a value.
-    const savedArg = saveSessionMock.mock.calls[0][2] as {
-      extracted: { identity?: { email?: string } };
-    };
+    const savedArg = saveSessionMock.mock.calls[0][2] as { extracted: { identity?: { email?: string } } };
     expect(savedArg.extracted.identity?.email).toBe("real-auth-email@example.com");
     expect(savedArg.extracted.identity?.email).not.toBe("totally-made-up@nowhere.invalid");
   });
 
-  it("builds and upserts the profile doc when finish_interview fires, and marks the session complete", async () => {
+  it("builds and upserts the profile doc once the checklist fully resolves, and marks the session complete", async () => {
     const runTurn = vi.fn(async () => ({
-      assistantText: "All set!",
-      toolCalls: [{ name: "finish_interview", input: {} }],
+      question: "All set — head to your feed and hit \"Run my hunt\" to get your first results.",
+      extractedUpdates: {
+        targeting: { tiers: [{ key: "tier_1", label: "Backend engineering" }], thesis_summary: "Wants backend roles." },
+      },
       usage: { inputTokens: 20, outputTokens: 5 },
     }));
 
@@ -201,18 +291,7 @@ describe("handleOnboardingTurn", () => {
       userId: "user-1",
       userEmail: "user-1@example.com",
       userMessage: "yes that's everything",
-      session: baseSession({
-        stage: "targeting",
-        extracted: {
-          identity: { name: "Alex", email: "alex@example.com" },
-          targeting: {
-            tiers: [{ key: "tier_1", label: "Backend engineering" }],
-            hard_disqualifiers: [],
-            soft_concerns: [],
-            thesis_summary: "Wants backend roles.",
-          },
-        },
-      }),
+      session: baseSession({ extracted: IDENTITY_DONE }),
       supabase: fakeClient,
       admin: fakeClient,
       runTurn,
@@ -228,8 +307,10 @@ describe("handleOnboardingTurn", () => {
 
   it("ADM-3 Part 0: the completion turn seeds portals exactly once, after the profile doc upsert", async () => {
     const runTurn = vi.fn(async () => ({
-      assistantText: "All set!",
-      toolCalls: [{ name: "finish_interview", input: {} }],
+      question: "All set!",
+      extractedUpdates: {
+        targeting: { tiers: [{ key: "tier_1", label: "Backend engineering" }], thesis_summary: "Wants backend roles." },
+      },
       usage: { inputTokens: 20, outputTokens: 5 },
     }));
 
@@ -237,18 +318,7 @@ describe("handleOnboardingTurn", () => {
       userId: "user-1",
       userEmail: "user-1@example.com",
       userMessage: "yes that's everything",
-      session: baseSession({
-        stage: "targeting",
-        extracted: {
-          identity: { name: "Alex", email: "alex@example.com" },
-          targeting: {
-            tiers: [{ key: "tier_1", label: "Backend engineering" }],
-            hard_disqualifiers: [],
-            soft_concerns: [],
-            thesis_summary: "Wants backend roles.",
-          },
-        },
-      }),
+      session: baseSession({ extracted: IDENTITY_DONE }),
       supabase: fakeClient,
       admin: fakeClient,
       runTurn,
@@ -257,8 +327,6 @@ describe("handleOnboardingTurn", () => {
     expect(result.done).toBe(true);
     expect(seedUserPortalsMock).toHaveBeenCalledTimes(1);
     expect(seedUserPortalsMock).toHaveBeenCalledWith(fakeClient, "user-1");
-    // Ordering: seeding reads onboarding_sessions/profiles fresh, so it
-    // must fire after both writes have landed, not before either.
     const upsertOrder = upsertProfileDocMock.mock.invocationCallOrder[0];
     const saveOrder = saveSessionMock.mock.invocationCallOrder[0];
     const seedOrder = seedUserPortalsMock.mock.invocationCallOrder[0];
@@ -271,8 +339,10 @@ describe("handleOnboardingTurn", () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const runTurn = vi.fn(async () => ({
-      assistantText: "All set!",
-      toolCalls: [{ name: "finish_interview", input: {} }],
+      question: "All set!",
+      extractedUpdates: {
+        targeting: { tiers: [{ key: "tier_1", label: "Backend engineering" }], thesis_summary: "Wants backend roles." },
+      },
       usage: { inputTokens: 20, outputTokens: 5 },
     }));
 
@@ -280,18 +350,7 @@ describe("handleOnboardingTurn", () => {
       userId: "user-1",
       userEmail: "user-1@example.com",
       userMessage: "yes that's everything",
-      session: baseSession({
-        stage: "targeting",
-        extracted: {
-          identity: { name: "Alex", email: "alex@example.com" },
-          targeting: {
-            tiers: [{ key: "tier_1", label: "Backend engineering" }],
-            hard_disqualifiers: [],
-            soft_concerns: [],
-            thesis_summary: "Wants backend roles.",
-          },
-        },
-      }),
+      session: baseSession({ extracted: IDENTITY_DONE }),
       supabase: fakeClient,
       admin: fakeClient,
       runTurn,
@@ -299,223 +358,8 @@ describe("handleOnboardingTurn", () => {
 
     expect(result.done).toBe(true);
     expect(result.validation?.status).toBe("valid");
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      "onboarding seedUserPortals failed",
-      expect.objectContaining({ userId: "user-1" })
-    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith("onboarding seedUserPortals failed", expect.objectContaining({ userId: "user-1" }));
     consoleErrorSpy.mockRestore();
-  });
-
-  it("ONB-A: no longer prepends anything on an empty session.messages — calibration generation now owns the opener", async () => {
-    const runTurn = vi.fn(async (_history: ChatMessage[]) => ({
-      assistantText: "Got it — have a resume handy?",
-      toolCalls: [],
-      usage: { inputTokens: 30, outputTokens: 15 },
-    }));
-
-    await handleOnboardingTurn({
-      userId: "user-1",
-      userEmail: "user-1@example.com",
-      userMessage: "here are my four answers",
-      session: baseSession({ stage: "calibration", messages: [] }),
-      supabase: fakeClient,
-      admin: fakeClient,
-      runTurn,
-    });
-
-    expect(runTurn).toHaveBeenCalledTimes(1);
-    const historyArg = runTurn.mock.calls[0][0];
-    expect(historyArg).toEqual([{ role: "user", content: "here are my four answers" }]);
-    expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("FIX-1: retries once on an empty assistant response, then falls back to a deterministic stage-appropriate question if still empty", async () => {
-    const runTurn = vi
-      .fn()
-      .mockResolvedValueOnce({ assistantText: "", toolCalls: [], usage: { inputTokens: 5, outputTokens: 0 } })
-      .mockResolvedValueOnce({ assistantText: "", toolCalls: [], usage: { inputTokens: 6, outputTokens: 0 } });
-
-    const result = await handleOnboardingTurn({
-      userId: "user-1",
-      userEmail: "user-1@example.com",
-      userMessage: "ok",
-      session: baseSession({ stage: "targeting" }),
-      supabase: fakeClient,
-      admin: fakeClient,
-      runTurn,
-    });
-
-    // Retried exactly once (two total attempts), never more.
-    expect(runTurn).toHaveBeenCalledTimes(2);
-
-    // The user must see a non-empty, stage-appropriate question — never a
-    // blank bubble.
-    expect(result.assistantText.trim()).not.toBe("");
-    expect(result.assistantText).toContain("?");
-    expect(result.assistantText).toMatch(/logistics|salary floor/i);
-
-    // A blank turn must never be persisted to messages.
-    const savedMessages = (saveSessionMock.mock.calls[0][2] as { messages: ChatMessage[] }).messages;
-    expect(savedMessages.every((m) => m.content.trim() !== "")).toBe(true);
-    expect(savedMessages.at(-1)?.content).toBe(result.assistantText);
-
-    // INTSIM live-run fix: BOTH real calls get their own budget_ledger row —
-    // the empty first attempt's tokens were real spend and must not be
-    // dropped just because its text never reached the user. Matches the
-    // "one ledger row per real LLM call, constitutional" rule the v2
-    // continue-reprompt path already honors above.
-    expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(2);
-    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(
-      1,
-      fakeClient,
-      expect.objectContaining({ inputTokens: 5, outputTokens: 0 })
-    );
-    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(
-      2,
-      fakeClient,
-      expect.objectContaining({ inputTokens: 6, outputTokens: 0 })
-    );
-  });
-
-  it("FIX-1: does not retry when the first assistant response is non-empty", async () => {
-    const runTurn = vi.fn(async () => ({
-      assistantText: "Got it — what's your target comp?",
-      toolCalls: [],
-      usage: { inputTokens: 10, outputTokens: 10 },
-    }));
-
-    await handleOnboardingTurn({
-      userId: "user-1",
-      userEmail: "user-1@example.com",
-      userMessage: "40 hourly",
-      session: baseSession({ stage: "targeting" }),
-      supabase: fakeClient,
-      admin: fakeClient,
-      runTurn,
-    });
-
-    expect(runTurn).toHaveBeenCalledTimes(1);
-  });
-
-  it("Adversarial-review fix (F1/CRITICAL): does not retry when text is empty but a tool call landed — and bills exactly one ledger row", async () => {
-    const runTurn = vi.fn(async () => ({
-      assistantText: "",
-      toolCalls: [{ name: "record_targeting", input: { tiers: [{ key: "tier_1", label: "Tier 1" }], thesis_summary: "..." } }],
-      usage: { inputTokens: 20, outputTokens: 15 },
-    }));
-
-    const result = await handleOnboardingTurn({
-      userId: "user-1",
-      userEmail: "user-1@example.com",
-      userMessage: "ok",
-      session: baseSession({ stage: "targeting" }),
-      supabase: fakeClient,
-      admin: fakeClient,
-      runTurn,
-    });
-
-    // The old guard retried on empty text alone, discarding a first attempt
-    // whose entire output was a real record_* tool call — double-billing and
-    // losing recorded data. The retry must be gated on toolCalls.length === 0
-    // too, so a text-empty-but-tool-call-bearing turn is never retried.
-    expect(runTurn).toHaveBeenCalledTimes(1);
-    expect(recordOnboardingTurnMock).toHaveBeenCalledTimes(1);
-    expect(recordOnboardingTurnMock).toHaveBeenNthCalledWith(
-      1,
-      fakeClient,
-      expect.objectContaining({ inputTokens: 20, outputTokens: 15 })
-    );
-    // The tool call's data must have been applied, not discarded.
-    const saved = saveSessionMock.mock.calls[0][2] as { extracted: { targeting?: { thesis_summary?: string } } };
-    expect(saved.extracted.targeting?.thesis_summary).toBe("...");
-    expect(result.done).toBe(false);
-  });
-
-  it("FIX-1: recovers if the retry attempt returns real text (uses the retry's text, not the fallback)", async () => {
-    let call = 0;
-    const runTurn = vi.fn(async () => {
-      call += 1;
-      if (call === 1) return { assistantText: "", toolCalls: [], usage: { inputTokens: 5, outputTokens: 0 } };
-      return {
-        assistantText: "Got it — what's your target comp?",
-        toolCalls: [],
-        usage: { inputTokens: 10, outputTokens: 10 },
-      };
-    });
-
-    const result = await handleOnboardingTurn({
-      userId: "user-1",
-      userEmail: "user-1@example.com",
-      userMessage: "ok",
-      session: baseSession({ stage: "targeting" }),
-      supabase: fakeClient,
-      admin: fakeClient,
-      runTurn,
-    });
-
-    expect(runTurn).toHaveBeenCalledTimes(2);
-    expect(result.assistantText).toBe("Got it — what's your target comp?");
-  });
-
-  it("FIX-1: a non-empty stage-transition turn that only acknowledges (no question) gets the next question appended", async () => {
-    const runTurn = vi.fn(async () => ({
-      assistantText: "Good, moving on.",
-      toolCalls: [{ name: "record_resume", input: { cv_markdown: "# CV" } }],
-      usage: { inputTokens: 40, outputTokens: 10 },
-    }));
-
-    const result = await handleOnboardingTurn({
-      userId: "user-1",
-      userEmail: "user-1@example.com",
-      userMessage: "This is good.",
-      session: baseSession({ stage: "resume" }),
-      supabase: fakeClient,
-      admin: fakeClient,
-      runTurn,
-    });
-
-    // ONB-A: record_resume now advances resume -> targeting directly; the
-    // repaired turn must still contain the original acknowledgment AND end
-    // with a question.
-    expect(result.stage).toBe("targeting");
-    expect(result.assistantText).toContain("Good, moving on.");
-    expect(result.assistantText).toContain("?");
-    expect(result.assistantText).toMatch(/logistics|salary floor/i);
-
-    const savedMessages = (saveSessionMock.mock.calls[0][2] as { messages: ChatMessage[] }).messages;
-    expect(savedMessages.at(-1)?.content).toBe(result.assistantText);
-  });
-
-  it("FIX-1: does not append a fallback question once the interview is done (finish_interview turn)", async () => {
-    const runTurn = vi.fn(async () => ({
-      assistantText: "All set!",
-      toolCalls: [{ name: "finish_interview", input: {} }],
-      usage: { inputTokens: 20, outputTokens: 5 },
-    }));
-
-    const result = await handleOnboardingTurn({
-      userId: "user-1",
-      userEmail: "user-1@example.com",
-      userMessage: "yes that's everything",
-      session: baseSession({
-        stage: "targeting",
-        extracted: {
-          identity: { name: "Alex", email: "alex@example.com" },
-          targeting: {
-            tiers: [{ key: "tier_1", label: "Backend engineering" }],
-            hard_disqualifiers: [],
-            soft_concerns: [],
-            thesis_summary: "Wants backend roles.",
-          },
-        },
-      }),
-      supabase: fakeClient,
-      admin: fakeClient,
-      runTurn,
-    });
-
-    expect(result.done).toBe(true);
-    expect(result.assistantText).toBe("All set!");
   });
 
   it("short-circuits (no Anthropic call, no ledger row) once the session is already complete", async () => {
@@ -537,14 +381,14 @@ describe("handleOnboardingTurn", () => {
   });
 
   describe("ONB-A: resume-skip sentinel", () => {
-    it("skips with zero LLM calls and zero ledger rows, advancing resume -> targeting", async () => {
+    it("skips with zero LLM calls and zero ledger rows, advancing straight past the resume step", async () => {
       const runTurn = vi.fn();
 
       const result = await handleOnboardingTurn({
         userId: "user-1",
         userEmail: "user-1@example.com",
         userMessage: RESUME_SKIP_MESSAGE,
-        session: baseSession({ stage: "resume" }),
+        session: baseSession({ stage: "resume", extracted: CALIBRATION_DONE }),
         supabase: fakeClient,
         admin: fakeClient,
         runTurn,
@@ -564,7 +408,7 @@ describe("handleOnboardingTurn", () => {
         userId: "user-1",
         userEmail: "user-1@example.com",
         userMessage: RESUME_SKIP_MESSAGE,
-        session: baseSession({ stage: "resume" }),
+        session: baseSession({ stage: "resume", extracted: CALIBRATION_DONE }),
         supabase: fakeClient,
         admin: fakeClient,
         runTurn,
@@ -576,8 +420,8 @@ describe("handleOnboardingTurn", () => {
 
     it("does not trigger outside the resume stage — the same text at another stage goes to the model normally", async () => {
       const runTurn = vi.fn(async () => ({
-        assistantText: "Got it — what's your target comp?",
-        toolCalls: [],
+        question: "What's your target comp?",
+        extractedUpdates: { targeting: { tiers: [{ key: "tier_1", label: "x" }], thesis_summary: "t" } },
         usage: { inputTokens: 10, outputTokens: 10 },
       }));
 
@@ -585,90 +429,13 @@ describe("handleOnboardingTurn", () => {
         userId: "user-1",
         userEmail: "user-1@example.com",
         userMessage: RESUME_SKIP_MESSAGE,
-        session: baseSession({ stage: "targeting" }),
+        session: baseSession({ stage: "targeting", extracted: IDENTITY_DONE }),
         supabase: fakeClient,
         admin: fakeClient,
         runTurn,
       });
 
       expect(runTurn).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("ONB-A: the calibration stage's empty-reply fallback uses the first generated calibration prompt", async () => {
-    const runTurn = vi.fn(async () => ({
-      assistantText: "",
-      toolCalls: [],
-      usage: { inputTokens: 5, outputTokens: 0 },
-    }));
-
-    const result = await handleOnboardingTurn({
-      userId: "user-1",
-      userEmail: "user-1@example.com",
-      userMessage: "here are my answers",
-      session: baseSession({
-        stage: "calibration",
-        extracted: { calibration: { prompts: ["Tell me about a hard bug.", "b", "c", "d"] } },
-      }),
-      supabase: fakeClient,
-      admin: fakeClient,
-      runTurn,
-    });
-
-    expect(result.assistantText).toBe("Tell me about a hard bug.");
-  });
-
-  describe("V3A-B2: module-completion glue", () => {
-    it("marks range complete with receipt '4 answers' when record_calibration fires", async () => {
-      const runTurn = vi.fn(async () => ({
-        assistantText: "Got it — have a resume handy?",
-        toolCalls: [
-          {
-            name: "record_calibration",
-            input: { skills: ["a"], evidence: ["b"], range_statement: "c", background_summary: "d" },
-          },
-        ],
-        usage: { inputTokens: 10, outputTokens: 10 },
-      }));
-
-      await handleOnboardingTurn({
-        userId: "user-1",
-        userEmail: "user-1@example.com",
-        userMessage: "here are my four answers",
-        session: baseSession({ stage: "calibration" }),
-        supabase: fakeClient,
-        admin: fakeClient,
-        runTurn,
-      });
-
-      expect(saveSessionMock).toHaveBeenCalledWith(
-        fakeClient,
-        "user-1",
-        expect.objectContaining({
-          modules: expect.objectContaining({ range: expect.objectContaining({ receipt: "4 answers" }) }),
-        })
-      );
-    });
-
-    it("marks evidence complete with receipt 'resume added' when record_resume fires", async () => {
-      const runTurn = vi.fn(async () => ({
-        assistantText: "Got it — logistics next.",
-        toolCalls: [{ name: "record_resume", input: { cv_markdown: "# CV" } }],
-        usage: { inputTokens: 10, outputTokens: 10 },
-      }));
-
-      await handleOnboardingTurn({
-        userId: "user-1",
-        userEmail: "user-1@example.com",
-        userMessage: "here is my resume",
-        session: baseSession({ stage: "resume" }),
-        supabase: fakeClient,
-        admin: fakeClient,
-        runTurn,
-      });
-
-      const savedArg = saveSessionMock.mock.calls[0][2] as { modules: Record<string, { receipt: string }> };
-      expect(savedArg.modules.evidence?.receipt).toBe("resume added");
     });
 
     it("resume-skip path marks evidence complete with receipt 'built from your answers'", async () => {
@@ -678,7 +445,7 @@ describe("handleOnboardingTurn", () => {
         userId: "user-1",
         userEmail: "user-1@example.com",
         userMessage: RESUME_SKIP_MESSAGE,
-        session: baseSession({ stage: "resume" }),
+        session: baseSession({ stage: "resume", extracted: CALIBRATION_DONE }),
         supabase: fakeClient,
         admin: fakeClient,
         runTurn,
@@ -687,153 +454,21 @@ describe("handleOnboardingTurn", () => {
       const savedArg = saveSessionMock.mock.calls[0][2] as { modules: Record<string, { receipt: string }> };
       expect(savedArg.modules.evidence?.receipt).toBe("built from your answers");
     });
-
   });
 
-  describe("INTSIM task 4: fallback_kind telemetry", () => {
-    it("fallback_kind is undefined on a normal turn (question present, no fallback fired)", async () => {
+  describe("module-completion glue", () => {
+    it("marks range complete with receipt '4 answers' when calibration resolves via the engine turn", async () => {
       const runTurn = vi.fn(async () => ({
-        assistantText: "Thanks — tell me about your background?",
-        toolCalls: [],
-        usage: { inputTokens: 100, outputTokens: 50 },
-      }));
-
-      const result = await handleOnboardingTurn({
-        userId: "user-1",
-        userEmail: "user-1@example.com",
-        userMessage: "here is my resume",
-        session: baseSession(),
-        supabase: fakeClient,
-        admin: fakeClient,
-        runTurn,
-      });
-
-      expect(result.fallback_kind).toBeUndefined();
-    });
-
-    it("sets fallback_kind to 'reprompt' when the v2 continue re-prompt fires, and warns a structured line", async () => {
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const runTurn = vi
-        .fn()
-        .mockResolvedValueOnce({
-          assistantText: "Got it — that gives real shape to direction.",
-          toolCalls: [],
-          usage: { inputTokens: 100, outputTokens: 40 },
-        })
-        .mockResolvedValueOnce({
-          assistantText: "Which of those directions would you pick first?",
-          toolCalls: [],
-          usage: { inputTokens: 120, outputTokens: 30 },
-        });
-
-      const result = await handleOnboardingTurn({
-        userId: "user-1",
-        userEmail: "user-1@example.com",
-        userMessage: "I'd want roles applying frontier AI across my interest areas.",
-        session: baseSession({ stage: "targeting" }),
-        supabase: fakeClient,
-        admin: fakeClient,
-        runTurn,
-      });
-
-      expect(result.fallback_kind).toBe("reprompt");
-      expect(warnSpy).toHaveBeenCalledWith(
-        "onboarding_fallback",
-        expect.objectContaining({ userId: "user-1", stage: "targeting", kind: "reprompt" })
-      );
-      warnSpy.mockRestore();
-    });
-
-    it("sets fallback_kind to 'fallback' when the empty-response retry survives (still empty)", async () => {
-      const runTurn = vi.fn(async () => ({
-        assistantText: "",
-        toolCalls: [],
-        usage: { inputTokens: 5, outputTokens: 0 },
-      }));
-
-      const result = await handleOnboardingTurn({
-        userId: "user-1",
-        userEmail: "user-1@example.com",
-        userMessage: "ok",
-        session: baseSession({ stage: "targeting" }),
-        supabase: fakeClient,
-        admin: fakeClient,
-        runTurn,
-      });
-
-      expect(result.fallback_kind).toBe("fallback");
-    });
-
-    it("sets fallback_kind to 'fallback' on the first last-resort append (non-empty ack-only turn)", async () => {
-      const runTurn = vi.fn(async () => ({
-        assistantText: "Good, moving on.",
-        toolCalls: [{ name: "record_resume", input: { cv_markdown: "# CV" } }],
-        usage: { inputTokens: 40, outputTokens: 10 },
-      }));
-
-      const result = await handleOnboardingTurn({
-        userId: "user-1",
-        userEmail: "user-1@example.com",
-        userMessage: "This is good.",
-        session: baseSession({ stage: "resume" }),
-        supabase: fakeClient,
-        admin: fakeClient,
-        runTurn,
-      });
-
-      expect(result.fallback_kind).toBe("fallback");
-    });
-
-    it("sets fallback_kind to 'loop_breaker' when the same canned fallback would repeat consecutively", async () => {
-      // The prior assistant turn already ends with the canned targeting
-      // fallback text (session-prompt 45's second live loop) — a new
-      // ack-only turn must get the loop-breaker question, not the same
-      // canned text again.
-      const priorFallback =
-        "Logistics, all in one go: where are you based, remote-only or is some onsite fine (and where), " +
-        "and what's the salary floor below which you won't even look?";
-      const runTurn = vi.fn(async () => ({
-        assistantText: "Noted, thanks.",
-        toolCalls: [],
-        usage: { inputTokens: 20, outputTokens: 10 },
-      }));
-
-      const result = await handleOnboardingTurn({
-        userId: "user-1",
-        userEmail: "user-1@example.com",
-        userMessage: "here's more context",
-        session: baseSession({
-          stage: "targeting",
-          messages: [
-            { role: "user", content: "hi" },
-            { role: "assistant", content: priorFallback },
-          ],
-        }),
-        supabase: fakeClient,
-        admin: fakeClient,
-        runTurn,
-      });
-
-      expect(result.fallback_kind).toBe("loop_breaker");
-      expect(result.assistantText).toContain("What's the one thing I haven't asked about that matters most");
-    });
-  });
-
-  describe("V3A-B2: module-completion glue", () => {
-    it("preserves session.modules unchanged in saveSession when a turn fires neither record_calibration nor record_resume", async () => {
-      const runTurn = vi.fn(async () => ({
-        assistantText: "Got it — what's your target comp?",
-        toolCalls: [{ name: "record_identity", input: { name: "Alex", email: "alex@example.com" } }],
+        question: "Have a resume handy?",
+        extractedUpdates: { calibration: { skills: ["a"], evidence: ["b"], range_statement: "c", background_summary: "d" } },
         usage: { inputTokens: 10, outputTokens: 10 },
       }));
-
-      const existingModules = { anchor: { completed_at: "2026-01-01T00:00:00.000Z", receipt: "SWE · Acme" } };
 
       await handleOnboardingTurn({
         userId: "user-1",
         userEmail: "user-1@example.com",
-        userMessage: "Alex, alex@example.com",
-        session: baseSession({ stage: "targeting", modules: existingModules }),
+        userMessage: "here are my four answers",
+        session: baseSession({ extracted: ANCHOR_ONLY }),
         supabase: fakeClient,
         admin: fakeClient,
         runTurn,
@@ -842,8 +477,101 @@ describe("handleOnboardingTurn", () => {
       expect(saveSessionMock).toHaveBeenCalledWith(
         fakeClient,
         "user-1",
-        expect.objectContaining({ modules: existingModules })
+        expect.objectContaining({ modules: expect.objectContaining({ range: expect.objectContaining({ receipt: "4 answers" }) }) })
       );
+    });
+
+    it("marks evidence complete with receipt 'resume added' when resume resolves via the engine turn", async () => {
+      const runTurn = vi.fn(async () => ({
+        question: "Logistics next.",
+        extractedUpdates: { resume: { cv_markdown: "# CV" } },
+        usage: { inputTokens: 10, outputTokens: 10 },
+      }));
+
+      await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "here is my resume",
+        session: baseSession({ extracted: CALIBRATION_DONE }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      const savedArg = saveSessionMock.mock.calls[0][2] as { modules: Record<string, { receipt: string }> };
+      expect(savedArg.modules.evidence?.receipt).toBe("resume added");
+    });
+
+    it("preserves session.modules unchanged when neither calibration nor resume resolves this turn", async () => {
+      const runTurn = vi.fn(async () => ({
+        question: "What's your target comp?",
+        extractedUpdates: { identity: { name: "Alex", location_and_compensation: { base: "Denver" } } },
+        usage: { inputTokens: 10, outputTokens: 10 },
+      }));
+
+      const existingModules = { anchor: { completed_at: "2026-01-01T00:00:00.000Z", receipt: "SWE · Acme" } };
+
+      await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "Alex, Denver",
+        session: baseSession({ extracted: RESUME_DONE, modules: existingModules }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(saveSessionMock).toHaveBeenCalledWith(fakeClient, "user-1", expect.objectContaining({ modules: existingModules }));
+    });
+  });
+
+  describe("engine contract point 7: turn_log telemetry", () => {
+    it("appends one turn_log entry with intent_keys/retry_used/askhint_fallback_used/token totals", async () => {
+      const runTurn = vi.fn(async () => ({
+        question: "What's your target comp?",
+        extractedUpdates: { identity: { name: "Alex", location_and_compensation: { base: "Denver" } } },
+        usage: { inputTokens: 100, outputTokens: 50 },
+      }));
+
+      await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "Alex, Denver",
+        session: baseSession({ extracted: RESUME_DONE }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      const saved = saveSessionMock.mock.calls[0][2] as { extracted: { turn_log?: unknown[] } };
+      expect(saved.extracted.turn_log).toHaveLength(1);
+      expect(saved.extracted.turn_log?.[0]).toMatchObject({
+        intent_keys: expect.arrayContaining(["identity"]),
+        retry_used: false,
+        askhint_fallback_used: false,
+        input_tokens: 100,
+        output_tokens: 50,
+      });
+    });
+
+    it("sums token totals across both calls when a retry fires", async () => {
+      const runTurn = vi
+        .fn()
+        .mockResolvedValueOnce({ question: "", extractedUpdates: {}, usage: { inputTokens: 5, outputTokens: 0 } })
+        .mockResolvedValueOnce({ question: "", extractedUpdates: {}, usage: { inputTokens: 6, outputTokens: 1 } });
+
+      await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "ok",
+        session: baseSession({ extracted: IDENTITY_DONE }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      const saved = saveSessionMock.mock.calls[0][2] as { extracted: { turn_log?: Record<string, unknown>[] } };
+      expect(saved.extracted.turn_log?.[0]).toMatchObject({ retry_used: true, input_tokens: 11, output_tokens: 1 });
     });
   });
 });

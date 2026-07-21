@@ -78,12 +78,34 @@ export interface TargetingStageData {
   thesis_summary: string;
 }
 
+// INT2: per-turn telemetry the checklist engine appends every turn (session-
+// prompts/55_int2_engine.md, engine contract point 7). Read by nothing in
+// this file — buildProfileDoc never emits it — it exists purely so the
+// admin surface can eventually read structured telemetry instead of
+// text-scanning stored messages (out of this session's scope to rewire).
+export interface TurnLogEntry {
+  intent_keys: string[];
+  retry_used: boolean;
+  askhint_fallback_used: boolean;
+  input_tokens: number;
+  output_tokens: number;
+  ts: string;
+}
+
 export interface ExtractedState {
   anchor?: AnchorStageData;
   calibration?: CalibrationStageData;
   resume?: ResumeStageData;
   identity?: IdentityStageData;
   targeting?: TargetingStageData;
+  // INT2: set true once the resume step is resolved — either real content
+  // landed (extracted.resume is set) or the user explicitly skipped it via
+  // chat or the Skip button. Needed because `extracted.resume` itself stays
+  // undefined on a skip (cv.md synthesis at buildDoc time depends on that),
+  // so the checklist needs a distinct presence marker to know the step is
+  // done and never re-target it.
+  resumeResolved?: boolean;
+  turn_log?: TurnLogEntry[];
 }
 
 // v1 deliberately never asks for application_defaults (the aggregator

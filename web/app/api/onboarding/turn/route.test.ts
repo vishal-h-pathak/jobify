@@ -17,8 +17,8 @@ vi.mock("@/lib/supabase/admin", () => ({ createSupabaseAdminClient: createSupaba
 const getOrCreateSessionMock = vi.fn();
 vi.mock("@/lib/db/onboardingSession", () => ({ getOrCreateSession: getOrCreateSessionMock }));
 
-const runInterviewTurnMock = vi.fn();
-vi.mock("@/lib/anthropic/interview", () => ({ runInterviewTurn: runInterviewTurnMock }));
+const runEngineTurnMock = vi.fn();
+vi.mock("@/lib/anthropic/interview", () => ({ runEngineTurn: runEngineTurnMock }));
 
 const handleOnboardingTurnMock = vi.fn();
 vi.mock("@/lib/onboarding/handleTurn", () => ({ handleOnboardingTurn: handleOnboardingTurnMock }));

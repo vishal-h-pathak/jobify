@@ -91,27 +91,27 @@ describe("checkNoDoubleFallbackInvariant", () => {
 
   it("passes when fallback kinds alternate", () => {
     const records: TurnRecord[] = [
-      record({ turnIndex: 1, fallbackKind: "reprompt" }),
-      record({ turnIndex: 2, fallbackKind: "fallback" }),
+      record({ turnIndex: 1, fallbackKind: "no_progress" }),
+      record({ turnIndex: 2, fallbackKind: "retry_exhausted" }),
     ];
     expect(checkNoDoubleFallbackInvariant(records).passed).toBe(true);
   });
 
   it("FAILS when the same fallback kind fires on two consecutive turns", () => {
     const records: TurnRecord[] = [
-      record({ turnIndex: 1, fallbackKind: "fallback" }),
-      record({ turnIndex: 2, fallbackKind: "fallback" }),
+      record({ turnIndex: 1, fallbackKind: "retry_exhausted" }),
+      record({ turnIndex: 2, fallbackKind: "retry_exhausted" }),
     ];
     const result = checkNoDoubleFallbackInvariant(records);
     expect(result.passed).toBe(false);
-    expect(result.failures[0]).toContain("fallback");
+    expect(result.failures[0]).toContain("retry_exhausted");
   });
 
   it("passes when the same fallback kind repeats but with a normal turn in between", () => {
     const records: TurnRecord[] = [
-      record({ turnIndex: 1, fallbackKind: "fallback" }),
+      record({ turnIndex: 1, fallbackKind: "retry_exhausted" }),
       record({ turnIndex: 2 }),
-      record({ turnIndex: 3, fallbackKind: "fallback" }),
+      record({ turnIndex: 3, fallbackKind: "retry_exhausted" }),
     ];
     expect(checkNoDoubleFallbackInvariant(records).passed).toBe(true);
   });
