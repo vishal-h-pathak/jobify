@@ -38,6 +38,37 @@ export interface CatalogBoardRef extends PortalsCompanySeed {
 
 export type PortalsCompaniesByAts = Record<SlugProbeAts, PortalsCompanySeed[]>;
 
+interface WorkdayCompany {
+  tenant: string;
+  site: string;
+  dc: string;
+  name: string;
+}
+
+/**
+ * HUNT2 P3 S6: Workday tenants carry richer metadata (tenant/site/dc)
+ * than the `{slug, name}` shape every other ATS uses — `board_catalog`
+ * has no dedicated tenant/site/dc columns, so a Workday row's `slug`
+ * encodes `tenant/dc/site` (matching `jobify.hunt.sources.workday`'s own
+ * URL path order; see `jobify/data/board_catalog_seed.yml`'s Workday
+ * section for the convention). These two functions are the ONLY place
+ * that encoding is decoded/re-encoded — everywhere else in this file
+ * (`mergeCompaniesBySlug`, the `byAts` accumulation below) treats a
+ * Workday board as just another `{slug, name}` pair, uniform with
+ * Greenhouse/Lever/Ashby, so it composes with the existing merge/dedup
+ * logic without a parallel code path.
+ */
+function encodeWorkdaySlug(company: WorkdayCompany): string {
+  return `${company.tenant}/${company.dc}/${company.site}`;
+}
+
+function decodeWorkdaySlug(slug: string): { tenant: string; dc: string; site: string } | null {
+  const parts = slug.split("/");
+  if (parts.length !== 3 || parts.some((p) => !p)) return null;
+  const [tenant, dc, site] = parts;
+  return { tenant, dc, site };
+}
+
 function dedupeNonEmpty(values: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -81,11 +112,22 @@ export function buildPortalsDoc(
   anchorTitle?: string,
   companies?: PortalsCompaniesByAts
 ): Record<string, unknown> {
+  // Decode each `{slug, name}` seed back into workday.yml's real
+  // `{tenant, site, dc, name}` shape (onboarding/schema/portals.schema.json);
+  // a malformed slug (shouldn't happen — catalog-controlled data) is
+  // dropped rather than written out half-decoded.
+  const workdayCompanies = (companies?.workday ?? [])
+    .map((c) => {
+      const decoded = decodeWorkdaySlug(c.slug);
+      return decoded ? { ...decoded, name: c.name } : null;
+    })
+    .filter((c): c is WorkdayCompany => c !== null);
+
   return {
     greenhouse: { companies: companies?.greenhouse ?? [] },
     lever: { companies: companies?.lever ?? [] },
     ashby: { companies: companies?.ashby ?? [] },
-    workday: { companies: [] },
+    workday: { companies: workdayCompanies },
     title_filter: buildTitleFilter(targeting, anchorTitle),
   };
 }
@@ -109,6 +151,8 @@ function readExistingCompanies(
   doc: Record<string, unknown> | null | undefined,
   ats: SlugProbeAts
 ): PortalsCompanySeed[] {
+  if (ats === "workday") return readExistingWorkdayCompanies(doc);
+
   const section = doc?.[ats];
   if (!section || typeof section !== "object") return [];
   const companies = (section as Record<string, unknown>).companies;
@@ -118,6 +162,31 @@ function readExistingCompanies(
     const rec = c as Record<string, unknown>;
     return typeof rec.slug === "string" && typeof rec.name === "string";
   });
+}
+
+/**
+ * A user's existing `portals.yml::workday.companies` rows are
+ * `{tenant, site, dc, name}` (schema-required shape), not `{slug,
+ * name}` — re-encoded here into the uniform `{slug, name}` shape (see
+ * `encodeWorkdaySlug`) so `mergeCompaniesBySlug` can dedup a hand-edited
+ * Workday tenant against a tier-pack-proposed one by the same identity,
+ * same as every other ATS.
+ */
+function readExistingWorkdayCompanies(doc: Record<string, unknown> | null | undefined): PortalsCompanySeed[] {
+  const section = doc?.workday;
+  if (!section || typeof section !== "object") return [];
+  const companies = (section as Record<string, unknown>).companies;
+  if (!Array.isArray(companies)) return [];
+  return companies
+    .filter((c): c is Record<string, unknown> => Boolean(c) && typeof c === "object")
+    .filter((c) => typeof c.tenant === "string" && typeof c.site === "string" && typeof c.name === "string")
+    .map((c) => ({
+      slug: encodeWorkdaySlug({
+        tenant: c.tenant as string, site: c.site as string,
+        dc: String(c.dc ?? "wd1"), name: c.name as string,
+      }),
+      name: c.name as string,
+    }));
 }
 
 const DEFAULT_SEED_CAP = 40;
@@ -174,7 +243,11 @@ export async function seedPortalsCompanies(
   const remainingCap = Math.max(0, seedCap - dreamHits.length);
   const packBoards = (params.tierPackBoards ?? []).slice(0, remainingCap);
 
-  const byAts: PortalsCompaniesByAts = { greenhouse: [], lever: [], ashby: [] };
+  // `workday` included here (HUNT2 P3 S6 flag: it used to be dropped
+  // entirely) — dream-company hits never carry `ats: "workday"` (no
+  // company-name probe exists for it), but `packBoards` now can, once
+  // `computeTierPack`'s caller stops excluding catalog `workday` rows.
+  const byAts: PortalsCompaniesByAts = { greenhouse: [], lever: [], ashby: [], workday: [] };
   for (const board of [...dreamHits, ...packBoards]) {
     byAts[board.ats].push({ slug: board.slug, name: board.name });
   }
@@ -183,6 +256,7 @@ export async function seedPortalsCompanies(
     greenhouse: mergeCompaniesBySlug(readExistingCompanies(params.existingDoc, "greenhouse"), byAts.greenhouse),
     lever: mergeCompaniesBySlug(readExistingCompanies(params.existingDoc, "lever"), byAts.lever),
     ashby: mergeCompaniesBySlug(readExistingCompanies(params.existingDoc, "ashby"), byAts.ashby),
+    workday: mergeCompaniesBySlug(readExistingCompanies(params.existingDoc, "workday"), byAts.workday),
   };
 
   const doc = buildPortalsDoc(params.targeting, params.anchorTitle, mergedByAts);

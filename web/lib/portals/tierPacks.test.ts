@@ -38,6 +38,15 @@ describe("computeTierPack", () => {
     expect(pack.map((b) => b.slug)).toEqual(["infraco", "platformly"]);
   });
 
+  it("includes a workday-ats catalog row (HUNT2 P3 S6: no longer excluded)", () => {
+    const catalogWithWorkday: CatalogBoardInput[] = [
+      ...FIXTURE_CATALOG,
+      { ats: "workday", slug: "megacorp/wd1/External", company_name: "MegaCorp", tags: ["infra", "enterprise"] },
+    ];
+    const pack = computeTierPack({ tiers: [{ label: "Senior Platform Engineer" }] }, catalogWithWorkday);
+    expect(pack).toContainEqual({ ats: "workday", slug: "megacorp/wd1/External", name: "MegaCorp" });
+  });
+
   it("intersects with remote-first when remote is required, even if it drops otherwise-relevant boards", () => {
     const pack = computeTierPack(
       { tiers: [{ label: "Senior Platform / SRE Engineer" }], remoteRequired: true },

@@ -119,6 +119,34 @@ describe("approveCandidate", () => {
     expect(candidateUpdateCalls).toHaveLength(1);
     expect(candidateUpdateCalls[0]).toMatchObject({ status: "approved" });
   });
+
+  it("derives tags from probe_result.top_title_terms via the shared keyword vocabulary", async () => {
+    const { admin, catalogUpsertCalls } = fakeAdmin({
+      candidateRow: {
+        id: "c1", status: "pending", proposed_ats: "greenhouse", proposed_slug: "acme-corp",
+        company_name: "Acme Corp", probe_result: { top_title_terms: ["platform", "sre"] },
+      },
+    });
+
+    await approveCandidate(admin as never, "c1");
+
+    const catalogPayload = catalogUpsertCalls[0] as Record<string, unknown>;
+    expect(catalogPayload.tags).toEqual(["infra", "devtools"]);
+  });
+
+  it("falls back to an empty tag set when top_title_terms is absent", async () => {
+    const { admin, catalogUpsertCalls } = fakeAdmin({
+      candidateRow: {
+        id: "c1", status: "pending", proposed_ats: "greenhouse", proposed_slug: "acme-corp",
+        company_name: "Acme Corp", probe_result: { found: true },
+      },
+    });
+
+    await approveCandidate(admin as never, "c1");
+
+    const catalogPayload = catalogUpsertCalls[0] as Record<string, unknown>;
+    expect(catalogPayload.tags).toEqual([]);
+  });
 });
 
 describe("rejectCandidate", () => {

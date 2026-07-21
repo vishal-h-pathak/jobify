@@ -86,19 +86,31 @@ def test_hn_extract_candidates_dedups_by_ats_slug(monkeypatch):
 
 
 class _FakeDbAggregator:
-    def __init__(self, matches, postings, catalog_rows):
+    def __init__(self, matches, postings, catalog_rows, cursor=None):
         self._matches = matches
         self._postings = {p["id"]: p for p in postings}
         self._catalog_rows = catalog_rows
+        self._cursor = cursor
+        self.set_cursor_calls: list[str] = []
 
-    def list_non_title_rejected_matches(self):
-        return [m for m in self._matches if m.get("status") != "rejected_title"]
+    def list_non_title_rejected_matches(self, since=None):
+        rows = [m for m in self._matches if m.get("status") != "rejected_title"]
+        if since:
+            rows = [m for m in rows if (m.get("created_at") or "") > since]
+        return rows
 
     def get_postings_by_ids(self, ids):
         return [self._postings[i] for i in ids if i in self._postings]
 
     def list_board_catalog_rows(self):
         return self._catalog_rows
+
+    def get_feeder_cursor(self, feeder):
+        return self._cursor
+
+    def set_feeder_cursor(self, feeder, cursor_at):
+        self._cursor = cursor_at
+        self.set_cursor_calls.append(cursor_at)
 
 
 def test_aggregator_routes_unknown_company_from_surviving_match(monkeypatch):
@@ -154,6 +166,63 @@ def test_aggregator_proposes_slug_when_application_url_is_direct_ats_link(monkey
 def test_aggregator_returns_empty_when_no_surviving_matches(monkeypatch):
     monkeypatch.setattr(aggregator, "db", _FakeDbAggregator([], [], []))
     assert aggregator.route_candidates() == []
+
+
+# ── P3 S6: feeder_cursors incremental scan ────────────────────────────────
+
+
+def test_aggregator_first_run_has_no_cursor_and_reads_everything(monkeypatch):
+    """A feeder that has never run before (`get_feeder_cursor` returns
+    `None`) reads the full table, same as pre-cursor behavior."""
+    matches = [{"posting_id": "p1", "status": "surfaced", "created_at": "2026-01-01T00:00:00Z"}]
+    postings = [{"id": "p1", "source": "remoteok", "company": "Unknown Co", "application_url": ""}]
+    fake_db = _FakeDbAggregator(matches, postings, [], cursor=None)
+    monkeypatch.setattr(aggregator, "db", fake_db)
+
+    result = aggregator.route_candidates()
+
+    assert result == [{"company_name": "Unknown Co", "evidence_kind": "aggregator_match", "evidence_url": ""}]
+    assert fake_db.set_cursor_calls == ["2026-01-01T00:00:00Z"]
+
+
+def test_aggregator_second_run_only_reads_matches_since_cursor(monkeypatch):
+    """A repeat scan reads only matches created after the last cycle's
+    cursor — the already-processed row from cycle 1 never reaches
+    `route_candidates()` again."""
+    matches = [{"posting_id": "p2", "status": "surfaced", "created_at": "2026-01-02T00:00:00Z"}]
+    postings = [{"id": "p2", "source": "remoteok", "company": "Second Co", "application_url": ""}]
+    fake_db = _FakeDbAggregator(matches, postings, [], cursor="2026-01-01T00:00:00Z")
+    monkeypatch.setattr(aggregator, "db", fake_db)
+
+    result = aggregator.route_candidates()
+
+    assert result == [{"company_name": "Second Co", "evidence_kind": "aggregator_match", "evidence_url": ""}]
+    assert fake_db.set_cursor_calls == ["2026-01-02T00:00:00Z"]
+
+
+def test_aggregator_advances_cursor_to_max_created_at_seen(monkeypatch):
+    matches = [
+        {"posting_id": "p1", "status": "surfaced", "created_at": "2026-01-01T00:00:00Z"},
+        {"posting_id": "p2", "status": "surfaced", "created_at": "2026-01-03T00:00:00Z"},
+    ]
+    postings = [
+        {"id": "p1", "source": "remoteok", "company": "Alpha Co", "application_url": ""},
+        {"id": "p2", "source": "remoteok", "company": "Beta Co", "application_url": ""},
+    ]
+    fake_db = _FakeDbAggregator(matches, postings, [], cursor=None)
+    monkeypatch.setattr(aggregator, "db", fake_db)
+
+    aggregator.route_candidates()
+
+    assert fake_db.set_cursor_calls == ["2026-01-03T00:00:00Z"]
+
+
+def test_aggregator_cursor_not_advanced_when_nothing_new(monkeypatch):
+    fake_db = _FakeDbAggregator([], [], [], cursor="2026-01-01T00:00:00Z")
+    monkeypatch.setattr(aggregator, "db", fake_db)
+
+    assert aggregator.route_candidates() == []
+    assert fake_db.set_cursor_calls == []
 
 
 # ── serpapi_dork.dork_candidates ──────────────────────────────────────────

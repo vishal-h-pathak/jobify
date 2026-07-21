@@ -7,6 +7,8 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { getPoolHealth } from "@/lib/admin/poolHealth";
 import { getMostRecentScoringFunnel, listRecentHuntCycles } from "@/lib/admin/systemCycles";
 import { getCostBreakdownMtd, getEngagementSnapshot, getPoolFreshness } from "@/lib/admin/systemMetrics";
+import { getSourceFunnel } from "@/lib/admin/sourceHealth";
+import { DormantBoardButton } from "../DormantBoardButton";
 
 // Same reasoning as ../page.tsx: this page's content will depend on
 // data that changes as the worker runs (Task 5's performance panels) —
@@ -29,13 +31,14 @@ export default async function AdminSystemPage() {
 
   // Only constructed after requireAdmin() confirms the caller is an admin.
   const admin = createSupabaseAdminClient();
-  const [cycles, funnel, poolHealth, costBreakdown, engagement, poolFreshness] = await Promise.all([
+  const [cycles, funnel, poolHealth, costBreakdown, engagement, poolFreshness, sourceFunnel] = await Promise.all([
     listRecentHuntCycles(admin),
     getMostRecentScoringFunnel(admin),
     getPoolHealth(admin),
     getCostBreakdownMtd(admin),
     getEngagementSnapshot(admin),
     getPoolFreshness(admin),
+    getSourceFunnel(admin),
   ]);
 
   const capPct = poolHealth.globalCapUsd > 0 ? Math.min(100, (poolHealth.poolSpendUsdMtd / poolHealth.globalCapUsd) * 100) : 0;
@@ -354,6 +357,67 @@ export default async function AdminSystemPage() {
               Oldest seen: {poolFreshness.oldestLastSeenAt ? new Date(poolFreshness.oldestLastSeenAt).toLocaleString() : "—"}
             </p>
           </>
+        )}
+      </Card>
+
+      <Card className="flex flex-col gap-4">
+        <h3 className="font-medium text-ink">Sources</h3>
+        <p className="text-xs text-ink-muted">
+          One row per source / paid query / catalog board, rolled up over rolling 60d/90d windows
+          (planning/HUNT2_SOURCES.md §5). <Badge tone="amber">rotate</Badge> = a paid query with zero surfaced
+          matches in 60 days; <Badge tone="amber">dormant candidate</Badge> = a catalog board with zero surfaced
+          matches for any user in 90 days — flags only, an admin decides whether to act.
+        </p>
+        {sourceFunnel.length === 0 ? (
+          <EmptyState heading="No funnel data yet" message="Discovery hasn't landed any postings yet." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="text-ink-muted">
+                  <th className="pb-2 pr-4 font-medium">Source</th>
+                  <th className="pb-2 pr-4 font-medium">Board / query</th>
+                  <th className="pb-2 pr-4 font-medium">Postings (60d/90d)</th>
+                  <th className="pb-2 pr-4 font-medium">Surfaced (60d/90d)</th>
+                  <th className="pb-2 pr-4 font-medium">Users engaged (60d/90d)</th>
+                  <th className="pb-2 font-medium">Flags</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sourceFunnel.map((row, i) => (
+                  <tr key={`${row.source}-${row.boardId}-${row.queryKey}-${i}`} className="border-t border-line">
+                    <td className="py-2 pr-4">{row.source ?? "—"}</td>
+                    <td className="py-2 pr-4 text-ink-muted">
+                      {row.boardCompanyName ?? row.queryKey ?? "—"}
+                      {row.boardStatus && row.boardStatus !== "active" && (
+                        <span className="ml-2 text-xs">({row.boardStatus})</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-4 text-ink-muted">
+                      {row.postings60d} / {row.postings90d}
+                    </td>
+                    <td className="py-2 pr-4 text-ink-muted">
+                      {row.surfaced60d} / {row.surfaced90d}
+                    </td>
+                    <td className="py-2 pr-4 text-ink-muted">
+                      {row.usersEngaged60d} / {row.usersEngaged90d}
+                    </td>
+                    <td className="py-2">
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        {row.rotate && <Badge tone="amber">rotate</Badge>}
+                        {row.dormantCandidate && (
+                          <>
+                            <Badge tone="amber">dormant candidate</Badge>
+                            {row.boardId && <DormantBoardButton boardId={row.boardId} />}
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </Card>
     </div>

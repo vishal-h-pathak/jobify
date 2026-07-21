@@ -112,14 +112,13 @@ export async function seedUserPortals(
     .eq("status", "active");
   if (catalogError) throw catalogError;
 
-  // The slug probe (and this seeding pipeline) only covers Greenhouse/
-  // Ashby/Lever this session (Workday fetcher wiring is S3, out of
-  // scope) — a catalog row can carry ats='workday' per the DB constraint,
-  // but the seed data imported this session never does, and tier packs
-  // can't usefully target a platform nothing probes yet.
-  const catalog: CatalogBoardInput[] = (catalogRows ?? []).filter(
-    (row): row is CatalogBoardInput => row.ats !== "workday"
-  );
+  // HUNT2 P3 S6 flag (was: workday rows filtered out here — "tier packs
+  // can't usefully target a platform nothing probes yet" was true at S2
+  // but Workday fetcher wiring landed in S3, and `portalsSeed.ts` /
+  // `tierPacks.ts` now both handle a Workday catalog row end-to-end, so
+  // the exclusion was a stale gap, not a still-true constraint). Every
+  // `board_catalog` row reaches the tier pack now, regardless of `ats`.
+  const catalog: CatalogBoardInput[] = catalogRows ?? [];
 
   // Cockpit hotfix 2026-07-20: prefer profile.yml's authoritative
   // location_and_compensation over the text-regex heuristic. Semantics:

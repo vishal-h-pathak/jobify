@@ -7,11 +7,29 @@
  * postings endpoint don't expose a company-name field, so their confidence
  * falls back to a token-overlap proxy against the candidate slug itself,
  * discounted for being unverified against independent metadata.
+ *
+ * `SlugProbeAts` (HUNT2 P3 S6 flag: it used to cover only the three ATSes
+ * this file actually probes) is widened to include `"workday"` — Workday
+ * catalog boards can't be probed by company-name guessing (no simple
+ * slug scheme; a tenant/site/dc triple, not a name-derived string), but
+ * this type is reused generically by `web/lib/profile/portalsSeed.ts` /
+ * `web/lib/portals/tierPacks.ts` as "any ATS a catalog board can carry" —
+ * narrowing it to exclude Workday there is what silently dropped every
+ * Workday catalog row from tier packs (the gap this session fixes).
+ * `ATS_ORDER` below stays GH/Ashby/Lever-only — dream-company probing is
+ * unaffected.
  */
 
-export type SlugProbeAts = "greenhouse" | "ashby" | "lever";
+export type SlugProbeAts = "greenhouse" | "ashby" | "lever" | "workday";
 
-const ATS_ORDER: SlugProbeAts[] = ["greenhouse", "ashby", "lever"];
+// Narrower than `SlugProbeAts` on purpose — this file only ever probes
+// these three; every internal helper below is typed against this, not
+// the wider union, so `buildUrl`/`parseBoard`'s switches stay exhaustive
+// (a Workday case reaching them would be a real bug, not something to
+// silently no-op).
+type ProbedAts = "greenhouse" | "ashby" | "lever";
+
+const ATS_ORDER: ProbedAts[] = ["greenhouse", "ashby", "lever"];
 
 export interface SlugProbeHit {
   found: true;
@@ -63,7 +81,7 @@ function tokenOverlap(a: string[], b: string[]): number {
   return overlap / Math.max(a.length, b.length);
 }
 
-function buildUrl(ats: SlugProbeAts, slug: string): string {
+function buildUrl(ats: ProbedAts, slug: string): string {
   switch (ats) {
     case "greenhouse":
       return `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(slug)}/jobs`;
@@ -79,7 +97,7 @@ interface ParsedBoard {
   metadataName?: string;
 }
 
-function parseBoard(ats: SlugProbeAts, body: unknown): ParsedBoard | null {
+function parseBoard(ats: ProbedAts, body: unknown): ParsedBoard | null {
   if (ats === "lever") {
     return Array.isArray(body) ? { livePostingCount: body.length } : null;
   }
@@ -96,7 +114,7 @@ function parseBoard(ats: SlugProbeAts, body: unknown): ParsedBoard | null {
 
 async function probeOne(
   companyWords: string[],
-  ats: SlugProbeAts,
+  ats: ProbedAts,
   candidate: SlugCandidate,
   fetchImpl: typeof fetch,
   timeoutMs: number

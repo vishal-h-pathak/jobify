@@ -94,6 +94,26 @@ describe("seedUserPortals", () => {
     expect(JSON.parse(payload["portals.couldnt_auto_find.json"])).toEqual([]);
   });
 
+  it("HUNT2 P3 S6: a workday catalog row reaches the tier pack and the final portals.yml", async () => {
+    const workdayCatalog = {
+      data: [{ ats: "workday", slug: "megacorp/wd1/External", company_name: "MegaCorp", tags: ["data-ai"] }],
+      error: null,
+    };
+    const { admin, updateCalls } = fakeAdmin({
+      onboarding_sessions: baseSession,
+      profiles: baseProfile,
+      board_catalog: workdayCatalog,
+    });
+
+    const result = await seedUserPortals(admin as never, "user-1");
+
+    expect(result.tierPackCount).toBe(1);
+    const payload = (updateCalls[0].payload as { doc: Record<string, string> }).doc;
+    expect(payload["portals.yml"]).toContain("tenant: megacorp");
+    expect(payload["portals.yml"]).toContain("site: External");
+    expect(payload["portals.yml"]).toContain("dc: wd1");
+  });
+
   it("hotfix 2026-07-20: profile.yml's location_and_compensation wins over the regex fallback", async () => {
     // Text alone would match the old /onsite only/ regex and conclude
     // remote-REQUIRED — but this user has a base metro, so profile.yml's
