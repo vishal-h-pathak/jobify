@@ -10,12 +10,12 @@ import { computeCostUsd } from "../anthropic/pricing";
  */
 export async function recordOnboardingTurn(
   admin: SupabaseClient<Database>,
-  params: { userId: string; model: string; inputTokens: number; outputTokens: number }
+  params: { userId: string; model: string; inputTokens: number; outputTokens: number; event?: string }
 ): Promise<void> {
-  const { userId, model, inputTokens, outputTokens } = params;
+  const { userId, model, inputTokens, outputTokens, event = "onboarding_turn" } = params;
   const { error } = await admin.from("budget_ledger").insert({
     user_id: userId,
-    event: "onboarding_turn",
+    event,
     model,
     input_tokens: inputTokens,
     output_tokens: outputTokens,
