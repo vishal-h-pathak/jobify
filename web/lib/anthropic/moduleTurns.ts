@@ -314,10 +314,22 @@ function isTwoStringTuple(value: unknown): value is [string, string] {
  * paragraphs or one merged block shouldn't zero the whole mirror — take the
  * first two non-empty strings; exact-two remains the schema's ask. */
 function coerceTwoParagraphs(value: unknown): [string, string] | null {
-  if (isTwoStringTuple(value)) return value;
-  if (Array.isArray(value)) {
-    const strings = value.filter((v): v is string => typeof v === "string" && v.trim() !== "");
-    if (strings.length >= 2) return [strings[0]!, strings[1]!];
+  if (isTwoStringTuple(value) && (value[0].trim() !== "" || value[1].trim() !== "")) return value;
+  const strings = Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === "string" && v.trim() !== "")
+    : typeof value === "string" && value.trim() !== ""
+      ? [value]
+      : [];
+  if (strings.length >= 2) return [strings[0]!, strings.slice(1).join("\n\n")];
+  if (strings.length === 1) {
+    // Live incident 2026-07-21: the model returns ONE merged paragraph in
+    // the array often enough that dropping it zeroed real drafts twice in
+    // prod (repro: debug run returned a single 360-token paragraph).
+    // Split on blank lines when possible; otherwise one good paragraph
+    // beats an empty mirror.
+    const parts = strings[0]!.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean);
+    if (parts.length >= 2) return [parts[0]!, parts.slice(1).join("\n\n")];
+    return [strings[0]!, ""];
   }
   return null;
 }

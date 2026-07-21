@@ -264,7 +264,7 @@ describe("runMirrorGenerationTurn", () => {
     });
   });
 
-  it("returns default paragraphs when the tool call's paragraphs field is malformed (not a 2-string tuple)", async () => {
+  it("salvages a single-paragraph tool result instead of zeroing the draft", async () => {
     createMock.mockResolvedValue(
       usageResponse([
         {
@@ -276,7 +276,7 @@ describe("runMirrorGenerationTurn", () => {
     );
 
     const result = await runMirrorGenerationTurn({ extractedSummary: "Anchor: ..." });
-    expect(result.paragraphs).toEqual(["", ""]);
+    expect(result.paragraphs).toEqual(["only one paragraph", ""]);
     expect(result.quoted_phrases).toEqual(["a quote"]);
   });
 });

@@ -17,6 +17,21 @@ interface MirrorDraft {
 }
 
 /**
+ * Cockpit fix 2026-07-20 (live incident, two users): a draft whose
+ * paragraphs are both blank is a FAILED generation, not a draft. It must
+ * never be persisted over the session, never satisfy the budget
+ * short-circuit, and never be returned as a 200 success — the old behavior
+ * persisted ["", ""] as if real, then served it stale forever once the
+ * budget was spent, wedging the user on an empty mirror page with a
+ * "Try again" that did nothing.
+ */
+function draftIsEmpty(draft: MirrorDraft | null | undefined): boolean {
+  if (!draft || !Array.isArray(draft.paragraphs)) return true;
+  const [p1, p2] = draft.paragraphs;
+  return !(p1 ?? "").trim() && !(p2 ?? "").trim();
+}
+
+/**
  * Builds the mirror-generation prompt input from whatever's populated in
  * `session.extracted` so far — plain labeled sections, not an error if a
  * piece is missing (most fields here are optional per the module-progress
@@ -92,6 +107,13 @@ function userMessagesText(session: { messages: Array<{ role: string; content: st
  * again (one regen max)" — every `runMirrorGenerationTurn` call this route
  * makes increments the same counter regardless of what triggered it, capped
  * at `REGENERATION_BUDGET` (2) total calls per session.
+ *
+ * Cockpit fix 2026-07-20: the budget short-circuit only applies when a REAL
+ * (non-empty) draft exists — a session whose budget was consumed by failed
+ * generations self-heals on the next click instead of being wedged forever.
+ * Spend stays bounded per click (≤2 calls, both ledgered) and visible in
+ * budget_ledger; a failed result returns 502 with an error body instead of
+ * persisting an empty draft as success.
  */
 export async function POST() {
   const supabase = await createSupabaseServerClient();
@@ -108,15 +130,13 @@ export async function POST() {
   const session = await getOrCreateSession(supabase, user.id);
   const startingCount =
     typeof session.extracted.mirror_generation_count === "number" ? session.extracted.mirror_generation_count : 0;
+  const existingDraft = session.extracted.mirror_draft as MirrorDraft | undefined;
 
-  // Budget already spent (two manual clicks, or one manual click plus one
-  // auto-retry) — a "Try again" click after that returns the stale draft
-  // unchanged rather than calling the model a third time. Not a 409.
-  if (startingCount >= REGENERATION_BUDGET) {
-    const existingDraft = (session.extracted.mirror_draft as MirrorDraft | undefined) ?? {
-      paragraphs: ["", ""],
-      quoted_phrases: [],
-    };
+  // Budget already spent AND we actually have a draft to show — return it
+  // unchanged rather than calling the model again. Not a 409. (If the
+  // stored draft is empty, the budget was consumed by failures — fall
+  // through and regenerate; see the cockpit-fix note above.)
+  if (startingCount >= REGENERATION_BUDGET && !draftIsEmpty(existingDraft)) {
     return NextResponse.json(existingDraft);
   }
 
@@ -135,7 +155,13 @@ export async function POST() {
   count += 1;
   let quotedPhrases = filterVerbatim(turnResult.quoted_phrases, (phrase) => phrase, corpus);
 
-  if (quotedPhrases.length < 2 && count < REGENERATION_BUDGET) {
+  // Normal path keeps the original session-total cap (REGENERATION_BUDGET);
+  // only a wedged session (budget already spent on failures, empty draft)
+  // gets a fresh per-click allowance for the self-heal regeneration.
+  const allowedTotal =
+    startingCount >= REGENERATION_BUDGET ? startingCount + REGENERATION_BUDGET : REGENERATION_BUDGET;
+  if ((quotedPhrases.length < 2 || draftIsEmpty({ paragraphs: turnResult.paragraphs, quoted_phrases: quotedPhrases }))
+      && count < allowedTotal) {
     turnResult = await runMirrorGenerationTurn({ extractedSummary });
     await recordOnboardingTurn(admin, {
       userId: user.id,
@@ -148,6 +174,23 @@ export async function POST() {
   }
 
   const mirrorDraft: MirrorDraft = { paragraphs: turnResult.paragraphs, quoted_phrases: quotedPhrases };
+
+  if (draftIsEmpty(mirrorDraft)) {
+    // Failed generation: record the spend (count), but never persist the
+    // empty draft — keep whatever draft existed before (possibly none) so
+    // the next click regenerates instead of serving emptiness as success.
+    console.error(
+      `[mirror/generate] generation returned empty paragraphs for user ${user.id} (count now ${count}) — not persisting`
+    );
+    await saveSession(supabase, user.id, {
+      extracted: { ...session.extracted, mirror_generation_count: count },
+    });
+    return NextResponse.json(
+      { error: "mirror generation returned empty output — please try again" },
+      { status: 502 }
+    );
+  }
+
   const extracted = {
     ...session.extracted,
     mirror_draft: mirrorDraft,
