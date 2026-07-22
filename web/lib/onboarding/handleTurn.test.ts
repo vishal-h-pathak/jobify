@@ -245,15 +245,22 @@ describe("handleOnboardingTurn", () => {
       expect(result.assistantText).toMatch(/logistics|name/i);
     });
 
-    it("alternation: the round right after a template fire keeps the model's phrasing instead of repeating the template", async () => {
+    // Fix D (session 58) supersedes the old round-3-onward "alternation"
+    // continuation below: previously round 3 kept the model's own phrasing
+    // and round 4 fired the template again, tolerating up to 6 stuck rounds
+    // before PROGRESS would eventually fail the run. The bounded-deferral
+    // backstop now gives up after the 3rd consecutive stuck round instead —
+    // "a stuck interview ends bounded and honest, never loops to the turn
+    // cap" (session-prompts/58).
+    it("Fix D: the 3RD consecutive stuck round defers the intent instead of continuing the old alternation cycle", async () => {
       const runTurn = vi.fn(async () => ({
         question: "Which of those directions would you pick first?",
         extractedUpdates: {},
         usage: { inputTokens: 40, outputTokens: 10 },
       }));
 
-      // Simulates arriving at round 3: round 1 stuck (no template), round 2
-      // stuck (template fired).
+      // Round 1 stuck (no template), round 2 stuck (template fired) — this
+      // turn is round 3.
       const stuckTwiceTemplateJustFired: ExtractedState = {
         ...RESUME_DONE,
         turn_log: [
@@ -290,20 +297,27 @@ describe("handleOnboardingTurn", () => {
         runTurn,
       });
 
-      expect(result.fallback_kind).toBeUndefined();
-      expect(result.assistantText).toBe("Which of those directions would you pick first?");
+      expect(result.fallback_kind).toBe("no_progress");
+      expect(result.assistantText).not.toBe("Which of those directions would you pick first?");
+
+      const saved = saveSessionMock.mock.calls[0][2] as {
+        extracted: { deferred_intents?: string[]; turn_log?: { deferred?: boolean }[] };
+      };
+      expect(saved.extracted.deferred_intents).toEqual(["identity"]);
+      expect(saved.extracted.turn_log?.[2]).toMatchObject({ target_intent: "identity", deferred: true });
     });
 
-    it("alternation: the NEXT stuck round after that fires the template again with a distinct phrasing variant", async () => {
+    it("Fix D: the bound is >= 3, not exactly 3 — a 4th stuck round with no prior deferral marker also defers immediately", async () => {
       const runTurn = vi.fn(async () => ({
         question: "Which of those directions would you pick first?",
         extractedUpdates: {},
         usage: { inputTokens: 40, outputTokens: 10 },
       }));
 
-      // Simulates arriving at round 4: round 1 stuck (no template), round 2
-      // stuck (template fired, attempt 1), round 3 stuck (alternation —
-      // model phrasing kept, no template).
+      // A hand-constructed edge case that wouldn't arise from real usage
+      // (round 3 would already have deferred and stopped targeting
+      // "identity") — asserts the threshold check is >=3, not a one-shot
+      // ===3 opportunity.
       const priorEntries = [
         { askhint_fallback_used: false, ts: "2026-01-01T00:00:00.000Z" },
         { askhint_fallback_used: true, ts: "2026-01-01T00:01:00.000Z" },
@@ -331,12 +345,10 @@ describe("handleOnboardingTurn", () => {
       });
 
       expect(result.fallback_kind).toBe("no_progress");
-      // Attempt-2 variant text, distinct from attempt-1's rendering (used
-      // implicitly at round 2 above) — "What should I call you?" for the
-      // name-only-missing branch's attempt>=2 variant vs attempt 1's
-      // "What's your name?".
       expect(result.assistantText).not.toBe("Which of those directions would you pick first?");
-      expect(result.assistantText).toMatch(/logistics|name/i);
+
+      const saved = saveSessionMock.mock.calls[0][2] as { extracted: { deferred_intents?: string[] } };
+      expect(saved.extracted.deferred_intents).toEqual(["identity"]);
     });
   });
 
@@ -704,6 +716,98 @@ describe("handleOnboardingTurn", () => {
 
       const saved = saveSessionMock.mock.calls[0][2] as { extracted: { turn_log?: Record<string, unknown>[] } };
       expect(saved.extracted.turn_log?.[0]).toMatchObject({ retry_used: true, input_tokens: 11, output_tokens: 1 });
+    });
+  });
+
+  describe("Fix D (session 58): bounded deferral backstop", () => {
+    const stuckTwiceOnIdentity = [
+      { askhint_fallback_used: false, ts: "2026-01-01T00:00:00.000Z" },
+      { askhint_fallback_used: true, ts: "2026-01-01T00:01:00.000Z" },
+    ].map((e) => ({
+      intent_keys: ["identity"],
+      retry_used: false,
+      input_tokens: 40,
+      output_tokens: 10,
+      target_intent: "identity",
+      intent_advanced: false,
+      ...e,
+    }));
+
+    it("deferring a non-last intent moves on to the next required intent instead of re-asking the deferred one", async () => {
+      const runTurn = vi.fn(async () => ({
+        question: "Which of those directions would you pick first?",
+        extractedUpdates: {},
+        usage: { inputTokens: 40, outputTokens: 10 },
+      }));
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "still not sure",
+        session: baseSession({ extracted: { ...RESUME_DONE, turn_log: stuckTwiceOnIdentity } }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.done).toBe(false);
+      // targeting is the only thing left once identity defers — its
+      // deterministic ask text always mentions "directions"/"optimizing".
+      expect(result.assistantText).toMatch(/direction|optimizing/i);
+    });
+
+    it("deferring the LAST remaining required intent ends the interview bounded — done:true this same turn, no extra round-trip", async () => {
+      const runTurn = vi.fn(async () => ({
+        question: "Which of those directions would you pick first?",
+        extractedUpdates: {},
+        usage: { inputTokens: 40, outputTokens: 10 },
+      }));
+
+      const onlyIdentityMissing: ExtractedState = {
+        ...CALIBRATION_DONE,
+        resumeResolved: true,
+        targeting: { tiers: [{ key: "tier_1", label: "Backend" }], thesis_summary: "t", hard_disqualifiers: [], soft_concerns: [] },
+        turn_log: stuckTwiceOnIdentity,
+      };
+
+      const result = await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "still not sure",
+        session: baseSession({ extracted: onlyIdentityMissing }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(result.done).toBe(true);
+      expect(result.assistantText).toBe(
+        'Your profile is built — head to your feed and hit "Run my hunt" to get your first results.'
+      );
+      expect(upsertProfileDocMock).toHaveBeenCalledTimes(1);
+
+      const saved = saveSessionMock.mock.calls[0][2] as { status: string; extracted: { deferred_intents?: string[] } };
+      expect(saved.status).toBe("complete");
+      expect(saved.extracted.deferred_intents).toEqual(["identity"]);
+    });
+
+    it("console.warn fires exactly once, loudly, on the turn deferral happens", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const runTurn = vi.fn(async () => ({ question: "x", extractedUpdates: {}, usage: { inputTokens: 1, outputTokens: 1 } }));
+
+      await handleOnboardingTurn({
+        userId: "user-1",
+        userEmail: "user-1@example.com",
+        userMessage: "still not sure",
+        session: baseSession({ extracted: { ...RESUME_DONE, turn_log: stuckTwiceOnIdentity } }),
+        supabase: fakeClient,
+        admin: fakeClient,
+        runTurn,
+      });
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("deferring"), expect.objectContaining({ intent: "identity" }));
+      warnSpy.mockRestore();
     });
   });
 });

@@ -4,6 +4,7 @@ export type QuestionTopic =
   | "resume_ask"
   | "resume_confirm"
   | "logistics"
+  | "name"
   | "direction"
   | "tradeoff"
   | "more_of_done_with"
@@ -32,6 +33,17 @@ export function classifyQuestion(stage: InterviewStage, assistantText: string): 
     if (t.includes("more of") && t.includes("done with")) return "more_of_done_with";
     if (t.includes("compan")) return "companies";
     if (t.includes("direction") || t.includes("next role") || t.includes("next-role")) return "direction";
+    // Fix D (session 58): a pure name-only ask (identityAskText's
+    // NAME_ONLY_VARIANTS in intentRegistry.ts, e.g. "What's your name?")
+    // has none of the keywords above and previously fell through to
+    // "generic" — every persona's generic reply is a deflection ("Already
+    // said.") that never supplies a name, so identity_name (no skip path)
+    // looped the interview to the turn cap. Checked LAST: the combined
+    // logistics+name ask contains "logistics" and must keep matching that
+    // bucket above unchanged, and targeting's own direction ask literally
+    // says "name 2-3 concrete directions" (a verb, not this topic) — caught
+    // by the "direction" check above before ever reaching this line.
+    if (t.includes("name") || t.includes("call you")) return "name";
   }
 
   return "generic";

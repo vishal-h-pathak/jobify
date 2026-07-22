@@ -47,7 +47,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const session = await getOrCreateSession(supabase, user.id);
+  const session = await getOrCreateSession(supabase, user.id, user);
 
   // Replay/resubmit guard: a stray second tab, a browser back-button
   // resubmit, or a client retry must never rewind an in-progress or

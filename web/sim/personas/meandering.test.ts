@@ -54,4 +54,10 @@ describe("createMeanderingPersona", () => {
     }
     expect(new Set([direction, tradeoff, moreOf, companies, generic]).size).toBe(5);
   });
+
+  it("Fix D (session 58): still surfaces a real name in a pure name-only ask, hedging and all", () => {
+    const persona = createMeanderingPersona();
+    const answer = persona.answer({ stage: "targeting", lastAssistantText: "What's your name?", turnInStage: 2 });
+    expect(answer).toMatch(/Alex Quinn/);
+  });
 });

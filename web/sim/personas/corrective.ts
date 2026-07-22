@@ -1,6 +1,6 @@
 import type { Persona, PersonaContext } from "./types";
 import { classifyQuestion } from "./classifyQuestion";
-import { ALEX_QUINN_RESUME_MARKDOWN } from "./data";
+import { ALEX_QUINN_RESUME_MARKDOWN, ALEX_QUINN_NAME } from "./data";
 
 const CALIBRATION_ANSWER =
   "Depth: a payment webhook started silently dropping events under load — I'd check ingestion lag and DLQ " +
@@ -26,11 +26,21 @@ const GENERIC_ANSWER = "Already covered above, but happy to add detail if useful
 const CORRECTED_SALARY_FLOOR = "$190k";
 const CORRECTION_PREFIX = `Actually, quick correction before that — my salary floor is ${CORRECTED_SALARY_FLOOR}, not $175k, after a competing offer. `;
 
+// Fix D (session 58): the SAME one-shot self-correction shape as the salary
+// wrinkle above, applied to a name question instead — gives a real but
+// misspelled name once, then corrects the spelling on a LATER targeting
+// turn. Independent state from the salary correction (either, both, or
+// neither may fire in a given run, depending on which topics actually come up).
+const MISSPELLED_NAME = "Alex Quin";
+const NAME_CORRECTION_PREFIX = `Actually, one correction — it's spelled "${ALEX_QUINN_NAME}", with two Ns, not "${MISSPELLED_NAME}". `;
+
 function baseTargetingAnswer(ctx: PersonaContext): { topic: string; text: string } {
   const topic = classifyQuestion(ctx.stage, ctx.lastAssistantText);
   switch (topic) {
     case "logistics":
       return { topic, text: LOGISTICS_ANSWER };
+    case "name":
+      return { topic, text: MISSPELLED_NAME };
     case "direction":
       return { topic, text: DIRECTION_ANSWER };
     case "tradeoff":
@@ -54,6 +64,8 @@ function baseTargetingAnswer(ctx: PersonaContext): { topic: string; text: string
 export function createCorrectivePersona(): Persona {
   let sawLogistics = false;
   let correctionIssued = false;
+  let sawName = false;
+  let nameCorrectionIssued = false;
 
   return {
     name: "corrective",
@@ -70,9 +82,17 @@ export function createCorrectivePersona(): Persona {
         sawLogistics = true;
         return text;
       }
+      if (topic === "name") {
+        sawName = true;
+        return text;
+      }
       if (sawLogistics && !correctionIssued) {
         correctionIssued = true;
         return CORRECTION_PREFIX + text;
+      }
+      if (sawName && !nameCorrectionIssued) {
+        nameCorrectionIssued = true;
+        return NAME_CORRECTION_PREFIX + text;
       }
       return text;
     },

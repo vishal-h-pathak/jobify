@@ -61,4 +61,10 @@ describe("createCooperativePersona", () => {
     });
     expect(answer.trim().length).toBeGreaterThan(0);
   });
+
+  it("Fix D (session 58): answers a pure name-only ask with a real name, not the generic deflection", () => {
+    const persona = createCooperativePersona();
+    const answer = persona.answer({ stage: "targeting", lastAssistantText: "What's your name?", turnInStage: 2 });
+    expect(answer).toBe("Alex Quinn");
+  });
 });

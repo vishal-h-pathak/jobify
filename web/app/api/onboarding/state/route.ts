@@ -24,7 +24,7 @@ export async function GET() {
     return NextResponse.json({ error: "invite required" }, { status: 403 });
   }
 
-  const session = await getOrCreateSession(supabase, user.id);
+  const session = await getOrCreateSession(supabase, user.id, user);
 
   // ONB-A: the first time a session lands in 'calibration', lazily
   // generate its four prompts (one LLM turn) before responding, so the

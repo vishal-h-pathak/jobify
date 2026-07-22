@@ -45,4 +45,10 @@ describe("createTersePersona", () => {
     }
     expect(new Set([direction, tradeoff, moreOf, companies, generic]).size).toBe(5);
   });
+
+  it("Fix D (session 58): answers a pure name-only ask with a curt real name, not a deflection", () => {
+    const persona = createTersePersona();
+    const answer = persona.answer({ stage: "targeting", lastAssistantText: "What's your name?", turnInStage: 2 });
+    expect(answer).toBe("Alex Quinn");
+  });
 });

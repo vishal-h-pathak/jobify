@@ -239,6 +239,73 @@ describe("mergeExtractedUpdates — anything_else opportunistic capture (engine 
   });
 });
 
+describe("Fix E (session 58): ownership-aware array merges", () => {
+  it("an owning-intent (top-level, matching targetIntent) update replaces even when shorter but non-empty — a legitimate user correction", () => {
+    const previous: ExtractedState = {
+      targeting: { tiers: [], hard_disqualifiers: ["no crypto", "no unpaid on-call"], soft_concerns: [], thesis_summary: "t" },
+    };
+    const result = mergeExtractedUpdates(
+      previous,
+      { targeting: { tiers: [], thesis_summary: "t", hard_disqualifiers: ["no crypto"] } },
+      "targeting"
+    );
+    expect(result.targeting?.hard_disqualifiers).toEqual(["no crypto"]);
+  });
+
+  it("an opportunistic (anything_else) shorter-but-non-empty update is IGNORED — the live MONOTONIC-STATE repro", () => {
+    const previous: ExtractedState = { calibration: { skills: ["Go", "Python"], evidence: ["a", "b"] } };
+    const result = mergeExtractedUpdates(
+      previous,
+      {
+        identity: { name: "Alex Quinn" },
+        anything_else: { calibration: { skills: ["Go"] } },
+      },
+      "identity"
+    );
+    expect(result.calibration?.skills).toEqual(["Go", "Python"]);
+  });
+
+  it("an opportunistic (anything_else) equal-length update is also ignored, not just a shorter one", () => {
+    const previous: ExtractedState = { calibration: { skills: ["Go", "Python"] } };
+    const result = mergeExtractedUpdates(
+      previous,
+      { identity: { name: "Alex Quinn" }, anything_else: { calibration: { skills: ["Rust", "Java"] } } },
+      "identity"
+    );
+    expect(result.calibration?.skills).toEqual(["Go", "Python"]);
+  });
+
+  it("an opportunistic fill of an absent field still lands", () => {
+    const previous: ExtractedState = {};
+    const result = mergeExtractedUpdates(
+      previous,
+      { identity: { name: "Alex Quinn" }, anything_else: { calibration: { skills: ["Go"] } } },
+      "identity"
+    );
+    expect(result.calibration?.skills).toEqual(["Go"]);
+  });
+
+  it("a top-level key that ISN'T the target intent (defense in depth — the schema should never produce this) is still treated opportunistically", () => {
+    const previous: ExtractedState = { calibration: { skills: ["Go", "Python"] } };
+    const result = mergeExtractedUpdates(previous, { calibration: { skills: ["Go"] } }, "identity");
+    expect(result.calibration?.skills).toEqual(["Go", "Python"]);
+  });
+
+  it("omitting targetIntent entirely preserves pre-Fix-E behavior: every top-level key merges as owning", () => {
+    const previous: ExtractedState = { calibration: { skills: ["Go", "Python"] } };
+    const result = mergeExtractedUpdates(previous, { calibration: { skills: ["Go"] } });
+    expect(result.calibration?.skills).toEqual(["Go"]);
+  });
+
+  it("mergeCalibration/mergeResume/mergeTargeting default to owning (true) when called directly without an explicit flag", () => {
+    const shrunk = mergeCalibration({ calibration: { skills: ["Go", "Python"] } }, { skills: ["Go"] });
+    expect(shrunk.calibration?.skills).toEqual(["Go"]);
+
+    const opportunistic = mergeCalibration({ calibration: { skills: ["Go", "Python"] } }, { skills: ["Go"] }, false);
+    expect(opportunistic.calibration?.skills).toEqual(["Go", "Python"]);
+  });
+});
+
 describe("mergeExtractedUpdates — full chain preserves state across calls", () => {
   it("calibration -> resume -> identity -> targeting all accumulate", () => {
     let extracted: ExtractedState = {};

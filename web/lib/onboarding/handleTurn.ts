@@ -178,7 +178,7 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     usages.push(engineResult.usage);
   }
 
-  let extracted = mergeExtractedUpdates(extractedBefore, engineResult.extractedUpdates);
+  let extracted = mergeExtractedUpdates(extractedBefore, engineResult.extractedUpdates, currentIntent);
 
   // The authenticated user's real email always wins over whatever the model
   // supplied (or fabricated) — overwrite unconditionally, every turn
@@ -190,25 +190,45 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
 
   // Real recompute, post-merge — the only thing that decides `done` and the
   // only thing the assistantText below trusts.
-  const targetAfter = firstMissingIntent(extracted);
-  const done = targetAfter === null;
-  const intentAdvancedThisTurn = targetAfter !== currentIntent;
+  let targetAfter = firstMissingIntent(extracted);
+  let done = targetAfter === null;
+  let intentAdvancedThisTurn = targetAfter !== currentIntent;
   const stuckThisTurn = targetAfter !== null && targetAfter === currentIntent;
   const totalStuckStreak = stuckThisTurn ? priorStuckStreak + 1 : 0;
+
+  // Fix D point 2 (session 58): bounded deferral backstop — a required
+  // intent still unsatisfied after 3 distinct asking rounds is marked
+  // deferred (extracted.deferred_intents[]) rather than burned all the way
+  // to the turn cap. Checked before the askHint two-strike branch below so
+  // it takes priority the one turn it fires. NEVER invents a placeholder
+  // value for the field itself (the sentinel rule stands) — the field just
+  // stops being asked about; checklist.ts's missingFields/isInterviewDone/
+  // firstMissingIntent stop blocking on it from this turn forward.
+  const alreadyDeferred = (extracted.deferred_intents ?? []).includes(currentIntent);
+  const deferredThisTurn = stuckThisTurn && totalStuckStreak >= 3 && !alreadyDeferred;
+  if (deferredThisTurn) {
+    console.warn("onboarding: deferring stuck required intent after 3 asking rounds", {
+      userId,
+      intent: currentIntent,
+      stuckStreak: totalStuckStreak,
+    });
+    extracted = { ...extracted, deferred_intents: [...(extracted.deferred_intents ?? []), currentIntent] };
+    targetAfter = firstMissingIntent(extracted);
+    done = targetAfter === null;
+    intentAdvancedThisTurn = targetAfter !== currentIntent;
+  }
 
   let assistantText: string;
   let fallbackKind: HandleTurnResult["fallback_kind"];
 
-  // Fix B point 1 (two-strike threshold): the askHint override fires only
-  // from the SECOND consecutive stuck round on this intent onward — the
-  // first stuck round keeps the model's own phrasing, since that's the
-  // correct behavior when the user pushes back or asks a clarifying
-  // question rather than genuinely stalling.
-  // Fix B point 2 (anti-repeat alternation): if the template already fired
-  // last turn for this same intent, this turn keeps the model's phrasing
-  // instead — NO-REPEAT must never see the same rendered template text
-  // twice in a row.
-  if (stuckThisTurn && totalStuckStreak >= 2 && !lastEntryUsedTemplateForThisIntent) {
+  if (deferredThisTurn) {
+    // The model's own `question` this turn was phrased about the now-
+    // abandoned intent — never trustworthy here. Render deterministically:
+    // the closing summary if nothing required remains, or the next actual
+    // target's ask (attempt 1 — this is the first turn asking about it).
+    assistantText = targetAfter !== null ? renderFallbackQuestion(targetAfter, extracted, 1) : DONE_FALLBACK_TEXT;
+    fallbackKind = "no_progress";
+  } else if (targetAfter !== null && stuckThisTurn && totalStuckStreak >= 2 && !lastEntryUsedTemplateForThisIntent) {
     // Engine contract point 4's loop-breaker: a full round-trip happened
     // (we asked, the user answered) but currentIntent still isn't fully
     // resolved — the model's `question` (if any) was phrased about the
@@ -251,6 +271,7 @@ export async function handleOnboardingTurn(deps: HandleTurnDeps): Promise<Handle
     ts: new Date().toISOString(),
     target_intent: currentIntent,
     intent_advanced: intentAdvancedThisTurn,
+    deferred: deferredThisTurn,
   };
   extracted = { ...extracted, turn_log: [...(extractedBefore.turn_log ?? []), turnLogEntry] };
 

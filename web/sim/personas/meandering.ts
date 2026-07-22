@@ -1,6 +1,6 @@
 import type { Persona, PersonaContext } from "./types";
 import { classifyQuestion } from "./classifyQuestion";
-import { ALEX_QUINN_RESUME_MARKDOWN } from "./data";
+import { ALEX_QUINN_RESUME_MARKDOWN, ALEX_QUINN_NAME } from "./data";
 
 const CALIBRATION_ANSWER =
   "So, funny story, I almost went into frontend work back in school, but anyway — to your first one, there " +
@@ -32,11 +32,15 @@ const MORE_OF_DONE_WITH_ANSWER =
   "and done with being the only person who understands some legacy system nobody else will touch.";
 const COMPANIES_ANSWER = "I don't have a strict list, but Stripe and Datadog come to mind, if I'm honest.";
 const GENERIC_ANSWER = "I think I already touched on that somewhere above, but let me know if you need more.";
+// Fix D (session 58): buries the name in a little hedging, same as everything else, but it's still there.
+const NAME_ANSWER = `Oh, it's ${ALEX_QUINN_NAME} — sorry, thought that came up already.`;
 
 function answerTargeting(ctx: PersonaContext): string {
   switch (classifyQuestion(ctx.stage, ctx.lastAssistantText)) {
     case "logistics":
       return LOGISTICS_ANSWER;
+    case "name":
+      return NAME_ANSWER;
     case "direction":
       return DIRECTION_ANSWER;
     case "tradeoff":

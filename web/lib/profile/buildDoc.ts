@@ -96,6 +96,10 @@ export interface TurnLogEntry {
   // — but an explicit field is less fragile than relying on that).
   target_intent: string;
   intent_advanced: boolean;
+  // Fix D (session 58): true on the turn the bounded-deferral backstop gave
+  // up on `target_intent` (3rd consecutive stuck round) — loud telemetry
+  // alongside the console.warn, distinct from the ordinary askhint fallback.
+  deferred?: boolean;
 }
 
 export interface ExtractedState {
@@ -112,6 +116,17 @@ export interface ExtractedState {
   // done and never re-target it.
   resumeResolved?: boolean;
   turn_log?: TurnLogEntry[];
+  // Fix D (session 58): intents the bounded-deferral backstop gave up on
+  // after 3 stuck asking rounds (handleTurn.ts) — excluded from
+  // checklist.ts's missingFields/isInterviewDone/firstMissingIntent so a
+  // persona that genuinely never yields a required field (no skip path
+  // exists) ends the interview bounded instead of burning the turn cap.
+  // NEVER a placeholder value landed in the field itself — the field just
+  // stays absent/empty, same sentinel rule as everywhere else. buildProfileDoc
+  // already tolerates any of these fields being blank (verified session 58).
+  // Typed as plain strings (not checklist.ts's IntentKey) to avoid a
+  // circular import — checklist.ts already imports ExtractedState from here.
+  deferred_intents?: string[];
 }
 
 // v1 deliberately never asks for application_defaults (the aggregator

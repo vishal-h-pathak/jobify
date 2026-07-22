@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "missing message" }, { status: 400 });
   }
 
-  const session = await getOrCreateSession(supabase, user.id);
+  const session = await getOrCreateSession(supabase, user.id, user);
   const result = await handleOnboardingTurn({
     userId: user.id,
     userEmail: user.email ?? "",

@@ -1,6 +1,6 @@
 import type { Persona, PersonaContext } from "./types";
 import { classifyQuestion } from "./classifyQuestion";
-import { ALEX_QUINN_RESUME_MARKDOWN } from "./data";
+import { ALEX_QUINN_RESUME_MARKDOWN, ALEX_QUINN_NAME } from "./data";
 
 const CALIBRATION_ANSWER =
   "Depth: a payment webhook started silently dropping events under load — I'd check ingestion lag and DLQ " +
@@ -27,11 +27,18 @@ const MORE_OF_DONE_WITH_ANSWER =
   "on-call for a legacy monolith nobody wants to touch.";
 const COMPANIES_ANSWER = "Stripe and Datadog are on my radar, but no hard requirement there.";
 const GENERIC_ANSWER = "That's covered by what I've already told you — happy to add detail on any of it if useful.";
+// Fix D (session 58): a direct name answer — this persona pastes the resume
+// (which already names "Alex Quinn"), so the model should usually capture
+// the name opportunistically before this ever fires; kept as a deterministic
+// fallback so a live run where that extraction doesn't land still resolves.
+const NAME_ANSWER = ALEX_QUINN_NAME;
 
 function answerTargeting(ctx: PersonaContext): string {
   switch (classifyQuestion(ctx.stage, ctx.lastAssistantText)) {
     case "logistics":
       return LOGISTICS_ANSWER;
+    case "name":
+      return NAME_ANSWER;
     case "direction":
       return DIRECTION_ANSWER;
     case "tradeoff":

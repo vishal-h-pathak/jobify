@@ -15,9 +15,33 @@ import { isSentinelPlaceholder } from "./checklist";
 /** Never-shrink array guard (Fix A, session 57): a present-but-empty array
  *  must not wipe an already-recorded non-empty one — MONOTONIC-STATE's
  *  documented semantic, applied uniformly to every array field, not just
- *  identity's string fields. */
+ *  identity's string fields. Used for OWNING (this turn's target intent)
+ *  updates — it may replace with a shorter-but-non-empty array: that is a
+ *  legitimate user correction (Fix E, session 58). */
 function nonEmptyArrayOr<T>(value: unknown, previous: T[] | undefined): T[] {
   return Array.isArray(value) && value.length > 0 ? (value as T[]) : (previous ?? []);
+}
+
+/**
+ * Fix E (session 58): an OPPORTUNISTIC (non-owning — routed through
+ * `anything_else`, or any top-level key other than the turn's actual
+ * target) array touch is fill-only. It lands only when the stored value is
+ * absent/empty, and never replaces an already-recorded non-empty array —
+ * even with a same-or-shorter-length value that the owning-intent replace
+ * above would accept. MONOTONIC-STATE flags any array shrink; Fix A's
+ * literal "non-empty always replaces" formula let an opportunistic re-touch
+ * on an unrelated turn shrink an already-recorded array and trip it (the
+ * live repro: calibration.skills/evidence via an anything_else on an
+ * identity/targeting turn).
+ */
+function fillOnlyArrayOr<T>(value: unknown, previous: T[] | undefined): T[] {
+  if (previous && previous.length > 0) return previous;
+  return Array.isArray(value) && value.length > 0 ? (value as T[]) : (previous ?? []);
+}
+
+/** Dispatches to the owning or opportunistic array-merge rule above. */
+function arrayMergeOr<T>(owning: boolean, value: unknown, previous: T[] | undefined): T[] {
+  return owning ? nonEmptyArrayOr(value, previous) : fillOnlyArrayOr(value, previous);
 }
 
 /**
@@ -53,7 +77,13 @@ function sanitizeSentinelStrings<T extends Record<string, unknown>>(obj: T | und
   return result as Partial<T>;
 }
 
-export function mergeCalibration(prev: ExtractedState, updates: unknown): ExtractedState {
+/** `owning` (Fix E, session 58): true when this update came from the turn's
+ *  actual target intent — false for an opportunistic touch via
+ *  `anything_else` (or any other non-target top-level key). Defaults to
+ *  true so direct callers (this function is also exported for
+ *  `intentRegistry.ts` and tested standalone) keep the pre-Fix-E behavior
+ *  when they don't care about ownership. */
+export function mergeCalibration(prev: ExtractedState, updates: unknown, owning = true): ExtractedState {
   const input = (updates ?? {}) as Record<string, unknown>;
   const previous = prev.calibration;
   return {
@@ -66,8 +96,8 @@ export function mergeCalibration(prev: ExtractedState, updates: unknown): Extrac
     // empty array is treated the same way — never-shrink (Fix A).
     calibration: {
       ...previous,
-      skills: nonEmptyArrayOr(input.skills, previous?.skills),
-      evidence: nonEmptyArrayOr(input.evidence, previous?.evidence),
+      skills: arrayMergeOr(owning, input.skills, previous?.skills),
+      evidence: arrayMergeOr(owning, input.evidence, previous?.evidence),
       range_statement: safeStringOr(input.range_statement, previous?.range_statement),
       background_summary: safeStringOr(input.background_summary, previous?.background_summary),
     },
@@ -82,7 +112,7 @@ export function mergeCalibration(prev: ExtractedState, updates: unknown): Extrac
  * is a no-op: it must not flip `resumeResolved` early on a turn that didn't
  * actually resolve anything.
  */
-export function mergeResume(prev: ExtractedState, updates: unknown): ExtractedState {
+export function mergeResume(prev: ExtractedState, updates: unknown, owning = true): ExtractedState {
   const input = (updates ?? {}) as Record<string, unknown>;
   const rawCvMarkdown = typeof input.cv_markdown === "string" ? input.cv_markdown.trim() : "";
   const cvMarkdown = isSentinelPlaceholder(rawCvMarkdown) ? "" : rawCvMarkdown;
@@ -93,7 +123,7 @@ export function mergeResume(prev: ExtractedState, updates: unknown): ExtractedSt
   if (cvMarkdown) {
     next.resume = {
       cv_markdown: cvMarkdown,
-      key_technical_skills: nonEmptyArrayOr(input.key_technical_skills, prev.resume?.key_technical_skills),
+      key_technical_skills: arrayMergeOr(owning, input.key_technical_skills, prev.resume?.key_technical_skills),
       background_summary: safeStringOr(input.background_summary, prev.resume?.background_summary),
     };
   }
@@ -144,26 +174,30 @@ export function mergeIdentity(prev: ExtractedState, updates: unknown): Extracted
  * owns that ground now (U2 item 6). dream_companies is the optional seed,
  * folded into this same intent's schema rather than a separate gating field.
  */
-export function mergeTargeting(prev: ExtractedState, updates: unknown): ExtractedState {
+export function mergeTargeting(prev: ExtractedState, updates: unknown, owning = true): ExtractedState {
   const input = (updates ?? {}) as Record<string, unknown>;
   const previous = prev.targeting;
   return {
     ...prev,
     targeting: {
-      tiers: nonEmptyArrayOr<TargetingTier>(input.tiers, previous?.tiers),
-      dream_companies: nonEmptyArrayOr(input.dream_companies, previous?.dream_companies),
-      hard_disqualifiers: nonEmptyArrayOr(input.hard_disqualifiers, previous?.hard_disqualifiers),
-      soft_concerns: nonEmptyArrayOr(input.soft_concerns, previous?.soft_concerns),
+      tiers: arrayMergeOr<TargetingTier>(owning, input.tiers, previous?.tiers),
+      dream_companies: arrayMergeOr(owning, input.dream_companies, previous?.dream_companies),
+      hard_disqualifiers: arrayMergeOr(owning, input.hard_disqualifiers, previous?.hard_disqualifiers),
+      soft_concerns: arrayMergeOr(owning, input.soft_concerns, previous?.soft_concerns),
       degree_gate: safeStringOr(input.degree_gate, previous?.degree_gate),
       thesis_summary: safeStringOr(input.thesis_summary, previous?.thesis_summary) ?? "",
     },
   };
 }
 
-const MERGERS: Record<IntentKey, (prev: ExtractedState, updates: unknown) => ExtractedState> = {
+// mergeIdentity has no array fields (location_and_compensation merges by
+// object-spread, not array rules) — wrapped here rather than given its own
+// unused `owning` param, so its exported signature stays exactly what
+// intentRegistry.ts and existing tests already call.
+const MERGERS: Record<IntentKey, (prev: ExtractedState, updates: unknown, owning: boolean) => ExtractedState> = {
   calibration: mergeCalibration,
   resume: mergeResume,
-  identity: mergeIdentity,
+  identity: (prev, updates) => mergeIdentity(prev, updates),
   targeting: mergeTargeting,
 };
 
@@ -173,27 +207,41 @@ const INTENT_KEYS: readonly IntentKey[] = ["calibration", "resume", "identity", 
  * Engine contract point 5's generic merge entry point. `updates` is the
  * forced `interview_turn` tool's `extracted_updates` value: zero or more of
  * the four intent keys, plus an optional `anything_else` object carrying
- * opportunistic captures in the SAME nested shape — routed through the
- * identical per-key mergers via one level of recursion, so a fact the model
- * notices outside this turn's target intent merges no differently than one
- * inside it.
+ * opportunistic captures in the SAME nested shape.
+ *
+ * Fix E (session 58): `targetIntent` — the turn's actual target — decides
+ * ownership. A top-level key matching it merges as OWNING (may legitimately
+ * shrink a non-empty array: a user correction). Every `anything_else` key,
+ * and any top-level key that ISN'T the target (defense in depth — the
+ * schema should never produce this, but the merge must not trust that
+ * blindly), merges as OPPORTUNISTIC: fill-only, never replacing an
+ * already-recorded non-empty array. Omitting `targetIntent` treats every
+ * top-level key as owning (pre-Fix-E behavior), for callers that don't
+ * track a turn's target — `anything_else` stays opportunistic regardless.
  */
 export function mergeExtractedUpdates(
   prev: ExtractedState,
-  updates: Record<string, unknown> | null | undefined
+  updates: Record<string, unknown> | null | undefined,
+  targetIntent?: IntentKey
 ): ExtractedState {
   if (!updates || typeof updates !== "object") return prev;
 
   let next = prev;
   for (const key of INTENT_KEYS) {
     if (updates[key] !== undefined) {
-      next = MERGERS[key](next, updates[key]);
+      const owning = targetIntent ? key === targetIntent : true;
+      next = MERGERS[key](next, updates[key], owning);
     }
   }
 
   const anythingElse = updates.anything_else;
   if (anythingElse && typeof anythingElse === "object") {
-    next = mergeExtractedUpdates(next, anythingElse as Record<string, unknown>);
+    const anythingElseObj = anythingElse as Record<string, unknown>;
+    for (const key of INTENT_KEYS) {
+      if (anythingElseObj[key] !== undefined) {
+        next = MERGERS[key](next, anythingElseObj[key], false);
+      }
+    }
   }
 
   return next;

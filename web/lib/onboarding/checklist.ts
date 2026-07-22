@@ -166,10 +166,22 @@ export interface MissingFieldsOptions {
   excludeIntent?: IntentKey;
 }
 
-/** Pure function — checklist order, so callers get a stable "first missing" read. */
+/**
+ * Pure function — checklist order, so callers get a stable "first missing"
+ * read. Fix D (session 58): fields whose intent is in
+ * `extracted.deferred_intents` are excluded here — the bounded-deferral
+ * backstop (handleTurn.ts) has given up asking about them, so they must
+ * stop blocking `isInterviewDone`/`firstMissingIntent`. Deliberately NOT
+ * applied in `missingFieldsForIntent` below — that one stays a raw presence
+ * check, since module-completion glue (`intentJustResolved` in
+ * handleTurn.ts) and `identityAskText`'s phrasing both need "is the data
+ * actually there", not "has the interview stopped blocking on it".
+ */
 export function missingFields(extracted: ExtractedState, opts: MissingFieldsOptions = {}): FieldSpec[] {
+  const deferred = new Set(extracted.deferred_intents ?? []);
   return INTERVIEW_CHECKLIST.filter((field) => {
     if (opts.excludeIntent && field.intent === opts.excludeIntent) return false;
+    if (deferred.has(field.intent)) return false;
     return !isFieldPresent(getByPath(extracted, field.extractedPath));
   });
 }
@@ -189,6 +201,14 @@ export function fieldsForIntent(intent: IntentKey): FieldSpec[] {
   return INTERVIEW_CHECKLIST.filter((field) => field.intent === intent);
 }
 
+/**
+ * Deliberately raw (not deferred-aware, unlike `missingFields` above): used
+ * by module-completion glue and by `identityAskText`'s phrasing, both of
+ * which need "has this intent's data actually landed", not "has the
+ * interview stopped blocking on it" (Fix D, session 58).
+ */
 export function missingFieldsForIntent(intent: IntentKey, extracted: ExtractedState): FieldSpec[] {
-  return missingFields(extracted).filter((field) => field.intent === intent);
+  return INTERVIEW_CHECKLIST.filter(
+    (field) => field.intent === intent && !isFieldPresent(getByPath(extracted, field.extractedPath))
+  );
 }

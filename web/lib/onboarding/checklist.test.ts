@@ -163,6 +163,39 @@ describe("missingFields / isInterviewDone / firstMissingIntent", () => {
     const missing = missingFieldsForIntent("identity", extracted);
     expect(missing.map((f) => f.key)).toEqual(["identity_logistics"]);
   });
+
+  describe("Fix D (session 58): deferred_intents stops blocking done-ness but is not data presence", () => {
+    it("a deferred intent's missing required fields no longer block isInterviewDone/firstMissingIntent", () => {
+      const extracted: ExtractedState = {
+        ...FULL,
+        identity: undefined,
+        deferred_intents: ["identity"],
+      };
+      expect(isInterviewDone(extracted)).toBe(true);
+      expect(firstMissingIntent(extracted)).toBeNull();
+      expect(missingFields(extracted)).toEqual([]);
+    });
+
+    it("a deferred intent no longer surfaces as the next thing to ask about, even if other intents remain", () => {
+      const extracted: ExtractedState = {
+        ...FULL,
+        identity: undefined,
+        targeting: undefined,
+        deferred_intents: ["identity"],
+      };
+      expect(firstMissingIntent(extracted)).toBe("targeting");
+    });
+
+    it("missingFieldsForIntent stays RAW (deferred-blind) — module-completion glue must never see a deferred intent's unanswered fields as resolved", () => {
+      const extracted: ExtractedState = { ...FULL, identity: undefined, deferred_intents: ["identity"] };
+      const missing = missingFieldsForIntent("identity", extracted);
+      expect(missing.map((f) => f.key)).toEqual(["identity_name", "identity_logistics"]);
+    });
+
+    it("deferring an intent that was never actually missing is a no-op", () => {
+      expect(isInterviewDone({ ...FULL, deferred_intents: ["calibration"] })).toBe(true);
+    });
+  });
 });
 
 describe("fieldsForIntent", () => {

@@ -5,6 +5,10 @@
  * in this same underlying person — only the delivery style differs.
  */
 
+// Fix D (session 58): a shared literal so every persona's "name" topic
+// answer (classifyQuestion.ts) grounds in the same underlying person.
+export const ALEX_QUINN_NAME = "Alex Quinn" as const;
+
 export const ALEX_QUINN_ANCHOR = {
   current_title: "Staff Software Engineer, Platform",
   current_company: "Northwind Software",
