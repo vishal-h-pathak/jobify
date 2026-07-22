@@ -31,8 +31,19 @@ export function classifyQuestion(stage: InterviewStage, assistantText: string): 
     if (t.includes("trade-off") || t.includes("tradeoff") || t.includes("postings") || t.includes("ranks higher"))
       return "tradeoff";
     if (t.includes("more of") && t.includes("done with")) return "more_of_done_with";
-    if (t.includes("compan")) return "companies";
+    // Cockpit ruling (session 58 follow-up): "direction" is checked BEFORE
+    // "compan" — the targeting/direction ask (both the model's live
+    // phrasing and the deterministic template, targetingAskText in
+    // intentRegistry.ts) always ends with "...dream companies worth
+    // watching are optional", a trailing OPTIONAL suffix, not the actual
+    // subject of the question. Checking "compan" first misclassified every
+    // real direction ask as "companies", starving the persona's actual
+    // tiers/thesis answer and forcing an extra stuck round. A companies
+    // classification must fire only when direction/next-role keywords are
+    // ABSENT — companies-as-an-optional-suffix on a direction ask always
+    // classifies as direction.
     if (t.includes("direction") || t.includes("next role") || t.includes("next-role")) return "direction";
+    if (t.includes("compan")) return "companies";
     // Fix D (session 58): a pure name-only ask (identityAskText's
     // NAME_ONLY_VARIANTS in intentRegistry.ts, e.g. "What's your name?")
     // has none of the keywords above and previously fell through to

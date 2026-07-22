@@ -87,4 +87,32 @@ describe("classifyQuestion", () => {
       ).toBe("direction");
     });
   });
+
+  describe("Cockpit ruling (session 58 follow-up): direction is checked before companies", () => {
+    it("classifies the direction ask's exact live phrasing — 'dream companies worth watching are optional' as a trailing suffix — as direction, not companies", () => {
+      expect(
+        classifyQuestion(
+          "targeting",
+          "Based on your background as a Staff Engineer, name 2-3 concrete directions you'd want your next role " +
+            "to take, and in a couple sentences, what you're optimizing for in this search — any dream companies " +
+            "worth watching are optional."
+        )
+      ).toBe("direction");
+    });
+
+    it("a real live-model rendering of the same ask (paraphrased, not the deterministic template) still classifies as direction", () => {
+      expect(
+        classifyQuestion(
+          "targeting",
+          "Based on where you sit as a Staff Platform Engineer, name 2-3 concrete directions you'd want your next " +
+            "role to take (e.g., deeper into data infra, a step up to principal/lead, a specific domain), and in a " +
+            "couple sentences, what you're optimizing for in this search. Any dream companies worth watching are optional."
+        )
+      ).toBe("direction");
+    });
+
+    it("a genuine companies-only ask (no direction/next-role keywords) still classifies as companies, unchanged", () => {
+      expect(classifyQuestion("targeting", "Any specific companies for the watchlist?")).toBe("companies");
+    });
+  });
 });
