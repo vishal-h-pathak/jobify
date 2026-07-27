@@ -31,8 +31,8 @@ vi.mock("@/components/onboarding/moduleOrder", () => ({
 
 const { default: AppLayout } = await import("./layout");
 
-function pathnameHeaders(pathname: string) {
-  return new Headers({ "x-pathname": pathname });
+function pathnameHeaders(pathname: string, search = "") {
+  return new Headers({ "x-pathname": pathname, "x-search": search });
 }
 
 describe("(app) layout — invite gate", () => {
@@ -56,18 +56,31 @@ describe("(app) layout — invite gate", () => {
     headersMock.mockResolvedValue(pathnameHeaders("/feed"));
   });
 
-  it("redirects to /login when there is no session, without checking access", async () => {
+  it("redirects to /login with next=<original path> when there is no session, without checking access", async () => {
     getUserMock.mockResolvedValue({ data: { user: null } });
 
-    await expect(AppLayout({ children: "content" })).rejects.toThrow("REDIRECT:/login");
+    await expect(AppLayout({ children: "content" })).rejects.toThrow("REDIRECT:/login?next=%2Ffeed");
     expect(hasAccessMock).not.toHaveBeenCalled();
   });
 
-  it("redirects to /invite when signed in but hasAccess is false (no claim, no allowlist hit, not admin) — the invite gate", async () => {
+  it.each([
+    ["/admin", ""],
+    ["/tailor/abc", ""],
+    ["/submit/setup", ""],
+    ["/settings", "?tab=resume"],
+  ])("AUTHFLOW acceptance matrix: signed-out %s%s -> /login?next=<path+query>", async (pathname, search) => {
+    getUserMock.mockResolvedValue({ data: { user: null } });
+    headersMock.mockResolvedValue(pathnameHeaders(pathname, search));
+
+    const expectedNext = encodeURIComponent(pathname + search);
+    await expect(AppLayout({ children: "content" })).rejects.toThrow(`REDIRECT:/login?next=${expectedNext}`);
+  });
+
+  it("redirects to /invite with next=<original path> when signed in but hasAccess is false (no claim, no allowlist hit, not admin) — the invite gate", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     hasAccessMock.mockResolvedValue(false);
 
-    await expect(AppLayout({ children: "content" })).rejects.toThrow("REDIRECT:/invite");
+    await expect(AppLayout({ children: "content" })).rejects.toThrow("REDIRECT:/invite?next=%2Ffeed");
   });
 
   it("renders (fresh session, no prior cookies) once signed in with access and a complete intake — straight through, no redirect", async () => {
@@ -105,12 +118,20 @@ describe("(app) layout — invite gate", () => {
     expect(navLinks.props.isAdmin).toBe(true);
   });
 
-  it("a non-admin without a claimed invite still redirects to /invite", async () => {
+  it("a non-admin without a claimed invite still redirects to /invite, next intact", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     isAdminMock.mockReturnValue(false);
     hasAccessMock.mockResolvedValue(false);
 
-    await expect(AppLayout({ children: "content" })).rejects.toThrow("REDIRECT:/invite");
+    await expect(AppLayout({ children: "content" })).rejects.toThrow("REDIRECT:/invite?next=%2Ffeed");
+  });
+
+  it("AUTHFLOW acceptance matrix: signed in, no access, /feed -> /invite?next=/feed", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    hasAccessMock.mockResolvedValue(false);
+    headersMock.mockResolvedValue(pathnameHeaders("/feed"));
+
+    await expect(AppLayout({ children: "content" })).rejects.toThrow("REDIRECT:/invite?next=%2Ffeed");
   });
 
   it("2026-07-21 regression: an allowlisted user (no claimed invite yet, hasAccess true via auto-claim) passes straight through, not to /invite", async () => {

@@ -12,13 +12,16 @@ import type { Database } from "./types";
  *
  * Also forwards the current pathname as an `x-pathname` request header
  * (UX-1: the gate needs it to exclude `/onboarding` itself from the
- * incomplete-intake redirect) — Server Components have no other way to
+ * incomplete-intake redirect) and the querystring as `x-search`
+ * (AUTHFLOW: reconstructing the full original path+query for a `next`
+ * redirect target needs both) — Server Components have no other way to
  * read the request path, since Next.js doesn't expose it via `headers()`
  * on its own.
  */
 export async function updateSession(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-pathname", request.nextUrl.pathname);
+  requestHeaders.set("x-search", request.nextUrl.search);
   const response = NextResponse.next({ request: { headers: requestHeaders } });
 
   const supabase = createServerClient<Database>(
