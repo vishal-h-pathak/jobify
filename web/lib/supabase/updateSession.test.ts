@@ -22,6 +22,22 @@ describe("updateSession", () => {
     expect(response.headers.get("x-middleware-request-x-pathname")).toBe("/onboarding/anchor");
   });
 
+  it("forwards the request querystring as an x-search header, so a redirect can rebuild the full original URL for `next`", async () => {
+    const request = new NextRequest("https://example.com/submit/setup?step=2");
+
+    const response = await updateSession(request);
+
+    expect(response.headers.get("x-middleware-request-x-search")).toBe("?step=2");
+  });
+
+  it("forwards an empty x-search header when the request has no querystring", async () => {
+    const request = new NextRequest("https://example.com/feed");
+
+    const response = await updateSession(request);
+
+    expect(response.headers.get("x-middleware-request-x-search")).toBe("");
+  });
+
   it("still refreshes the session by calling auth.getUser() exactly once", async () => {
     const request = new NextRequest("https://example.com/feed");
 

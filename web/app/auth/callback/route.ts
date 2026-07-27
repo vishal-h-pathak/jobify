@@ -3,6 +3,7 @@ import { createServerClient } from "@supabase/ssr";
 import type { Database } from "@/lib/supabase/types";
 import { hasAccess } from "@/lib/db/access";
 import { isAdmin } from "@/lib/admin/isAdmin";
+import { sanitizeNext } from "@/lib/auth/sanitizeNext";
 
 /**
  * The redirect `NextResponse` is built up front so cookies attach
@@ -28,10 +29,9 @@ import { isAdmin } from "@/lib/admin/isAdmin";
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
-  // Only same-origin relative paths: `?next=@evil.com` or `?next=//evil.com`
-  // would otherwise make `${origin}${next}` resolve off-host.
-  const rawNext = searchParams.get("next");
-  const safeNext = rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : null;
+  // `${origin}${next}` would resolve off-host for an absolute or
+  // protocol-relative next — sanitizeNext is the one place that rejects those.
+  const safeNext = sanitizeNext(searchParams.get("next"));
 
   if (!code) {
     return NextResponse.redirect(`${origin}/login?error=auth-failed`);

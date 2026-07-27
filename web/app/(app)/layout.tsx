@@ -23,18 +23,33 @@ function isUnderOnboarding(pathname: string): boolean {
   return pathname === "/onboarding" || pathname.startsWith("/onboarding/");
 }
 
+/**
+ * AUTHFLOW: the original path+query the visitor was headed to, so the
+ * unauthenticated/no-access redirects below can round-trip it as `next`
+ * and land the visitor back where they started. Read lazily (only when a
+ * redirect is about to fire) so the fully-authenticated, complete-intake
+ * path never touches headers() at all — matches the existing onboarding
+ * gate's header read below.
+ */
+async function currentPathAndQuery(): Promise<string> {
+  const h = await headers();
+  return (h.get("x-pathname") ?? "") + (h.get("x-search") ?? "");
+}
+
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  if (!user) redirect(`/login?next=${encodeURIComponent(await currentPathAndQuery())}`);
 
   // Admins bypass the invite gate — they may not hold a claimed code.
   // (hasAccess would also grant them, but short-circuiting here skips the
   // DB round-trip entirely for the common admin-navigating-around case.)
   const admin = isAdmin(user);
-  if (!admin && !(await hasAccess(supabase, user))) redirect("/invite");
+  if (!admin && !(await hasAccess(supabase, user))) {
+    redirect(`/invite?next=${encodeURIComponent(await currentPathAndQuery())}`);
+  }
 
   const complete = await intakeComplete(supabase, user.id);
 

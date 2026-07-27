@@ -10,7 +10,17 @@ import { interpretClaimResponse } from "./claimOutcome";
 
 type Status = "idle" | "busy" | "conflict" | "error" | "success";
 
-export function InviteForm({ initialCode }: { initialCode: string }) {
+/**
+ * AUTHFLOW rule 3: claiming honors `next`. `next` arrives here already
+ * sanitized by the page (the untrusted-input boundary), so this is just
+ * the fallback for the common case — no code was mid-flight, land on
+ * onboarding as before.
+ */
+export function resolveClaimDestination(next: string | null): string {
+  return next ?? "/onboarding";
+}
+
+export function InviteForm({ initialCode, next }: { initialCode: string; next: string | null }) {
   const router = useRouter();
   const [code, setCode] = useState(initialCode);
   const [status, setStatus] = useState<Status>("idle");
@@ -31,7 +41,7 @@ export function InviteForm({ initialCode }: { initialCode: string }) {
 
     if (outcome.kind === "success") {
       setStatus("success");
-      router.push("/onboarding");
+      router.push(resolveClaimDestination(next));
       return;
     }
     setStatus(outcome.kind);
