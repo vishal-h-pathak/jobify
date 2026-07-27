@@ -65,6 +65,7 @@ for the full picture.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -141,26 +142,91 @@ def cost_usd(input_tokens: int, output_tokens: int, input_rate: float, output_ra
 _STAGE4_SYSTEM = """You are a job-fit verdict model for a hosted job-matching \
 service. You will be given one candidate's hunting thesis (their own \
 canonical statement of what they're looking for, their hard constraints, \
-and their energy signals) followed by a single job posting.
+and their energy signals), optionally a structured COMPENSATION block, \
+followed by a single job posting.
 
 Respond with ONLY a JSON object (no prose, no code fences), of the form:
 
 {
   "score": <float 0.0-1.0, overall fit against the thesis>,
+  "worth_showing": <bool, true only if this posting genuinely belongs in the candidate's feed>,
   "reason": "<1-2 sentence, specific, plain-language reason a candidate reading their own feed would understand>"
 }
 
 Score generously for anything squarely inside the thesis's stated lanes;
 score low for anything the thesis names as a disqualifier or an explicit
-non-fit. Do not fabricate posting details that aren't present in the text
-you were given.
+non-fit. `worth_showing` is a separate, real decision — set it false for
+anything that doesn't actually belong in the candidate's feed (a clear
+non-fit, something the thesis disqualifies, or a posting your own reason
+argues against); do not set it true just to fill the feed. If a
+COMPENSATION block is present, it is the authoritative statement of the
+candidate's floor — trust it over any comp language elsewhere, and never
+set `worth_showing` false, or lower `score`, solely because a posting pays
+MORE than the candidate's target; only compensation clearly BELOW the
+stated floor is ever a concern. Do not fabricate posting details that
+aren't present in the text you were given.
 """
 
 
-def _stage4_user_msg(thesis: str, posting: dict) -> str:
+def _parse_comp_range(raw: object) -> tuple[Optional[float], Optional[float]]:
+    """Parse `location_and_compensation.target_comp_usd` (a range string
+    "A-B", a single value, or unparseable) into `(floor, ceiling)`.
+    `ceiling` is None for a single value or an unparseable string.
+    Shared by the stage-1.5 comp-floor filter (`_profile_comp_floor`) and
+    the stage-4 verdict comp block (`_comp_block`) so the two can never
+    drift on what "the candidate's floor" means.
+    """
+    if raw is None:
+        return None, None
+    if isinstance(raw, (int, float)):
+        return float(raw), None
+    values = [float(m.replace(",", "")) for m in _BARE_NUMBER_RE.findall(str(raw))]
+    if not values:
+        return None, None
+    if len(values) == 1:
+        return values[0], None
+    return min(values), max(values)
+
+
+def _comp_block(profile: dict) -> str:
+    """Deterministic, direction-explicit rendering of the candidate's
+    stated comp target for the stage-4 verdict prompt — U2 live evidence
+    (FEEDBACK_U2_2026-07-21.md / session 59): every verdict on her feed
+    read her $110k target as a compensation CEILING ("exceeds your
+    $110,000 compensation ceiling"), when it is in fact a FLOOR
+    (`target_comp_usd: 110000-200000`, "no pay cut" semantics — same as
+    `_profile_comp_floor`). The old prompt never rendered comp at all, so
+    the model was inferring direction from the free-text thesis alone;
+    this renders it explicitly enough that "AT LEAST"/"floor" can't be
+    misread as a maximum. Returns "" (no COMPENSATION section at all)
+    when `target_comp_usd` is absent or unparseable — never a guessed
+    floor.
+    """
+    raw = (profile.get("location_and_compensation") or {}).get("target_comp_usd")
+    floor, ceiling = _parse_comp_range(raw)
+    if floor is None:
+        return ""
+    if ceiling is not None:
+        return (
+            f"Compensation: the candidate requires AT LEAST ${floor:,.0f} (floor). "
+            f"Target range ${floor:,.0f}–${ceiling:,.0f}. A posting paying MORE "
+            "than the target is a positive, never a concern. Only flag compensation "
+            "when a posting clearly pays BELOW the floor."
+        )
+    return (
+        f"Compensation: the candidate requires AT LEAST ${floor:,.0f} (floor). "
+        "A posting paying MORE than this is a positive, never a concern. Only flag "
+        "compensation when a posting clearly pays BELOW the floor."
+    )
+
+
+def _stage4_user_msg(thesis: str, posting: dict, profile: dict) -> str:
+    comp_block = _comp_block(profile)
+    comp_section = f"=== COMPENSATION ===\n{comp_block}\n\n" if comp_block else ""
     return (
         "=== CANDIDATE THESIS ===\n"
         f"{thesis.strip()}\n\n"
+        f"{comp_section}"
         "=== JOB POSTING ===\n"
         f"Title: {posting.get('title') or ''}\n"
         f"Company: {posting.get('company') or ''}\n"
@@ -180,13 +246,26 @@ def _extract_json_object(text: str) -> dict:
 
 
 def _stage4_verdict(
-    user_id: str, thesis: str, posting: dict, *, api_key: Optional[str] = None,
+    user_id: str, thesis: str, posting: dict, profile: dict, *, api_key: Optional[str] = None,
     counters: Optional[dict] = None,
 ) -> Optional[dict]:
     """One stage-4 LLM call for one posting. Always writes the
     `llm_verdict` ledger row (real tokens were spent regardless of
     whether the response parsed); returns `None` (no `matches` write)
     only when the response itself wasn't usable JSON.
+
+    `profile` (U2 fix, session 59): threaded through to `_stage4_user_msg`
+    so the verdict prompt can render a deterministic, direction-explicit
+    COMPENSATION block from `profile['location_and_compensation']` — see
+    `_comp_block`.
+
+    Returns `{"score", "worth_showing", "reason"}` on a parseable
+    response — `worth_showing` (U2 fix, session 59: verdict quality
+    floor) is the model's explicit fit decision, separate from `score`;
+    a missing/malformed `worth_showing` key defaults to `True` (fail-open
+    — a truncated or older-shaped response degrades to the pre-fix
+    "surface everything scored" behavior rather than silently hiding a
+    posting).
 
     `api_key` (H6 BYO keys): routes this call through the user's own
     decrypted key instead of the pool's, and tags the ledger row
@@ -204,7 +283,7 @@ def _stage4_verdict(
     """
     call_kwargs: dict = dict(
         system=_STAGE4_SYSTEM,
-        prompt=_stage4_user_msg(thesis, posting),
+        prompt=_stage4_user_msg(thesis, posting, profile),
         model=STAGE4_MODEL,
         max_tokens=STAGE4_MAX_TOKENS,
     )
@@ -241,7 +320,8 @@ def _stage4_verdict(
         score = 0.0
     score = max(0.0, min(1.0, score))
     reason = str(data.get("reason") or "").strip()
-    return {"score": score, "reason": reason}
+    worth_showing = bool(data.get("worth_showing", True))
+    return {"score": score, "worth_showing": worth_showing, "reason": reason}
 
 
 # ── Stage 2 support: targeting-tier text + rubric compile/cache ──────────
@@ -270,6 +350,92 @@ def targeting_text(profile: dict) -> str:
         if tier.get("notes"):
             lines.append(f"  notes: {tier['notes']}")
     return "\n".join(lines)
+
+
+def _deterministic_gate_values(profile: dict) -> tuple[bool, str, Optional[float]]:
+    """`(remote_acceptable, base_location_substring, comp_floor_usd)`
+    computed straight from `profile.yml`'s structured
+    `location_and_compensation` block — the same three values
+    `_apply_deterministic_gates` overwrites the compiler's own output
+    with. `remote_acceptable` defaults to `True` (permissive — same
+    missing-field default `jobify.hunt.rubric._location_tier` already
+    uses) when the field is absent; `base_location_substring` is the
+    token before the first comma of `base` (e.g. "Atlanta, GA" ->
+    "atlanta"), or "" when `base` is absent; `comp_floor_usd` reuses
+    `_profile_comp_floor` (the same parser the stage-1.5 comp filter and
+    the stage-4 verdict comp block use — one parser, never three).
+    """
+    loc = profile.get("location_and_compensation") or {}
+    remote_acceptable = bool(loc.get("remote_acceptable", True))
+    base = str(loc.get("base") or "").strip()
+    base_location_substring = base.split(",")[0].strip().lower() if base else ""
+    comp_floor_usd = _profile_comp_floor(profile)
+    return remote_acceptable, base_location_substring, comp_floor_usd
+
+
+def _apply_deterministic_gates(user_id: str, rubric: dict, profile: dict) -> dict:
+    """U2 fix (session 59): overwrite `gates.location.remote_acceptable`,
+    `gates.location.base_location_substring`, and `gates.comp_floor_usd`
+    with values computed IN CODE from `profile.yml` — never LLM-derived.
+
+    Live evidence (FEEDBACK_U2_2026-07-21.md): U2's real compiled rubric
+    came back with `remote_acceptable: false` and
+    `base_location_substring: ""`, directly contradicting her actual
+    profile (`remote_acceptable: true`, base "Atlanta, GA") — the LLM
+    compiler mis-derived both, most likely from her nuanced
+    `in_person_acceptable` free text ("Hybrid in Atlanta acceptable;
+    hybrid in New York acceptable only near $200,000"). These three
+    fields all have an unambiguous source of truth in structured profile
+    data, so there is no reason to trust an LLM's derivation of them at
+    all — everything genuinely judgment-shaped (`term_groups`,
+    `disqualifiers`, `tier_hints`, `gates.degree_gate`) is left exactly
+    as the compiler emitted it; only these three are ever touched here.
+
+    Logs a WARNING — the drift telemetry the brief asks for — whenever
+    the model's own emitted value disagreed with the deterministic one,
+    so how often (and how badly) the compiler mis-derives these is a
+    real, searchable number instead of invisible until the next live
+    incident. Returns a NEW dict; `rubric` is not mutated.
+    """
+    remote_acceptable, base_location_substring, comp_floor_usd = _deterministic_gate_values(profile)
+
+    rubric = copy.deepcopy(rubric)
+    gates = rubric.get("gates")
+    if not isinstance(gates, dict):
+        gates = {}
+        rubric["gates"] = gates
+    location = gates.get("location")
+    if not isinstance(location, dict):
+        location = {}
+        gates["location"] = location
+
+    llm_remote_acceptable = location.get("remote_acceptable")
+    llm_base_location_substring = location.get("base_location_substring")
+    llm_comp_floor_usd = gates.get("comp_floor_usd")
+
+    if llm_remote_acceptable != remote_acceptable:
+        logger.warning(
+            "fanout: rubric gate drift user_id=%s field=gates.location.remote_acceptable "
+            "llm=%r deterministic=%r (deterministic value wins)",
+            user_id, llm_remote_acceptable, remote_acceptable,
+        )
+    if str(llm_base_location_substring or "").strip().lower() != base_location_substring:
+        logger.warning(
+            "fanout: rubric gate drift user_id=%s field=gates.location.base_location_substring "
+            "llm=%r deterministic=%r (deterministic value wins)",
+            user_id, llm_base_location_substring, base_location_substring,
+        )
+    if llm_comp_floor_usd != comp_floor_usd:
+        logger.warning(
+            "fanout: rubric gate drift user_id=%s field=gates.comp_floor_usd "
+            "llm=%r deterministic=%r (deterministic value wins)",
+            user_id, llm_comp_floor_usd, comp_floor_usd,
+        )
+
+    location["remote_acceptable"] = remote_acceptable
+    location["base_location_substring"] = base_location_substring
+    gates["comp_floor_usd"] = comp_floor_usd
+    return rubric
 
 
 def _ensure_rubric(
@@ -309,12 +475,13 @@ def _ensure_rubric(
 
     thesis = load_thesis(profile_dir)
     disqualifiers_text = load_disqualifiers_text(profile_dir)
+    profile = load_profile(profile_dir)
     # NB: local var name intentionally differs from the module-level
     # `targeting_text` function (renamed from `_targeting_text`) — reusing
     # the function's own name as a local target here would shadow it for
     # this whole function body and raise UnboundLocalError on this exact
     # line.
-    targeting_tier_text = targeting_text(load_profile(profile_dir))
+    targeting_tier_text = targeting_text(profile)
 
     compile_kwargs: dict = dict(
         thesis=thesis, disqualifiers_text=disqualifiers_text, targeting_text=targeting_tier_text,
@@ -322,6 +489,7 @@ def _ensure_rubric(
     if api_key:
         compile_kwargs["api_key"] = api_key
     data, usage = rubric_module.compile_rubric_with_usage(**compile_kwargs)
+    data = _apply_deterministic_gates(user_id, data, profile)
     db.set_compiled_rubric(user_id, data)
     cost = cost_usd(
         usage.input_tokens, usage.output_tokens,
@@ -564,15 +732,13 @@ def _profile_comp_floor(profile: dict) -> Optional[float]:
     as a string — e.g. `"175000-205000"`). Takes the LOW end of a range,
     same "no pay cut" semantics as `jobify.hunt.rubric._parse_comp_usd`.
     Returns None (filter no-ops) if the field is absent or unparseable —
-    never a guessed floor.
+    never a guessed floor. Thin wrapper over `_parse_comp_range` (shared
+    with the stage-4 verdict comp block, `_comp_block`) — this filter
+    only ever needed the floor half.
     """
     raw = (profile.get("location_and_compensation") or {}).get("target_comp_usd")
-    if raw is None:
-        return None
-    if isinstance(raw, (int, float)):
-        return float(raw)
-    values = [float(m.replace(",", "")) for m in _BARE_NUMBER_RE.findall(str(raw))]
-    return min(values) if values else None
+    floor, _ceiling = _parse_comp_range(raw)
+    return floor
 
 
 def _posting_comp_value(posting: dict) -> Optional[float]:
@@ -838,7 +1004,7 @@ def _run_user_ladder(
                 for i, (posting, _result) in enumerate(ranked[:HOSTED_STAGE4_TOP_N], start=1):
                     try:
                         verdict = _stage4_verdict(
-                            user_id, thesis, posting, api_key=byo_key, counters=counters,
+                            user_id, thesis, posting, profile, api_key=byo_key, counters=counters,
                         )
                     except Exception as exc:  # noqa: BLE001 — one bad call must not drop the rest of the top-N
                         logger.error(
@@ -847,14 +1013,14 @@ def _run_user_ladder(
                         )
                         continue
                     counters["stage4_calls"] += 1
-                    if verdict is not None:
-                        # A real, parseable verdict — P0.5: this is the
-                        # only path that ever sets `surfaced`. Score is a
-                        # continuum, not a second reject threshold (P0
-                        # non-goal: "more scoring sophistication" is out
-                        # of scope) — a low-scoring verdict still
-                        # surfaces, just sorts low; the LLM's own `reason`
-                        # already explains a poor fit when applicable.
+                    if verdict is not None and verdict["worth_showing"]:
+                        # A real, parseable, POSITIVE verdict — P0.5: this
+                        # is the only path that ever sets `surfaced`.
+                        # Score is a continuum among surfaced postings,
+                        # not a second reject threshold — a low-scoring
+                        # but worth-showing verdict still surfaces, just
+                        # sorts low; `worth_showing` (U2 fix, session 59:
+                        # verdict quality floor) is the actual fit gate.
                         db.upsert_match(
                             user_id, posting["id"],
                             llm_score=verdict["score"],
@@ -862,6 +1028,26 @@ def _run_user_ladder(
                             reason_source="llm",
                             status="surfaced",
                             reject_reason=None,
+                        )
+                    elif verdict is not None:
+                        # U2 fix (session 59): a real, parseable verdict
+                        # that the model itself decided ISN'T worth
+                        # showing — funnel-visible (`rejected_llm` with
+                        # the model's own reason as `reject_reason`), but
+                        # never surfaced as a "match". Previously stage 4
+                        # promoted every parseable verdict unconditionally,
+                        # which is how U2's feed filled with postings whose
+                        # own verdict text argued against the job.
+                        counters["stage4_not_worth_showing"] = (
+                            counters.get("stage4_not_worth_showing", 0) + 1
+                        )
+                        db.upsert_match(
+                            user_id, posting["id"],
+                            llm_score=verdict["score"],
+                            reason=verdict["reason"],
+                            reason_source="llm",
+                            status="rejected_llm",
+                            reject_reason=(verdict["reason"] or "LLM verdict: not worth showing")[:500],
                         )
                     else:
                         # Real tokens were spent (ledger row already
@@ -928,7 +1114,12 @@ def run_fanout_cycle(user_ids: Optional[list[str]] = None) -> dict[str, int]:
     counts of stage 1 input / stage 1 survivors / stage 3 scores, summed
     across the cycle), and `cost_usd` (running total of every ledger
     write this cycle, from `_ensure_rubric`, `_stage4_verdict`, and
-    `_stage3_embed_rerank`'s embedding calls).
+    `_stage3_embed_rerank`'s embedding calls). `stage4_not_worth_showing`
+    (U2 fix, session 59: verdict quality floor) counts stage-4 verdicts
+    that parsed fine but the model itself decided didn't belong in the
+    feed (`worth_showing: false`) — a real, funnel-visible number now
+    that this can be nonzero at all; previously every parseable verdict
+    surfaced unconditionally.
     """
     ids = user_ids if user_ids is not None else db.list_profile_user_ids()
 
@@ -948,6 +1139,7 @@ def run_fanout_cycle(user_ids: Optional[list[str]] = None) -> dict[str, int]:
         "postings_scored": 0,
         "matches_written": 0,
         "stage4_calls": 0,
+        "stage4_not_worth_showing": 0,
         "users_budget_stopped": 0,
         "users_global_capped": 0,
         "postings_considered": 0,

@@ -103,6 +103,17 @@ def test_derive_tags_from_titles_caps_at_three():
     assert len(candidates.derive_tags_from_titles(titles)) <= 3
 
 
+def test_derive_tags_from_titles_marketing_comms_dominant_keyword():
+    """U2 fix (session 59): mirrors `web/lib/portals/tierPacks.ts`'s new
+    marketing-comms rule — a board whose live posting titles skew
+    comms/brand/content now auto-tags marketing-comms, same as any other
+    vocabulary tag."""
+    titles = [
+        "Director of Communications", "Content Strategist", "Brand Manager", "Recruiter",
+    ]
+    assert candidates.derive_tags_from_titles(titles) == ["marketing-comms"]
+
+
 # ── enqueue: dedup ─────────────────────────────────────────────────────────
 
 

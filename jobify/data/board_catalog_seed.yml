@@ -27,7 +27,30 @@
 # Software's own real, live job board — not a mistake.
 #
 # tags vocabulary: infra, devtools, product, fintech, data-ai, enterprise,
-# growth-startup, big-tech-adjacent, remote-first
+# growth-startup, big-tech-adjacent, remote-first, marketing-comms,
+# consumer-brand
+#
+# session 59 additions (U2 fix, verified live 2026-07-27): 30 new boards
+# (23 Greenhouse, 4 Ashby, 3 Lever) tagged marketing-comms/consumer-brand,
+# plus 2 already-catalogued Ashby boards (patreon, substack) TAG-EXTENDED
+# in place rather than duplicated. The catalog had effectively zero
+# comms/marketing/brand-side employers (every S2/S3 board skews
+# AI/tech), so a comms-background user's tiers had nothing relevant to
+# select from. Curated from consumer brands, media/entertainment, and
+# health/retail/hospitality companies where in-house comms/content/brand
+# roles actually live. Every one live-verified this session: fetched its
+# real public API endpoint, confirmed HTTP 200 with a nonzero
+# live-posting count and the response's own company-name signal
+# (Greenhouse `jobs[].company_name`; Ashby/Lever lack that field, so
+# verified via a live posting's own `jobUrl`/`hostedUrl`
+# self-referencing the intended company slug — same discipline the S3
+# session used). Two live near-miss collisions caught and DROPPED during
+# this verification (not in the boards list below): an Ashby
+# "brooklinen" board duplicate of the Greenhouse one already added
+# (picked one, not both), and a Lever "factor" slug that resolved to an
+# unrelated company (titles were European contract-management roles, not
+# the US meal-kit brand) — a reminder of why every slug gets verified
+# rather than guessed from a company name alone.
 #
 # Imported by web/scripts/importBoardCatalog.ts (idempotent upsert on
 # (ats, slug)). Not run by this commit — the cockpit runs it once 0015 is
@@ -712,11 +735,15 @@ boards:
   - ats: ashby
     slug: patreon
     company_name: Patreon
-    tags: [product, growth-startup]
+    # session 59 (U2 fix): tag-extended, not duplicated — this row
+    # predates the marketing-comms/consumer-brand vocabulary.
+    tags: [product, growth-startup, marketing-comms, consumer-brand]
   - ats: ashby
     slug: substack
     company_name: Substack
-    tags: [product, growth-startup]
+    # session 59 (U2 fix): tag-extended, not duplicated — see patreon
+    # above.
+    tags: [product, growth-startup, marketing-comms, consumer-brand]
   - ats: ashby
     slug: fullstory
     company_name: Fullstory
@@ -775,3 +802,127 @@ boards:
     slug: tsys/wd1/TSYS
     company_name: TSYS (Global Payments)
     tags: [enterprise, fintech]
+
+  # ── session 59 additions (U2 fix) — marketing-comms/consumer-brand (30) ──
+  # Greenhouse (22), Ashby (6), Lever (2) — see file header for the
+  # verification method and the two dropped near-miss collisions.
+  - ats: greenhouse
+    slug: glossier
+    company_name: Glossier
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: stitchfix
+    company_name: Stitch Fix
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: bombas
+    company_name: Bombas
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: sweetgreen
+    company_name: Sweetgreen
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: calm
+    company_name: Calm.com
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: buzzfeed
+    company_name: BuzzFeed
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: voxmedia
+    company_name: Vox Media
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: thrivemarket
+    company_name: Thrive Market
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: everlane
+    company_name: Everlane
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: reformation
+    company_name: Reformation
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: thirdlove
+    company_name: ThirdLove
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: harrys
+    company_name: Harry's
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: ritual
+    company_name: Ritual
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: olipop
+    company_name: OLIPOP
+    tags: [marketing-comms, consumer-brand, growth-startup]
+  - ats: greenhouse
+    slug: liquiddeath
+    company_name: Liquid Death
+    tags: [marketing-comms, consumer-brand, growth-startup]
+  - ats: greenhouse
+    slug: oura
+    company_name: Oura
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: cameo
+    company_name: Cameo
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: brooklinen
+    company_name: Brooklinen
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: parachutehome
+    company_name: Parachute Home
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: a24
+    company_name: A24
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: barstoolsports
+    company_name: Barstool Sports
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: opentable
+    company_name: OpenTable
+    tags: [marketing-comms, consumer-brand]
+  - ats: ashby
+    slug: rothys
+    company_name: Rothy's
+    tags: [marketing-comms, consumer-brand]
+  - ats: ashby
+    slug: whoop
+    company_name: WHOOP
+    tags: [marketing-comms, consumer-brand, growth-startup]
+  - ats: ashby
+    slug: eightsleep
+    company_name: Eight Sleep
+    tags: [marketing-comms, consumer-brand, growth-startup]
+  - ats: ashby
+    slug: away
+    company_name: Away
+    tags: [marketing-comms, consumer-brand]
+  - ats: greenhouse
+    slug: hellofresh
+    company_name: HelloFresh
+    tags: [marketing-comms, consumer-brand]
+  - ats: lever
+    slug: chownow
+    company_name: ChowNow
+    tags: [marketing-comms, consumer-brand]
+  - ats: lever
+    slug: tovala
+    company_name: Tovala
+    tags: [marketing-comms, consumer-brand]
+  - ats: lever
+    slug: our-place
+    company_name: Our Place
+    tags: [marketing-comms, consumer-brand, growth-startup]
