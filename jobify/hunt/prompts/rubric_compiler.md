@@ -60,8 +60,23 @@ shape exactly:
   of session 47 (HUNT2 P0.7, owner directive) — the scorer no longer
   disqualifies a posting for its location; it ranks by a separate
   location-tier dimension derived from these same two fields instead.
+  **Best-effort only, as of session 59 (U2 fix):** the caller
+  (`jobify.hosted.fanout._apply_deterministic_gates`) OVERWRITES both
+  fields after compile with values computed straight from
+  `profile.yml`'s structured `location_and_compensation.remote_acceptable`
+  / `.base` — never trusted from this output. Live evidence
+  (`FEEDBACK_U2_2026-07-21.md`): the compiler mis-derived both for a real
+  user (`remote_acceptable: false`, `base_location_substring: ""` against
+  a profile stating `remote_acceptable: true`, base "Atlanta, GA"),
+  almost certainly from her nuanced `in_person_acceptable` free text. Do
+  your best here anyway — the deterministic overwrite logs a drift
+  warning when it disagrees with you, which is only useful telemetry if
+  you're still genuinely trying.
 - **gates.comp_floor_usd**: the candidate's stated "no pay cut" floor from
-  thesis.md / profile.yml, or `null` if none is stated.
+  thesis.md / profile.yml, or `null` if none is stated. **Also
+  overwritten post-compile** (same function, same reasoning) with the low
+  end of `profile.yml`'s `location_and_compensation.target_comp_usd` —
+  same caveat as `gates.location` above.
 - **gates.degree_gate**: `true` if thesis.md's degree-gate rule applies to
   this candidate (an MS/PhD-required posting with no equivalent-experience
   escape hatch should be flagged, not silently dropped), else `false`.

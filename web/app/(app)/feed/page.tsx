@@ -13,6 +13,7 @@ import {
   type PostingRow,
 } from "@/lib/db/matches";
 import { RunHuntButton } from "./RunHuntButton";
+import { deriveFeedEmptyState } from "./feedEmptyState";
 import { deriveHuntButtonState } from "./huntButtonState";
 
 const DEFAULT_HUNT_COOLDOWN_HOURS = 6;
@@ -73,6 +74,18 @@ export default async function FeedPage() {
   if (matchesError) throw matchesError;
   const matches: MatchRow[] = matchesData ?? [];
 
+  // U2 fix (session 59 — verdict quality floor): a `rejected_llm` count
+  // for this user distinguishes "never hunted" from "hunted, and nothing
+  // cleared the bar this cycle" for the zero-match empty state below
+  // (`deriveFeedEmptyState`) — only fetched as a count (`head: true`),
+  // never the rows themselves.
+  const { count: rejectedLlmCount, error: rejectedLlmError } = await supabase
+    .from("matches")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", user.id)
+    .eq("status", "rejected_llm");
+  if (rejectedLlmError) throw rejectedLlmError;
+
   const postingIds = matches.map((m) => m.posting_id);
   let postings: PostingRow[] = [];
   if (postingIds.length > 0) {
@@ -103,6 +116,10 @@ export default async function FeedPage() {
   const totalMatches = withPosting.length;
   const onlyDismissedLeft =
     totalMatches > 0 && newSorted.length === 0 && savedSorted.length === 0 && appliedSorted.length === 0;
+  const emptyState = deriveFeedEmptyState({
+    totalMatches,
+    rejectedLlmCount: rejectedLlmCount ?? 0,
+  });
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-6 py-10">
@@ -115,12 +132,7 @@ export default async function FeedPage() {
         <RunHuntButton initialState={huntButtonState} />
       </div>
 
-      {totalMatches === 0 && (
-        <EmptyState
-          heading="Nothing yet"
-          message="Your profile is built — the hunter runs when you ask. Hit &quot;Run my hunt&quot; above to get your first results."
-        />
-      )}
+      {emptyState && <EmptyState heading={emptyState.heading} message={emptyState.message} />}
 
       {onlyDismissedLeft && (
         <EmptyState

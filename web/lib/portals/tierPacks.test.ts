@@ -7,6 +7,7 @@ const FIXTURE_CATALOG: CatalogBoardInput[] = [
   { ats: "ashby", slug: "growthy", company_name: "Growthy", tags: ["product", "growth-startup"] },
   { ats: "greenhouse", slug: "bigco", company_name: "BigCo", tags: ["big-tech-adjacent", "enterprise"] },
   { ats: "lever", slug: "mlshop", company_name: "MLShop", tags: ["data-ai", "growth-startup"] },
+  { ats: "greenhouse", slug: "commsco", company_name: "CommsCo", tags: ["marketing-comms", "consumer-brand"] },
 ];
 
 describe("deriveTagsFromKeywords", () => {
@@ -29,6 +30,31 @@ describe("deriveTagsFromKeywords", () => {
     expect(tags.has("infra")).toBe(true);
     expect(tags.has("devtools")).toBe(true);
     expect(tags.has("growth-startup")).toBe(true);
+  });
+
+  // U2 fix (session 59): the board catalog had effectively zero
+  // comms/marketing/brand-side employers and the vocabulary had no way
+  // to express them — a comms-background user's tiers could never
+  // select a relevant pack. See FEEDBACK_U2_2026-07-21.md.
+  it("maps comms/content/editorial/brand/PR/communications keywords to marketing-comms", () => {
+    expect(deriveTagsFromKeywords("Director of Communications")).toEqual(new Set(["marketing-comms"]));
+    expect(deriveTagsFromKeywords("Content Strategist")).toEqual(new Set(["marketing-comms"]));
+    expect(deriveTagsFromKeywords("Editorial Lead")).toEqual(new Set(["marketing-comms"]));
+    expect(deriveTagsFromKeywords("Brand Manager")).toEqual(new Set(["marketing-comms"]));
+    expect(deriveTagsFromKeywords("Head of PR")).toEqual(new Set(["marketing-comms"]));
+    expect(deriveTagsFromKeywords("Growth Marketing Manager")).toEqual(new Set(["marketing-comms"]));
+  });
+
+  it("maps DTC/consumer-brand keywords to consumer-brand", () => {
+    expect(deriveTagsFromKeywords("Consumer brand marketing lead")).toEqual(
+      new Set(["marketing-comms", "consumer-brand"])
+    );
+    expect(deriveTagsFromKeywords("DTC growth team")).toEqual(new Set(["consumer-brand"]));
+  });
+
+  it("does not false-positive on 'PR' as a substring of unrelated words (e.g. Program Manager)", () => {
+    expect(deriveTagsFromKeywords("Senior Program Manager")).toEqual(new Set());
+    expect(deriveTagsFromKeywords("Provider Relations Coordinator")).toEqual(new Set());
   });
 });
 
@@ -58,7 +84,15 @@ describe("computeTierPack", () => {
 
   it("falls back to the full (remote-filtered) catalog order when no keyword rule fires", () => {
     const pack = computeTierPack({ tiers: [{ label: "Executive Assistant" }] }, FIXTURE_CATALOG);
-    expect(pack.map((b) => b.slug)).toEqual(["infraco", "platformly", "growthy", "bigco", "mlshop"]);
+    expect(pack.map((b) => b.slug)).toEqual(["infraco", "platformly", "growthy", "bigco", "mlshop", "commsco"]);
+  });
+
+  it("ranks a marketing-comms-tagged board first for a comms/brand targeting profile (U2 fix)", () => {
+    const pack = computeTierPack(
+      { tiers: [{ label: "Director of Communications", notes: "Consumer brand marketing" }] },
+      FIXTURE_CATALOG
+    );
+    expect(pack.map((b) => b.slug)).toEqual(["commsco"]);
   });
 
   it("caps the pack at the given size", () => {

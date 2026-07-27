@@ -38,6 +38,18 @@ const KEYWORD_TAG_RULES: Array<{ keywords: string[]; tags: string[] }> = [
   { keywords: ["enterprise", "b2b"], tags: ["enterprise"] },
   { keywords: ["startup", "early stage", "early-stage"], tags: ["growth-startup"] },
   { keywords: ["faang", "big tech", "large scale", "large-scale"], tags: ["big-tech-adjacent"] },
+  // U2 fix (session 59): the board catalog had effectively zero
+  // comms/marketing/brand-side employers and the tag vocabulary had no
+  // way to express them, so a comms-background user's tiers could never
+  // select a relevant pack — see FEEDBACK_U2_2026-07-21.md.
+  {
+    keywords: [
+      "communications", "comms", "content", "editorial", "brand", "public relations",
+      "pr ", "marketing", "copywriter", "copywriting", "social media",
+    ],
+    tags: ["marketing-comms"],
+  },
+  { keywords: ["consumer brand", "consumer-brand", "dtc", "direct-to-consumer"], tags: ["consumer-brand"] },
 ];
 
 export function deriveTagsFromKeywords(text: string): Set<string> {

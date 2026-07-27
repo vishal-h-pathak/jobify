@@ -9,6 +9,7 @@ faked) — no network, matching `tests/test_hosted_discovery.py` and
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -496,6 +497,186 @@ def test_stage4_unparseable_verdict_gets_rejected_llm(tmp_path, monkeypatch):
         kw for pid, kw in upserts if pid == "p-1" and kw.get("status") == "rejected_llm"
     )
     assert stage4_write["reject_reason"] == "LLM verdict unparseable"
+
+
+# ── U2 fix (session 59): direction-explicit comp rendering ───────────────
+# Live evidence (FEEDBACK_U2_2026-07-21.md): every stage-4 verdict on U2's
+# real feed read her $110k `target_comp_usd` floor as a CEILING ("exceeds
+# your $110,000 compensation ceiling") — the old prompt never rendered
+# comp at all, so the model inferred direction from the free-text thesis
+# alone. `_comp_block` renders it deterministically enough that "floor"/
+# "AT LEAST" can't be misread as a maximum.
+
+
+def test_comp_block_range_uses_floor_framing_never_ceiling():
+    text = fanout._comp_block(
+        {"location_and_compensation": {"target_comp_usd": "110000-200000"}}
+    )
+    assert "AT LEAST $110,000" in text
+    assert "floor" in text.lower()
+    assert "$110,000" in text and "$200,000" in text
+    assert "<" not in text
+    assert "ceiling" not in text.lower()
+    assert "maximum" not in text.lower()
+
+
+def test_comp_block_single_value_still_floor_framed():
+    text = fanout._comp_block({"location_and_compensation": {"target_comp_usd": "150000"}})
+    assert "AT LEAST $150,000" in text
+    assert "<" not in text
+
+
+def test_comp_block_absent_or_unparseable_is_empty():
+    assert fanout._comp_block({}) == ""
+    assert fanout._comp_block({"location_and_compensation": {"target_comp_usd": "n/a"}}) == ""
+    assert fanout._comp_block({"location_and_compensation": {"target_comp_usd": "market rate"}}) == ""
+
+
+def test_parse_comp_range_matches_profile_comp_floor():
+    """`_profile_comp_floor` (the stage-1.5 comp-filter parser) and
+    `_comp_block` (the stage-4 prompt renderer) must never drift on what
+    "the candidate's floor" means — both are thin wrappers over the same
+    `_parse_comp_range`."""
+    profile = {"location_and_compensation": {"target_comp_usd": "110000-200000"}}
+    floor, ceiling = fanout._parse_comp_range(
+        profile["location_and_compensation"]["target_comp_usd"]
+    )
+    assert (floor, ceiling) == (110000.0, 200000.0)
+    assert fanout._profile_comp_floor(profile) == floor
+
+
+def test_stage4_prompt_carries_comp_block_for_u2_shaped_profile(tmp_path, monkeypatch):
+    """Integration-level check (Alex Quinn fixture shapes, U2's exact
+    field shape — range comp, `remote_acceptable: true`) that the real
+    prompt sent to the stage-4 LLM contains the floor framing and never
+    the old ambiguous/ceiling framing."""
+    profile_yaml = (
+        _DEFAULT_PROFILE_YAML
+        + "location_and_compensation:\n"
+        + "  base: Atlanta, GA\n"
+        + "  remote_acceptable: true\n"
+        + '  target_comp_usd: "110000-200000"\n'
+    )
+    d = _profile_dir(tmp_path, "user-a", profile_yaml=profile_yaml)
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-1")])
+
+    calls = _fixed_verdict_llm(monkeypatch)
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: None)
+
+    fanout.run_fanout_cycle(["user-a"])
+
+    assert len(calls) == 1
+    prompt = calls[0]["prompt"]
+    assert "AT LEAST $110,000" in prompt
+    assert "$110,000" in prompt and "$200,000" in prompt
+    assert "compensation ceiling" not in prompt.lower()
+    assert "<$110" not in prompt and "< $110" not in prompt
+
+
+# ── U2 fix (session 59): verdict quality floor (worth_showing) ───────────
+# Live evidence: 15 "matches" scored 25-38%, most with verdict text
+# ARGUING AGAINST the job — surfaced anyway because stage 4 promoted every
+# parseable verdict unconditionally. `worth_showing` is the model's own
+# explicit fit decision; a negative one keeps `status=rejected_llm`
+# (funnel-visible) but is never surfaced as a "match".
+
+
+def test_stage4_negative_verdict_gets_rejected_llm_not_surfaced(tmp_path, monkeypatch):
+    d = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-1")])
+
+    monkeypatch.setattr(
+        llm, "complete_with_usage",
+        lambda **kw: (
+            json.dumps({
+                "score": 0.3, "worth_showing": False,
+                "reason": "Doesn't match the candidate's demonstrated profile.",
+            }),
+            CompletionUsage(input_tokens=100, output_tokens=20),
+        ),
+    )
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    stage4_write = next(kw for pid, kw in upserts if pid == "p-1" and kw.get("reason_source") == "llm")
+    assert stage4_write["status"] == "rejected_llm"
+    assert stage4_write["status"] != "surfaced"
+    assert "demonstrated profile" in stage4_write["reject_reason"]
+    assert counters["stage4_not_worth_showing"] == 1
+
+
+def test_stage4_all_negative_verdicts_yields_zero_surfaced_matches(tmp_path, monkeypatch):
+    """Rails: unchanged call caps; when every verdict is negative the user
+    simply gets zero new surfaced matches this cycle — stage 4 does NOT
+    backfill top-N with anything to keep the feed non-empty."""
+    d = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        db, "get_unmatched_postings",
+        lambda uid: [_posting("p-1"), _posting("p-2"), _posting("p-3")],
+    )
+    monkeypatch.setattr(
+        llm, "complete_with_usage",
+        lambda **kw: (
+            json.dumps({"score": 0.2, "worth_showing": False, "reason": "not a fit"}),
+            CompletionUsage(input_tokens=100, output_tokens=20),
+        ),
+    )
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    counters = fanout.run_fanout_cycle(["user-a"])
+
+    assert not any(kw.get("status") == "surfaced" for _pid, kw in upserts)
+    assert counters["stage4_not_worth_showing"] == 3
+    assert counters["stage4_calls"] == 3
+
+
+def test_stage4_verdict_missing_worth_showing_key_defaults_true(tmp_path, monkeypatch):
+    """Fail-open: a truncated/older-shaped response with no `worth_showing`
+    key at all degrades to the pre-fix "surface whatever scored" behavior
+    rather than silently hiding a posting."""
+    d = _profile_dir(tmp_path, "user-a")
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: _rubric())
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-1")])
+    monkeypatch.setattr(
+        llm, "complete_with_usage",
+        lambda **kw: (
+            json.dumps({"score": 0.7, "reason": "good fit"}),  # no worth_showing key
+            CompletionUsage(input_tokens=100, output_tokens=20),
+        ),
+    )
+    upserts: list[tuple] = []
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: upserts.append((pid, kw)))
+
+    fanout.run_fanout_cycle(["user-a"])
+
+    stage4_write = next(kw for pid, kw in upserts if pid == "p-1" and kw.get("reason_source") == "llm")
+    assert stage4_write["status"] == "surfaced"
 
 
 def test_stage2_survivor_not_in_top_n_stays_rejected_rerank(tmp_path, monkeypatch):
@@ -1053,6 +1234,158 @@ def test_rubric_compile_never_leaks_profile_across_users(tmp_path, monkeypatch):
     assert ("user-b", "rubric_compile") in ledger_events
 
 
+# ── U2 fix (session 59): rubric compiler determinism ──────────────────────
+# Live evidence (FEEDBACK_U2_2026-07-21.md): U2's profile.yml had
+# `remote_acceptable: true` and base "Atlanta, GA" — ALL CORRECT — but her
+# compiled rubric's gates came back `remote_acceptable: false`,
+# `base_location_substring: ""`, contradicting her own profile. The LLM
+# compiler mis-derived both. `gates.location.remote_acceptable`,
+# `gates.location.base_location_substring`, and `gates.comp_floor_usd` are
+# now COPIED IN CODE from profile.yml after every compile, overwriting
+# whatever the model emitted.
+
+# U2's exact field shapes (FEEDBACK_U2_2026-07-21.md): range comp,
+# `remote_acceptable: true`, a nuanced `in_person_acceptable` string that
+# is exactly what the compiler mis-derived `remote_acceptable`/
+# `base_location_substring` FROM.
+_U2_SHAPED_PROFILE = {
+    "location_and_compensation": {
+        "base": "Atlanta, GA",
+        "remote_acceptable": True,
+        "in_person_acceptable": (
+            "Hybrid in Atlanta acceptable; hybrid in New York acceptable only near $200,000"
+        ),
+        "relocation": "Would relocate to New York for the right comp",
+        "target_comp_usd": "110000-200000",
+    },
+}
+
+# The LLM compiler's actual (wrong) live output for U2, per the feedback
+# doc: `remote_acceptable: false`, `base_location_substring: ""` —
+# contradicting her profile.
+_U2_MISDERIVED_LLM_RUBRIC = {
+    "rubric_version": 1,
+    "term_groups": [{"group": "core", "weight": 2.0, "terms": ["strategy"]}],
+    "disqualifiers": [{"pattern": "(?i)unpaid", "reason": "no unpaid roles"}],
+    "gates": {
+        "location": {"remote_acceptable": False, "base_location_substring": ""},
+        "comp_floor_usd": None,
+        "degree_gate": False,
+    },
+    "tier_hints": [{"pattern": "(?i)director", "tier": 1}],
+}
+
+
+def test_deterministic_gate_values_matches_u2_fixture():
+    remote_acceptable, base_location_substring, comp_floor_usd = fanout._deterministic_gate_values(
+        _U2_SHAPED_PROFILE
+    )
+    assert remote_acceptable is True
+    assert base_location_substring == "atlanta"
+    assert comp_floor_usd == 110000.0
+
+
+def test_apply_deterministic_gates_overwrites_misderived_llm_output(caplog):
+    """The exact U2 regression: the compiler emitted `remote_acceptable:
+    false` and `base_location_substring: ""` against a profile that says
+    `remote_acceptable: true` / base "Atlanta, GA" — the deterministic
+    values must win, and judgment-shaped fields (term_groups,
+    disqualifiers, tier_hints) must pass through untouched."""
+    with caplog.at_level("WARNING", logger="jobify.hosted.fanout"):
+        result = fanout._apply_deterministic_gates(
+            "user-u2", _U2_MISDERIVED_LLM_RUBRIC, _U2_SHAPED_PROFILE
+        )
+
+    assert result["gates"]["location"]["remote_acceptable"] is True
+    assert result["gates"]["location"]["base_location_substring"] == "atlanta"
+    assert result["gates"]["comp_floor_usd"] == 110000.0
+    # Judgment-shaped fields pass through unmodified.
+    assert result["term_groups"] == _U2_MISDERIVED_LLM_RUBRIC["term_groups"]
+    assert result["disqualifiers"] == _U2_MISDERIVED_LLM_RUBRIC["disqualifiers"]
+    assert result["tier_hints"] == _U2_MISDERIVED_LLM_RUBRIC["tier_hints"]
+    # The input rubric is not mutated.
+    assert _U2_MISDERIVED_LLM_RUBRIC["gates"]["location"]["remote_acceptable"] is False
+
+    # Drift telemetry: a WARNING per field that actually disagreed.
+    drift_messages = [r.message for r in caplog.records]
+    assert any("gates.location.remote_acceptable" in m and "user-u2" in m for m in drift_messages)
+    assert any("gates.location.base_location_substring" in m and "user-u2" in m for m in drift_messages)
+    assert any("gates.comp_floor_usd" in m and "user-u2" in m for m in drift_messages)
+
+
+def test_apply_deterministic_gates_no_drift_log_when_llm_already_agrees(caplog):
+    """No noise when the compiler happened to get it right — the drift
+    log is a signal for disagreement, not a per-compile log line."""
+    agreeing_llm_rubric = copy.deepcopy(_U2_MISDERIVED_LLM_RUBRIC)
+    agreeing_llm_rubric["gates"]["location"] = {
+        "remote_acceptable": True, "base_location_substring": "atlanta",
+    }
+    agreeing_llm_rubric["gates"]["comp_floor_usd"] = 110000
+
+    with caplog.at_level("WARNING", logger="jobify.hosted.fanout"):
+        fanout._apply_deterministic_gates("user-u2", agreeing_llm_rubric, _U2_SHAPED_PROFILE)
+
+    assert not any("gate drift" in r.message for r in caplog.records)
+
+
+def test_apply_deterministic_gates_missing_location_and_compensation_defaults_permissive():
+    """No `location_and_compensation` block at all (schema marks it
+    optional): `remote_acceptable` defaults True (permissive, matching
+    `rubric._location_tier`'s own missing-field default), base substring
+    and comp floor are both empty/None — never guessed."""
+    remote_acceptable, base_location_substring, comp_floor_usd = fanout._deterministic_gate_values({})
+    assert remote_acceptable is True
+    assert base_location_substring == ""
+    assert comp_floor_usd is None
+
+
+def test_ensure_rubric_persists_deterministic_gates_end_to_end(tmp_path, monkeypatch):
+    """Full path: `run_fanout_cycle` -> `_ensure_rubric` ->
+    `compile_rubric_with_usage` (mocked to return U2's exact misderived
+    live output) -> `_apply_deterministic_gates` -> `db.set_compiled_rubric`.
+    Asserts the PERSISTED rubric carries the deterministic gates, not the
+    model's."""
+    profile_yaml = (
+        "location_and_compensation:\n"
+        "  base: Atlanta, GA\n"
+        "  remote_acceptable: true\n"
+        "  in_person_acceptable: |\n"
+        "    Hybrid in Atlanta acceptable; hybrid in New York acceptable only near $200,000\n"
+        "  relocation: Would relocate to New York for the right comp\n"
+        '  target_comp_usd: "110000-200000"\n'
+    )
+    d = _profile_dir(
+        tmp_path, "user-u2",
+        thesis="Wants director-level strategy/comms roles.",
+        disqualifiers_yaml="hard_disqualifiers: []\n",
+        profile_yaml=profile_yaml,
+    )
+    monkeypatch.setattr(fanout, "materialize_profile_dir", lambda uid: d)
+    monkeypatch.setattr(db, "get_profile_validation_status", lambda uid: "valid")
+    monkeypatch.setattr(db, "get_compiled_rubric", lambda uid: None)
+    persisted: dict[str, dict] = {}
+    monkeypatch.setattr(db, "set_compiled_rubric", lambda uid, rubric: persisted.__setitem__(uid, rubric))
+    # Deferred compile (`_ensure_rubric`'s docstring): stage 2 only
+    # compiles when there's actually something to score — needs at least
+    # one survivor past stage 1/1.5 to trigger the compile at all.
+    monkeypatch.setattr(db, "get_unmatched_postings", lambda uid: [_posting("p-1")])
+    monkeypatch.setattr(db, "upsert_match", lambda uid, pid, **kw: None)
+    monkeypatch.setattr(db, "get_month_to_date_spend", lambda uid: 0.0)
+    monkeypatch.setattr(db, "get_budget_cap", lambda uid: 100.0)
+    monkeypatch.setattr(db, "insert_budget_ledger_row", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        llm, "complete_with_usage",
+        lambda **kw: (json.dumps(_U2_MISDERIVED_LLM_RUBRIC), CompletionUsage(input_tokens=50, output_tokens=30)),
+    )
+
+    fanout.run_fanout_cycle(["user-u2"])
+
+    gates = persisted["user-u2"]["gates"]
+    assert gates["location"]["remote_acceptable"] is True
+    assert gates["location"]["base_location_substring"] == "atlanta"
+    assert gates["comp_floor_usd"] == 110000.0
+
+
 # ── Cycle-level resilience ────────────────────────────────────────────────
 
 
@@ -1093,6 +1426,8 @@ def test_run_fanout_cycle_defaults_to_every_profile_user(monkeypatch):
         "postings_scored": 0,
         "matches_written": 0,
         "stage4_calls": 0,
+        # U2 fix, session 59: verdict quality floor counter.
+        "stage4_not_worth_showing": 0,
         "users_budget_stopped": 0,
         # ADM-2 Task 2: additive stage-funnel/cost counters, zero on an
         # empty-roster cycle same as everything else here.

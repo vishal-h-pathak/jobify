@@ -16,8 +16,11 @@ Zero LLM tokens anywhere in this module — the slug probe is pure HTTP/JSON
 comparison, and auto-tagging (`derive_tags_from_titles`) is a keyword
 lookup against the same fixed vocabulary `web/lib/portals/tierPacks.ts`
 uses for tier-pack relevance (`infra, devtools, product, fintech,
-data-ai, enterprise, growth-startup, big-tech-adjacent` — `remote-first`
-is excluded here since it's a location signal, not derivable from titles).
+data-ai, enterprise, growth-startup, big-tech-adjacent, marketing-comms` —
+`remote-first` is excluded here since it's a location signal, not
+derivable from titles; `consumer-brand` (session 59, U2 fix) is likewise
+excluded — it's a company-type judgment, not a title keyword pattern —
+and stays a curation-time-only tag, same as it is in the seed catalog).
 
 Auto-admit rule (documented judgment call — spec says "probe confidence
 high (metadata name match) AND live_posting_count > 0"): a candidate
@@ -85,6 +88,14 @@ _KEYWORD_TAG_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("enterprise", "b2b"), ("enterprise",)),
     (("startup", "early stage", "early-stage"), ("growth-startup",)),
     (("faang", "big tech", "large scale", "large-scale"), ("big-tech-adjacent",)),
+    # U2 fix (session 59): mirrors tierPacks.ts::KEYWORD_TAG_RULES's new
+    # marketing-comms rule — see that file for why (board catalog had
+    # effectively zero comms/marketing/brand-side employers).
+    (
+        ("communications", "comms", "content", "editorial", "brand", "public relations",
+         "pr ", "marketing", "copywriter", "copywriting", "social media"),
+        ("marketing-comms",),
+    ),
 )
 
 # A tag must fire on at least this share of the board's live posting
