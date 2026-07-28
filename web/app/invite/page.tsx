@@ -3,6 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { hasAccess } from "@/lib/db/access";
 import { isAdmin } from "@/lib/admin/isAdmin";
 import { sanitizeNext } from "@/lib/auth/sanitizeNext";
+import { SwitchAccountButton } from "@/components/auth/SwitchAccountButton";
 import { InviteForm } from "./InviteForm";
 
 // Signed-out visitors get redirected to /login (no dead-end error), and
@@ -21,16 +22,17 @@ export default async function InvitePage({
     data: { user },
   } = await supabase.auth.getUser();
 
+  // AUTHFLOW: preserve both `code` and `next` through a login round-trip
+  // (signed-out visitor, or a signed-in visitor switching accounts) so a
+  // claim can still land the visitor on their original destination.
+  const params = new URLSearchParams();
+  if (code) params.set("code", code);
+  if (next) params.set("next", next);
+  const qs = params.toString();
+  const selfTarget = `/invite${qs ? `?${qs}` : ""}`;
+
   if (!user) {
-    // AUTHFLOW: preserve both `code` and `next` through the login
-    // round-trip so a claim can still land the visitor on their original
-    // destination once they're signed in.
-    const params = new URLSearchParams();
-    if (code) params.set("code", code);
-    if (next) params.set("next", next);
-    const qs = params.toString();
-    const target = `/invite${qs ? `?${qs}` : ""}`;
-    redirect(`/login?next=${encodeURIComponent(target)}`);
+    redirect(`/login?next=${encodeURIComponent(selfTarget)}`);
   }
 
   // Admins may never hold a claimed invite of their own (no reason to
@@ -51,6 +53,10 @@ export default async function InvitePage({
       <p className="max-w-sm text-center text-sm text-ink-muted">
         Invited by email? Just sign in with that address — no code needed.
       </p>
+      <div className="flex items-center gap-2 text-sm text-ink-muted">
+        Signed in as <span className="text-ink">{user.email}</span> — not you?
+        <SwitchAccountButton next={selfTarget}>Switch account</SwitchAccountButton>
+      </div>
     </div>
   );
 }
