@@ -191,4 +191,28 @@ describe("/invite — redirect chain", () => {
     const [, hint] = result.props.children;
     expect(hint.props.children).toContain("no code needed");
   });
+
+  it("shows the signed-in email and a switch-account control", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "alex.quinn@example.com" } } });
+    hasAccessMock.mockResolvedValue(false);
+
+    const result = await InvitePage({ searchParams: searchParams("ABC-123") });
+    const [, , identityRow] = result.props.children;
+    // identityRow.props.children is ["Signed in as ", emailSpan, " — not you?", switchButton]
+    const [, emailSpan, , switchButton] = identityRow.props.children;
+    expect(emailSpan.props.children).toBe("alex.quinn@example.com");
+    expect(switchButton.type.name).toBe("SwitchAccountButton");
+  });
+
+  it("threads code + next through the switch-account target so a re-login returns here", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "alex.quinn@example.com" } } });
+    hasAccessMock.mockResolvedValue(false);
+
+    const result = await InvitePage({ searchParams: searchParams("ABC-123", "/tailor/abc") });
+    const [, , identityRow] = result.props.children;
+    const switchButton = identityRow.props.children[identityRow.props.children.length - 1];
+    expect(switchButton.props.next).toBe(
+      "/invite?" + new URLSearchParams({ code: "ABC-123", next: "/tailor/abc" }).toString()
+    );
+  });
 });
